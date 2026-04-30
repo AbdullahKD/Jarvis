@@ -8,6 +8,7 @@ This is what makes Jarvis a proper Multi-Agent System.
 
 from __future__ import annotations
 
+import re
 import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -17,6 +18,10 @@ from agents.evaluator import EvaluatorAgent
 from agents.planner import PlannerAgent
 from agents.router import RouterAgent
 from agents.summariser import SummariserAgent
+from tools.contacts import ContactBook
+from tools.email_composer import EmailComposer, EmailDraft
+from agents.calendar_agent import CalendarAgent
+from agents.gmail_agent import GmailAgent
 from config.llm_client import OllamaClient
 from config.models import (
     AgentRole,
@@ -66,6 +71,12 @@ class JarvisOrchestrator:
         self.critic    = CriticAgent(self.llm)
         self.evaluator = EvaluatorAgent()
         self.summariser = SummariserAgent(self.llm)
+        self.calendar  = CalendarAgent()
+        self.gmail     = GmailAgent()
+        self.contacts  = ContactBook()
+        self.composer  = EmailComposer(self.llm)
+        # Pending email confirmation state
+        self._pending_email: EmailDraft | None = None
 
         # Tool instances
         self.weather    = WeatherTool()
@@ -76,7 +87,7 @@ class JarvisOrchestrator:
         self.document   = DocumentTool()
 
         print(f"\n🤖 Jarvis Orchestrator ready — model: {model}")
-        print(f"   Agents: Router, Memory, Planner, Critic, Evaluator, Summariser")
+        print(f"   Agents: Router, Memory, Planner, Critic, Evaluator, Summariser, Calendar, Gmail")
         print(f"   Tools:  Weather, WebSearch, News, Mac, Spotify, Document\n")
 
     # ── Main entry point ───────────────────────────────────────────────────
@@ -374,6 +385,64 @@ class JarvisOrchestrator:
             elif action == "validate_output":
                 return {"success": True, "result": {"validated": True}}
 
+            # ── Calendar ────────────────────────────────────────────────
+            elif agent == "calendar":
+                if action == "create_event":
+                    result = await self.calendar.create_event(
+                        title=params.get("title", "Untitled"),
+                        start_time=params.get("start_time", ""),
+                        end_time=params.get("end_time", ""),
+                        attendees=params.get("attendees"),
+                        description=params.get("description"),
+                        location=params.get("location"),
+                    )
+                    return result
+                elif action in ("search_events", "get_events"):
+                    result = await self.calendar.search_events(
+                        start_date=params.get("start_date"),
+                        end_date=params.get("end_date"),
+                        query=params.get("query"),
+                    )
+                    return result
+                elif action == "check_conflicts":
+                    result = await self.calendar.check_conflicts(
+                        params.get("start_time", ""),
+                        params.get("end_time", ""),
+                    )
+                    return result
+                elif action == "delete_event":
+                    return await self.calendar.delete_event(params.get("event_id", ""))
+
+            # ── Gmail ────────────────────────────────────────────────────────
+            elif agent == "email":
+                if action in ("read_emails", "get_inbox"):
+                    result = await self.gmail.get_inbox(
+                        max_results=params.get("max_results", 5),
+                        query=params.get("query", "is:unread"),
+                    )
+                    return result
+                elif action == "send_email":
+                    result = await self.gmail.send_email(
+                        to=params.get("to", ""),
+                        subject=params.get("subject", ""),
+                        body=params.get("body", ""),
+                        cc=params.get("cc"),
+                    )
+                    return result
+                elif action == "draft_email":
+                    result = await self.gmail.draft_email(
+                        to=params.get("to", ""),
+                        subject=params.get("subject", ""),
+                        body=params.get("body", ""),
+                    )
+                    return result
+                elif action == "search_emails":
+                    result = await self.gmail.search_emails(
+                        query=params.get("query", ""),
+                        max_results=params.get("max_results", 5),
+                    )
+                    return result
+
             # ── Fallback ────────────────────────────────────────────────────
             else:
                 return {
@@ -383,6 +452,8 @@ class JarvisOrchestrator:
 
         except Exception as exc:
             return {"success": False, "error": str(exc)}
+        # Safety: should never reach here
+        return {"success": False, "error": f"Unhandled: {agent}.{action}"}
 
     # ── Dependency injection ───────────────────────────────────────────────
 
@@ -535,8 +606,22 @@ class JarvisOrchestrator:
                 latency_ms=(_time.time() - start) * 1000,
             )
 
-        if primary_agent == AgentRole.NEWS and "news" in user_request.lower():
-            pass  # handled below
+        # News shortcut
+        news_keywords = ["news", "headlines", "latest news", "top stories", "breaking"]
+        if any(kw in req_lower for kw in news_keywords):
+            import time as _t
+            _s = _t.time()
+            # Try to detect topic filter
+            topic = None
+            for kw in ["about", "on", "regarding"]:
+                if kw in req_lower:
+                    topic = req_lower.split(kw, 1)[-1].strip().rstrip("?!. ")
+                    break
+            data = await self.news.get_headlines(topic=topic, max_items=5)
+            msg = self.news.format_headlines(data)
+            await self.memory.store_task_result(user_request, "get_news", True, msg[:100])
+            print(f"Jarvis shortcut: news — {(_t.time()-_s)*1000:.0f}ms")
+            return JarvisResponse(success=True, message=msg, latency_ms=(_t.time()-_s)*1000)
 
         if primary_agent == AgentRole.NEWS:
             data = await self.news.get_headlines(max_items=5)
@@ -549,6 +634,104 @@ class JarvisOrchestrator:
                 message=msg,
                 latency_ms=(_time.time() - start) * 1000,
             )
+
+        # Email shortcut — read inbox
+        email_read_keywords = ["check my email", "read my email", "my inbox", "any emails", "new emails", "unread"]
+        if any(kw in req_lower for kw in email_read_keywords):
+            import time as _t2
+            _s2 = _t2.time()
+            result = await self.gmail.get_inbox(max_results=5)
+            msg = result.get("message", "Could not read inbox.")
+            await self.memory.store_task_result(user_request, "read_email", True, msg[:100])
+            return JarvisResponse(success=True, message=msg, latency_ms=(_t2.time()-_s2)*1000)
+
+        # Email shortcut — confirmation check first
+        confirm_keywords = ["yes send it", "yes", "send it", "confirm", "go ahead", "yeah send"]
+        if self._pending_email and any(kw in req_lower for kw in confirm_keywords):
+            import time as _tc
+            _sc = _tc.time()
+            draft = self._pending_email
+            self._pending_email = None
+            result = await self.gmail.send_email(
+                to=draft.recipient_email,
+                subject=draft.subject,
+                body=draft.body,
+            )
+            msg = result.get("message", f"Email sent to {draft.recipient_email}")
+            await self.memory.store_task_result(user_request, "send_email", result.get("success", False), msg[:100])
+            return JarvisResponse(success=result.get("success", False), message=msg, latency_ms=(_tc.time()-_sc)*1000)
+
+        # Cancel pending email
+        cancel_keywords = ["no", "cancel", "don't send", "do not send", "abort"]
+        if self._pending_email and any(kw in req_lower for kw in cancel_keywords):
+            self._pending_email = None
+            return JarvisResponse(success=True, message="Email cancelled. No email was sent.")
+
+        # Pending email — user replied with just an email address
+        import re as _re2
+        email_only_match = _re2.search(r'^\s*[\w._%+\-]+@[\w.\-]+\.[a-zA-Z]{2,}\s*$', user_request)
+        if self._pending_email and self._pending_email.needs_email and email_only_match:
+            import time as _ter
+            _ser = _ter.time()
+            email_addr = email_only_match.group(0).strip()
+            self._pending_email.recipient_email = email_addr
+            self._pending_email.needs_email = False
+            msg = self.composer.format_draft_for_confirmation(self._pending_email)
+            return JarvisResponse(success=True, message=msg, latency_ms=(_ter.time()-_ser)*1000)
+
+        # Email shortcut — send email (Level 2-4 pipeline)
+        send_keywords = ["send an email", "send email", "email to", "send a message to", "write an email", "draft an email"]
+        if any(kw in req_lower for kw in send_keywords):
+            import time as _ts
+            _ss = _ts.time()
+            draft = await self.composer.compose(user_request, self.contacts)
+
+            # Level 3: Contact not found — ask for email
+            if draft.needs_email:
+                self._pending_email = draft
+                msg = (
+                    f"I don't have an email address for '{draft.recipient_name}' in your contacts.\n"
+                    f"What is their email address? (or say 'add [name] [email]' to save them)"
+                )
+                return JarvisResponse(success=True, message=msg, latency_ms=(_ts.time()-_ss)*1000)
+
+            # No recipient at all
+            if not draft.recipient_email:
+                return JarvisResponse(success=False, message="I need an email address to send to. Who would you like to email?", latency_ms=(_ts.time()-_ss)*1000)
+
+            # Level 4: Show draft for confirmation
+            self._pending_email = draft
+            msg = self.composer.format_draft_for_confirmation(draft)
+            return JarvisResponse(success=True, message=msg, latency_ms=(_ts.time()-_ss)*1000)
+
+        # Add contact shortcut
+        add_contact_match = re.search(r'add\s+(\w+)\s+([\w._%+\-]+@[\w.\-]+\.[a-zA-Z]{2,})', req_lower)
+        if add_contact_match:
+            name = add_contact_match.group(1).capitalize()
+            email = add_contact_match.group(2)
+            self.contacts.add(name, email)
+            # If we have a pending email waiting for this contact
+            if self._pending_email and self._pending_email.needs_email:
+                self._pending_email.recipient_email = email
+                self._pending_email.needs_email = False
+                msg = self.composer.format_draft_for_confirmation(self._pending_email)
+                return JarvisResponse(success=True, message=f"Contact saved! {msg}")
+            return JarvisResponse(success=True, message=f"Contact saved: {name} → {email}")
+
+        # List contacts shortcut
+        if any(kw in req_lower for kw in ["my contacts", "list contacts", "show contacts"]):
+            return JarvisResponse(success=True, message=self.contacts.format_list())
+
+
+        # Calendar shortcut — check schedule
+        cal_read_keywords = ["what's on my calendar", "my schedule", "my meetings", "what do i have", "events today", "events this week"]
+        if any(kw in req_lower for kw in cal_read_keywords):
+            import time as _t3
+            _s3 = _t3.time()
+            result = await self.calendar.search_events()
+            msg = result.get("message", "No events found.")
+            await self.memory.store_task_result(user_request, "check_calendar", True, msg[:100])
+            return JarvisResponse(success=True, message=msg, latency_ms=(_t3.time()-_s3)*1000)
 
         return None  # No shortcut — proceed with full pipeline
 
