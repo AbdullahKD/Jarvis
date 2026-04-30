@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+
+# Environment & secrets
+.env
+
+# Data & databases
+data/
+logs/
+
+# Zip files
+*.zip
+
+# VS Code
+.vscode/
