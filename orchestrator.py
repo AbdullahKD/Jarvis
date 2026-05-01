@@ -75,8 +75,9 @@ class JarvisOrchestrator:
         self.gmail     = GmailAgent()
         self.contacts  = ContactBook()
         self.composer  = EmailComposer(self.llm)
-        # Pending email confirmation state
+        # Pending confirmation states
         self._pending_email: EmailDraft | None = None
+        self._pending_meeting: dict | None = None
 
         # Tool instances
         self.weather    = WeatherTool()
@@ -485,11 +486,18 @@ class JarvisOrchestrator:
     # ── Temporal resolution ────────────────────────────────────────────────
 
     def _resolve_temporal(self, phrase: str) -> Dict[str, str]:
-        """Convert natural language time phrases to ISO datetime."""
+        """Convert natural language time phrases to ISO datetime with timezone."""
         import re
-        from datetime import timedelta
+        from datetime import timedelta, timezone
+        from zoneinfo import ZoneInfo
 
-        now = datetime.now()
+        # Use local timezone
+        try:
+            local_tz = ZoneInfo("Europe/London")
+        except Exception:
+            local_tz = timezone.utc
+
+        now = datetime.now(local_tz)
         target = now
         p = phrase.lower()
 
@@ -498,10 +506,13 @@ class JarvisOrchestrator:
             "thursday": 3, "friday": 4, "saturday": 5, "sunday": 6,
         }
 
+        # Date resolution
         if "tomorrow" in p:
             target = now + timedelta(days=1)
         elif "next week" in p:
             target = now + timedelta(days=7)
+        elif "today" in p or "tonight" in p:
+            target = now
         else:
             for day_name, day_num in day_map.items():
                 if day_name in p:
@@ -509,23 +520,43 @@ class JarvisOrchestrator:
                     target = now + timedelta(days=days_ahead)
                     break
 
-        time_match = re.search(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", p)
-        if time_match:
-            h = int(time_match.group(1))
-            m = int(time_match.group(2) or 0)
-            period = time_match.group(3)
+        # Time resolution — find the LAST time mention in the phrase
+        # to avoid picking up times from earlier context
+        time_matches = list(re.finditer(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)", p))
+        if not time_matches:
+            # Try without am/pm but only if a clear time word is nearby
+            time_matches = list(re.finditer(r"at\s+(\d{1,2})(?::(\d{2}))?(?!\s*(?:am|pm))", p))
+            if time_matches:
+                # Reformat match groups
+                m = time_matches[-1]
+                h = int(m.group(1))
+                mins = int(m.group(2) or 0)
+                # Default: if hour < 8, assume pm (e.g. "at 2" = 2pm)
+                if h < 8:
+                    h += 12
+                target = target.replace(hour=h, minute=mins, second=0, microsecond=0)
+            else:
+                # No time found — default to 9am
+                target = target.replace(hour=9, minute=0, second=0, microsecond=0)
+        else:
+            m = time_matches[-1]
+            h = int(m.group(1))
+            mins = int(m.group(2) or 0)
+            period = m.group(3)
             if period == "pm" and h != 12:
                 h += 12
             elif period == "am" and h == 12:
                 h = 0
-            target = target.replace(hour=h, minute=m, second=0, microsecond=0)
+            target = target.replace(hour=h, minute=mins, second=0, microsecond=0)
 
-        end = target + __import__("datetime").timedelta(hours=1)
+        end = target + timedelta(hours=1)
+
         return {
             "datetime": target.isoformat(),
             "date": target.date().isoformat(),
             "time": target.strftime("%H:%M"),
             "end_datetime": end.isoformat(),
+            "timezone": str(local_tz),
         }
 
     # ── Response building ─────────────────────────────────────────────────
@@ -571,6 +602,19 @@ class JarvisOrchestrator:
 
         # Also catch weather requests the router misclassified
         req_lower = user_request.lower()
+
+        # ── Battery (must be before weather — "temperature" could collide) ──
+        if any(kw in req_lower for kw in ["battery", "battery level", "how much battery"]):
+            import time as _tbat2
+            _sbat2 = _tbat2.time()
+            result = await self.mac.get_battery()
+            if result.get("success"):
+                pct = result.get("battery_pct", "unknown")
+                msg = f"Battery is at {pct}%."
+            else:
+                msg = "Could not read battery level."
+            return JarvisResponse(success=result.get("success", False), message=msg, latency_ms=(_tbat2.time()-_sbat2)*1000)
+
         weather_keywords = ["weather", "temperature", "forecast", "humid", "rain", "sunny", "cloudy", "wind speed"]
         is_weather_request = (
             primary_agent == AgentRole.WEATHER or
@@ -579,7 +623,7 @@ class JarvisOrchestrator:
 
         if is_weather_request:
             req = req_lower
-            is_forecast = any(w in req for w in ["forecast", "week", "tomorrow", "tonight"])
+            is_forecast = any(w in req for w in ["forecast", "this week", "next week", "7 day", "seven day", "weekly"])
 
             # Detect if user specified a location other than the default
             location = self._extract_location(user_request)
@@ -733,46 +777,558 @@ class JarvisOrchestrator:
             await self.memory.store_task_result(user_request, "check_calendar", True, msg[:100])
             return JarvisResponse(success=True, message=msg, latency_ms=(_t3.time()-_s3)*1000)
 
+        # ── Mac Control shortcuts ──────────────────────────────────────────
+        import re as _rem
+
+        # Open app
+        if any(kw in req_lower for kw in ["open", "launch", "start"]):
+            import time as _to
+            _so = _to.time()
+            # Known app aliases
+            app_aliases = {
+                "chrome": "Google Chrome", "google chrome": "Google Chrome",
+                "safari": "Safari", "firefox": "Firefox",
+                "spotify": "Spotify", "music": "Music",
+                "terminal": "Terminal", "iterm": "iTerm",
+                "vscode": "Visual Studio Code", "vs code": "Visual Studio Code",
+                "code": "Visual Studio Code", "visual studio": "Visual Studio Code",
+                "notes": "Notes", "mail": "Mail", "calendar": "Calendar",
+                "slack": "Slack", "zoom": "Zoom", "discord": "Discord",
+                "finder": "Finder", "calculator": "Calculator",
+                "messages": "Messages", "facetime": "FaceTime",
+                "photos": "Photos", "maps": "Maps", "word": "Microsoft Word",
+                "excel": "Microsoft Excel", "powerpoint": "Microsoft PowerPoint",
+                "app": "__app__", "system preferences": "System Preferences",
+                "system settings": "System Settings", "settings": "System Settings",
+            }
+            # Try to find a known app name in the request
+            app = None
+            for alias, real_name in app_aliases.items():
+                if alias in req_lower:
+                    app = real_name
+                    break
+            # Fallback: extract word after open/launch/start
+            if not app:
+                open_match = _rem.search(r'(?:open|launch|start)\s+([a-zA-Z][a-zA-Z0-9]+)', user_request, _rem.IGNORECASE)
+                if open_match:
+                    app = open_match.group(1).strip().title()
+            if app:
+                new_window = any(kw in req_lower for kw in ["new window", "new tab", "open new", "new session"])
+
+                # App — open native app
+                # App — open native app, new window via Cmd+N
+                if app == "__app__":
+                    script = (
+                        "tell application \"App\" to activate\n"
+                        "delay 0.5\n"
+                        "tell application \"System Events\"\n"
+                        "    keystroke \"n\" using {command down}\n"
+                        "end tell"
+                    )
+                    await self.mac._async_script(script)
+                    msg = "Opening new App window." if new_window else "Opening App."
+                    return JarvisResponse(success=True, message=msg, latency_ms=(_to.time()-_so)*1000)
+
+                # VSCode new window — Cmd+Shift+N
+                if app == "Visual Studio Code" and new_window:
+                    script = (
+                        "tell application \"Visual Studio Code\" to activate\n"
+                        "delay 0.5\n"
+                        "tell application \"System Events\"\n"
+                        "    keystroke \"n\" using {command down, shift down}\n"
+                        "end tell"
+                    )
+                    await self.mac._async_script(script)
+                    return JarvisResponse(success=True, message="Opening new VSCode window.", latency_ms=(_to.time()-_so)*1000)
+
+                result = await self.mac.open_app(app, new_window=new_window)
+                action = "Opening new window in" if new_window else "Opening"
+                msg = f"{action} {app}." if result.get("success") else f"Could not open {app}: {result.get('error')}"
+                return JarvisResponse(success=result.get("success", False), message=msg, latency_ms=(_to.time()-_so)*1000)
+
+        # Set volume
+        vol_match = _rem.search(r'(?:set\s+)?(?:volume|vol)\s+(?:to\s+)?(\d+)', req_lower)
+        if vol_match:
+            import time as _tv
+            _sv = _tv.time()
+            level = int(vol_match.group(1))
+            result = await self.mac.set_volume(level)
+            msg = f"Volume set to {level}." if result.get("success") else f"Could not set volume: {result.get('error')}"
+            return JarvisResponse(success=result.get("success", False), message=msg, latency_ms=(_tv.time()-_sv)*1000)
+
+        # Mute / unmute
+        if any(kw in req_lower for kw in ["mute", "silence", "quiet"]) and "volume" not in req_lower:
+            import time as _tm
+            _sm = _tm.time()
+            result = await self.mac.mute()
+            return JarvisResponse(success=result.get("success", False), message="Muted.", latency_ms=(_tm.time()-_sm)*1000)
+
+        if any(kw in req_lower for kw in ["unmute", "unsilence", "turn sound on"]):
+            import time as _tum
+            _sum = _tum.time()
+            result = await self.mac.unmute()
+            return JarvisResponse(success=result.get("success", False), message="Unmuted.", latency_ms=(_tum.time()-_sum)*1000)
+
+        # Set brightness
+        bright_match = _rem.search(r'(?:set\s+)?brightness\s+(?:to\s+)?(\d+)', req_lower)
+        if bright_match:
+            import time as _tb
+            _sb = _tb.time()
+            level = min(100, int(bright_match.group(1))) / 100.0
+            result = await self.mac.set_brightness(level)
+            msg = f"Brightness set to {int(level*100)}%." if result.get("success") else f"Could not set brightness: {result.get('error')}"
+            return JarvisResponse(success=result.get("success", False), message=msg, latency_ms=(_tb.time()-_sb)*1000)
+
+        # Battery
+        if any(kw in req_lower for kw in ["battery", "battery level", "how much battery"]):
+            import time as _tbat
+            _sbat = _tbat.time()
+            result = await self.mac.get_battery()
+            if result.get("success"):
+                pct = result.get("battery_pct", "unknown")
+                msg = f"Battery is at {pct}%."
+            else:
+                msg = "Could not read battery level."
+            return JarvisResponse(success=result.get("success", False), message=msg, latency_ms=(_tbat.time()-_sbat)*1000)
+
+        # Lock screen
+        if any(kw in req_lower for kw in ["lock screen", "lock my screen", "lock the screen"]):
+            import time as _tl
+            _sl = _tl.time()
+            result = await self.mac.lock_screen()
+            return JarvisResponse(success=result.get("success", False), message="Screen locked.", latency_ms=(_tl.time()-_sl)*1000)
+
+        # Get clipboard
+        if any(kw in req_lower for kw in ["clipboard", "what did i copy", "whats in my clipboard"]):
+            import time as _tcb
+            _scb = _tcb.time()
+            result = await self.mac.get_clipboard()
+            text = result.get("text", "")
+            msg = f"Clipboard contains: {text[:200]}" if text else "Clipboard is empty."
+            return JarvisResponse(success=True, message=msg, latency_ms=(_tcb.time()-_scb)*1000)
+
+        # Send Mac notification
+        notif_match = _rem.search(r'(?:send|show|give me)\s+(?:a\s+)?notification[:\s]+(.+)', user_request, _rem.IGNORECASE)
+        if notif_match:
+            import time as _tn
+            _sn = _tn.time()
+            message = notif_match.group(1).strip()
+            result = await self.mac.send_notification(message)
+            msg = f"Notification sent: {message}" if result.get("success") else "Could not send notification."
+            return JarvisResponse(success=result.get("success", False), message=msg, latency_ms=(_tn.time()-_sn)*1000)
+
+        # ── Information tool shortcuts ───────────────────────────────────────
+
+        # Web search shortcut
+        search_keywords = ["search for", "search the web", "look up", "google", "find information about", "what is", "who is", "when did", "how does", "tell me about"]
+        # Exclude queries already handled (weather, news, battery etc)
+        already_handled = any(kw in req_lower for kw in ["weather", "battery", "wifi", "volume", "brightness", "screenshot", "dark mode", "trash", "news", "headlines"])
+        if any(kw in req_lower for kw in search_keywords) and not already_handled:
+            import time as _tws
+            _sws = _tws.time()
+
+            # Extract search query — strip the trigger phrase
+            query = user_request
+            for phrase in ["search for", "search the web for", "look up", "google", "find information about"]:
+                if phrase in req_lower:
+                    idx = req_lower.index(phrase) + len(phrase)
+                    query = user_request[idx:].strip()
+                    break
+
+            data = await self.websearch.search(query, max_results=5)
+
+            if data.get("success") and data.get("results"):
+                # Summarise the results with LLM for a clean response
+                parts = []
+                for i, r in enumerate(data["results"]):
+                    parts.append(str(i+1) + ". " + r.get("title","") + ": " + r.get("snippet",""))
+                results_text = chr(10).join(parts)
+                prompt = chr(10).join(["Search query: " + query, "", "Results:", results_text])
+                summary = await self.summariser.summarise(prompt, max_words=150, style="concise")
+                msg = summary
+                msg = summary
+                msg = summary
+            else:
+                msg = f"Could not find results for: {query}"
+
+            await self.memory.store_task_result(user_request, "web_search", data.get("success", False), msg[:100])
+            return JarvisResponse(success=data.get("success", False), message=msg, latency_ms=(_tws.time()-_sws)*1000)
+
+        # Research shortcut — deep multi-step research
+        research_keywords = ["research", "deep dive", "find out everything about", "give me a detailed report on", "analyse", "investigate"]
+        if any(kw in req_lower for kw in research_keywords) and not already_handled:
+            import time as _trs
+            _srs = _trs.time()
+
+            # Extract topic
+            topic = user_request
+            for phrase in ["research", "deep dive into", "give me a detailed report on", "analyse", "investigate"]:
+                if phrase in req_lower:
+                    idx = req_lower.index(phrase) + len(phrase)
+                    topic = user_request[idx:].strip()
+                    break
+
+            # Multi-step: search 3 different angles
+            searches = [
+                topic,
+                f"{topic} explained",
+                f"{topic} latest developments",
+            ]
+
+            all_results = []
+            for q in searches:
+                data = await self.websearch.search(q, max_results=3)
+                if data.get("success"):
+                    for r in data.get("results", []):
+                        if r not in all_results:
+                            all_results.append(r)
+
+            if all_results:
+                parts2 = []
+                for r in all_results[:9]:
+                    parts2.append("- " + r.get("title","") + ": " + r.get("snippet",""))
+                combined = chr(10).join(parts2)
+                prompt2 = chr(10).join(["Topic: " + topic, "", "Sources:", combined])
+                report = await self.summariser.summarise(prompt2, max_words=250, style="bullet_points")
+                msg = "Research summary on " + str(topic) + ": " + report
+
+            else:
+                msg = "Could not find enough information about: " + str(topic)
+            await self.memory.store_task_result(user_request, "research", True, msg[:100])
+            return JarvisResponse(success=True, message=msg, latency_ms=(_trs.time()-_srs)*1000)
+        # ── Extended Mac Control shortcuts ────────────────────────────────────
+        import re as _remac
+
+        # Quit app
+        quit_match = _remac.search(r'(?:quit|close|exit|kill)\s+([a-zA-Z][a-zA-Z0-9\s]+?)(?:\s+(?:please|now|app))?$', user_request, _remac.IGNORECASE)
+        if quit_match and any(kw in req_lower for kw in ["quit", "close", "exit", "kill"]):
+            import time as _tq
+            _sq = _tq.time()
+            app_aliases_q = {
+                "chrome": "Google Chrome", "safari": "Safari",
+                "spotify": "Spotify", "vscode": "Visual Studio Code",
+                "vs code": "Visual Studio Code", "slack": "Slack",
+                "zoom": "Zoom", "discord": "Discord", "mail": "Mail",
+                "terminal": "Terminal", "finder": "Finder",
+            }
+            raw_app = quit_match.group(1).strip().lower()
+            app_q = app_aliases_q.get(raw_app, quit_match.group(1).strip().title())
+            result = await self.mac.quit_app(app_q)
+            msg = f"Closed {app_q}." if result.get("success") else f"Could not close {app_q}: {result.get('error')}"
+            return JarvisResponse(success=result.get("success", False), message=msg, latency_ms=(_tq.time()-_sq)*1000)
+
+        # Volume up/down
+        vol_up = any(kw in req_lower for kw in ["volume up", "turn up", "louder", "increase volume", "raise volume"])
+        vol_down = any(kw in req_lower for kw in ["volume down", "turn down", "quieter", "decrease volume", "lower volume"])
+        if vol_up or vol_down:
+            import time as _tvd
+            _svd = _tvd.time()
+            amount_match = _remac.search(r'(\d+)', req_lower)
+            amount = int(amount_match.group(1)) if amount_match else 10
+            result = await self.mac.adjust_volume("up" if vol_up else "down", amount)
+            direction = "up" if vol_up else "down"
+            msg = f"Volume turned {direction} to {result.get('volume', '?')}%."
+            return JarvisResponse(success=True, message=msg, latency_ms=(_tvd.time()-_svd)*1000)
+
+        # Screenshot
+        if any(kw in req_lower for kw in ["screenshot", "take a screenshot", "capture screen", "screen capture"]):
+            import time as _tss
+            _sss = _tss.time()
+            result = await self.mac.take_screenshot()
+            return JarvisResponse(success=result.get("success", False), message=result.get("message", "Screenshot taken."), latency_ms=(_tss.time()-_sss)*1000)
+
+        # Dark mode toggle
+        if any(kw in req_lower for kw in ["dark mode", "light mode", "toggle dark", "toggle light", "switch to dark", "switch to light"]):
+            import time as _tdm
+            _sdm = _tdm.time()
+            if "off" in req_lower or "light mode" in req_lower or "switch to light" in req_lower:
+                # Force light mode
+                result = await self.mac.get_dark_mode()
+                if result.get("dark_mode"):
+                    result = await self.mac.toggle_dark_mode()
+                msg = "Switched to light mode."
+            elif "on" in req_lower or "dark mode" in req_lower or "switch to dark" in req_lower:
+                result = await self.mac.get_dark_mode()
+                if not result.get("dark_mode"):
+                    result = await self.mac.toggle_dark_mode()
+                msg = "Switched to dark mode."
+            else:
+                result = await self.mac.toggle_dark_mode()
+                msg = "Toggled dark/light mode."
+            return JarvisResponse(success=True, message=msg, latency_ms=(_tdm.time()-_sdm)*1000)
+
+        # System info
+        if any(kw in req_lower for kw in ["system info", "disk space", "storage", "cpu usage", "ram usage", "memory usage", "how much storage"]):
+            import time as _tsi
+            _ssi = _tsi.time()
+            result = await self.mac.get_system_info()
+            msg = result.get("message", "Could not get system info.")
+            return JarvisResponse(success=result.get("success", False), message=msg, latency_ms=(_tsi.time()-_ssi)*1000)
+
+        # WiFi info
+        if any(kw in req_lower for kw in ["wifi", "wi-fi", "network", "internet connection", "what network", "connected to"]):
+            import time as _twifi
+            _swifi = _twifi.time()
+            result = await self.mac.get_wifi_info()
+            msg = result.get("message", "Could not get WiFi info.")
+            return JarvisResponse(success=result.get("success", False), message=msg, latency_ms=(_twifi.time()-_swifi)*1000)
+
+        # Empty trash
+        if any(kw in req_lower for kw in ["empty trash", "clear trash", "delete trash"]):
+            import time as _ttr
+            _str = _ttr.time()
+            result = await self.mac.empty_trash()
+            msg = "Trash emptied." if result.get("success") else f"Could not empty trash: {result.get('error')}"
+            return JarvisResponse(success=result.get("success", False), message=msg, latency_ms=(_ttr.time()-_str)*1000)
+
+        # Sleep Mac
+        if any(kw in req_lower for kw in ["sleep", "put to sleep", "sleep the mac", "sleep my mac"]) and "reminder" not in req_lower:
+            import time as _tslp
+            _sslp = _tslp.time()
+            result = await self.mac.sleep()
+            return JarvisResponse(success=result.get("success", False), message="Putting Mac to sleep.", latency_ms=(_tslp.time()-_sslp)*1000)
+
+        # ── Calendar shortcuts ────────────────────────────────────────────────
+        import re as _recal
+
+        # Pending meeting — user gave a new time after conflict
+        if self._pending_meeting and self._pending_meeting.get("needs_new_time"):
+            time_match = _recal.search(r'(\d{1,2})(?::(\d{2}))?\s*(am|pm)', req_lower)
+            if not time_match:
+                time_match = _recal.search(r'at\s+(\d{1,2})(?::(\d{2}))?', req_lower)
+            if time_match or any(kw in req_lower for kw in ["tomorrow", "monday","tuesday","wednesday","thursday","friday","saturday","sunday"]):
+                import time as _tnt
+                _snt = _tnt.time()
+
+                # Preserve the original date if user only gave a new time
+                original_start = self._pending_meeting.get("start_time", "")
+                has_date_word = any(kw in req_lower for kw in [
+                    "tomorrow", "today", "monday","tuesday","wednesday",
+                    "thursday","friday","saturday","sunday","next week"
+                ])
+
+                if has_date_word:
+                    # User gave a full new date+time — resolve normally
+                    new_temporal = self._resolve_temporal(user_request)
+                    new_start = new_temporal.get("datetime", "")
+                else:
+                    # User only gave a new time — keep original date, just change time
+                    from datetime import datetime as _dtfix, timezone
+                    from zoneinfo import ZoneInfo
+                    local_tz = ZoneInfo("Europe/London")
+                    orig_dt = _dtfix.fromisoformat(original_start)
+                    # Extract new time from user request
+                    new_temporal = self._resolve_temporal(user_request)
+                    new_time_str = new_temporal.get("time", "")
+                    if new_time_str:
+                        h, m = map(int, new_time_str.split(":"))
+                        new_dt = orig_dt.replace(hour=h, minute=m, second=0, microsecond=0)
+                        new_start = new_dt.isoformat()
+                    else:
+                        new_start = new_temporal.get("datetime", "")
+                if new_start:
+                    from datetime import timedelta, datetime as _dtnt
+                    duration_mins = self._pending_meeting.get("duration_mins", 60)
+                    new_end = (_dtnt.fromisoformat(new_start) + timedelta(minutes=duration_mins)).isoformat()
+
+                    # Check conflicts again
+                    conflict2 = await self.calendar.check_conflicts(new_start, new_end)
+                    if conflict2.get("has_conflict"):
+                        ct = conflict2["conflicts"][0].get("title", "another event")
+                        return JarvisResponse(success=False,
+                            message=f"That time also conflicts with '{ct}'. What other time works?",
+                            latency_ms=(_tnt.time()-_snt)*1000)
+
+                    # Book it
+                    result = await self.calendar.create_event(
+                        title=self._pending_meeting["title"],
+                        start_time=new_start,
+                        end_time=new_end,
+                        attendees=self._pending_meeting.get("attendees") or None,
+                    )
+                    self._pending_meeting = None
+                    if result.get("success"):
+                        start_fmt = new_start[:16].replace("T", " at ")
+                        dur_str = f"{duration_mins} minutes" if duration_mins != 60 else "1 hour"
+                        msg = f"Done! Rescheduled to {start_fmt} for {dur_str}."
+                        if result.get("link"):
+                            msg += " View: " + result["link"]
+                    else:
+                        msg = f"Could not create event: {result.get('error')}"
+                    return JarvisResponse(success=result.get("success", False), message=msg, latency_ms=(_tnt.time()-_snt)*1000)
+
+        # Schedule/create event — pending duration confirmation
+        if self._pending_meeting and any(kw in req_lower for kw in
+            ["minute", "hour", "min", "hr", "30", "45", "60", "90", "15", "yes", "confirm", "book it", "1 hour", "2 hour"]):
+            import time as _tconf
+            _sconf = _tconf.time()
+            meeting = self._pending_meeting
+
+            # Extract duration from reply — handle all common formats
+            duration_mins = 60  # default 1 hour
+            dur_match = _recal.search(r'(\d+)\s*(?:hours?|hrs?|minutes?|mins?|m)', req_lower)
+            if dur_match:
+                val = int(dur_match.group(1))
+                is_hours = any(u in req_lower[dur_match.start():dur_match.end()+2] for u in ["hour", "hr"])
+                duration_mins = val * 60 if is_hours else val
+            elif "half" in req_lower:
+                duration_mins = 30
+            elif "quarter" in req_lower:
+                duration_mins = 15
+            elif "one hour" in req_lower or "an hour" in req_lower:
+                duration_mins = 60
+            elif "two hour" in req_lower:
+                duration_mins = 120
+            # Clamp to sensible range
+            duration_mins = max(15, min(480, duration_mins))
+
+            from datetime import timedelta
+            from datetime import datetime as _dt
+            start_time = meeting["start_time"]
+            start_dt = _dt.fromisoformat(start_time)
+            end_dt = start_dt + timedelta(minutes=duration_mins)
+            end_time = end_dt.isoformat()
+
+            # Check conflicts with actual duration
+            conflict = await self.calendar.check_conflicts(start_time, end_time)
+            if conflict.get("has_conflict"):
+                conflict_title = conflict["conflicts"][0].get("title", "another event")
+                # Keep pending meeting alive so user can pick new time
+                self._pending_meeting["duration_mins"] = duration_mins
+                self._pending_meeting["needs_new_time"] = True
+                return JarvisResponse(
+                    success=False,
+                    message=f"Conflict detected — '{conflict_title}' is already at that time. What time would you like instead?",
+                    latency_ms=(_tconf.time()-_sconf)*1000
+                )
+
+            # Create the event
+            result = await self.calendar.create_event(
+                title=meeting["title"],
+                start_time=start_time,
+                end_time=end_time,
+                attendees=meeting.get("attendees") or None,
+            )
+            self._pending_meeting = None
+
+            if result.get("success"):
+                attendee_str = f" with {', '.join(meeting['attendees'])}" if meeting.get("attendees") else ""
+                start_fmt = start_time[:16].replace("T", " at ")
+                dur_str = f"{duration_mins} minutes" if duration_mins != 60 else "1 hour"
+                msg = f"✅ '{meeting['title']}' scheduled{attendee_str} on {start_fmt} for {dur_str}."
+                if result.get("link"):
+                    msg += ' View: ' + result['link']
+            else:
+                msg = f"Could not create event: {result.get('error', 'unknown error')}"
+
+            await self.memory.store_task_result(user_request, "schedule_meeting", result.get("success", False), msg[:100])
+            return JarvisResponse(success=result.get("success", False), message=msg, latency_ms=(_tconf.time()-_sconf)*1000)
+
+        # Cancel pending meeting
+        if self._pending_meeting and any(kw in req_lower for kw in ["cancel", "no", "don't book", "abort", "never mind"]):
+            self._pending_meeting = None
+            return JarvisResponse(success=True, message="Meeting cancelled. Nothing was added to your calendar.")
+
+        # Schedule/create event shortcut
+        schedule_keywords = ["schedule", "book a meeting", "create an event", "add to calendar", "set up a meeting", "arrange a meeting"]
+        if any(kw in req_lower for kw in schedule_keywords):
+            import time as _tcal
+            _scal = _tcal.time()
+
+            # Extract title
+            title_match = _recal.search(r"(?:called|named|titled|about)\s+(.+?)\s+(?:on|at|tomorrow|next|this|for)", user_request, _recal.IGNORECASE)
+            if not title_match:
+                title_match = _recal.search(r"(?:meeting|event|appointment)\s+(?:with\s+\w+\s+)?(?:called|named|about)?\s*(.+?)\s*(?:at|on|tomorrow)", user_request, _recal.IGNORECASE)
+            title = title_match.group(1).strip() if title_match else "Meeting"
+
+            # Extract attendees
+            attendee_match = _recal.search(r'with\s+([\w\s,and]+?)\s+(?:at|on|tomorrow|next|called|about)', user_request, _recal.IGNORECASE)
+            attendees = []
+            if attendee_match:
+                names = attendee_match.group(1).strip()
+                for name in _recal.split(r'[,\s]+(?:and\s+)?', names):
+                    name = name.strip()
+                    if name:
+                        contact = self.contacts.find(name)
+                        if contact:
+                            attendees.append(contact["email"])
+
+            # Resolve time
+            temporal = self._resolve_temporal(user_request)
+            start_time = temporal.get("datetime", "")
+
+            if not start_time:
+                return JarvisResponse(success=False, message="I couldn't figure out when to schedule the meeting. Could you specify a date and time?", latency_ms=(_tcal.time()-_scal)*1000)
+
+            # Store pending meeting and ask for duration
+            self._pending_meeting = {
+                "title": title,
+                "start_time": start_time,
+                "attendees": attendees,
+            }
+
+            start_fmt = start_time[:16].replace("T", " at ")
+            attendee_str = f" with {', '.join(attendees)}" if attendees else ""
+            attendee_str = f" with {", ".join(attendees)}" if attendees else ""
+            msg = (
+                f"I will schedule {title!r}{attendee_str} on {start_fmt}. "
+                "How long should the meeting be? (e.g. 30 minutes, 1 hour, 45 minutes)"
+            )
+            return JarvisResponse(success=True, message=msg, latency_ms=(_tcal.time()-_scal)*1000)
+
         return None  # No shortcut — proceed with full pipeline
 
     def _extract_location(self, user_request: str) -> str:
         """
         Extract a city name from a weather request.
         Returns empty string if no specific location found.
-        Strips country names — geocoding API works best with city only.
+        Strips noise words like 'today', 'now', 'currently', country names.
         """
+        import re as _reloc
         req = user_request.lower()
+
+        # Noise words to strip from end of location
+        noise_words = {
+            "today", "now", "currently", "tonight", "tomorrow",
+            "this", "week", "weekend", "morning", "evening",
+            "afternoon", "night", "please", "for", "me",
+        }
+
+        # Country names to strip
+        common_countries = {
+            "pakistan","india","usa","uk","france","germany","china",
+            "japan","australia","canada","brazil","italy","spain",
+            "mexico","russia","nigeria","egypt","turkey","argentina",
+            "bangladesh","indonesia","kenya","ghana","iran","iraq",
+            "vietnam","thailand","malaysia","singapore","uae","qatar",
+            "england","scotland","wales","ireland","netherlands","sweden",
+            "norway","denmark","finland","switzerland","austria","belgium",
+            "portugal","greece","poland","czech","romania","hungary",
+            "southafrica","newzealand","saudiarabia",
+        }
 
         for phrase in [
             "what's the weather in", "what is the weather in",
-            "weather in", "weather for", "whats the weather in",
+            "whats the weather in", "weather in", "weather for",
             "weather at", "weather today in", "weather forecast for",
             "forecast for", "forecast in", "temperature in",
+            "how hot is it in", "how cold is it in", "how warm is it in",
+            "what's it like in", "whats it like in",
         ]:
             if phrase in req:
                 raw = user_request[req.index(phrase) + len(phrase):].strip()
-                raw = raw.rstrip("?!. ")
+                raw = raw.rstrip("?!., ")
                 if not raw:
                     return ""
-                # Strip trailing country name if 2+ words
-                # e.g. "karachi pakistan" -> "karachi"
-                # but "new york" stays "new york"
-                # We use a simple heuristic: if last word is a known country indicator, drop it
+
+                # Split into words and strip noise/country from the end
                 parts = raw.split()
-                if len(parts) >= 2:
-                    # Check if last word looks like a country (capitalised, not a city suffix)
-                    common_countries = {
-                        "pakistan","india","usa","uk","france","germany","china",
-                        "japan","australia","canada","brazil","italy","spain",
-                        "mexico","russia","nigeria","egypt","turkey","argentina",
-                        "bangladesh","indonesia","kenya","ghana","iran","iraq",
-                        "vietnam","thailand","malaysia","singapore","uae","qatar"
-                    }
-                    if parts[-1].lower() in common_countries:
-                        city = " ".join(parts[:-1])
-                    else:
-                        city = raw
-                else:
-                    city = raw
-                return city.strip()
+                while parts and parts[-1].lower() in noise_words:
+                    parts.pop()
+                while parts and parts[-1].lower() in common_countries:
+                    parts.pop()
+
+                city = " ".join(parts).strip()
+                return city if city else ""
+
         return ""

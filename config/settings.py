@@ -86,4 +86,4 @@ RSS_FEEDS = {
 # ── Weather ────────────────────────────────────────────────────────────────
 DEFAULT_LATITUDE = float(os.getenv("DEFAULT_LATITUDE", "51.5074"))
 DEFAULT_LONGITUDE = float(os.getenv("DEFAULT_LONGITUDE", "-0.1278"))
-DEFAULT_LOCATION_NAME = os.getenv("DEFAULT_LOCATION_NAME", "London")
+DEFAULT_LOCATION_NAME = os.getenv("DEFAULT_LOCATION_NAME", "High Wycombe")

@@ -99,12 +99,16 @@ class CalendarAgent:
             return self._mock_create(title, start_time, end_time, attendees, description, location)
 
         try:
+            # Detect timezone from the datetime string or use local
+            import os
+            local_tz = os.environ.get("TZ", "Europe/London")
+
             body = {
                 "summary": title,
                 "description": description,
                 "location": location,
-                "start": {"dateTime": start_time, "timeZone": "UTC"},
-                "end":   {"dateTime": end_time,   "timeZone": "UTC"},
+                "start": {"dateTime": start_time, "timeZone": local_tz},
+                "end":   {"dateTime": end_time,   "timeZone": local_tz},
             }
             if attendees:
                 body["attendees"] = [{"email": e} for e in attendees]
