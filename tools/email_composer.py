@@ -21,7 +21,7 @@ EXTRACT_PROMPT = """You are an email assistant. Extract email details from the u
 Respond with valid JSON only:
 {
   "recipient_name": "John",
-  "recipient_email": "john@example.com or empty string if not mentioned",
+  "recipient_email": "",
   "subject": "generated subject line",
   "body": "full professional email body",
   "tone": "formal or casual",
@@ -30,8 +30,8 @@ Respond with valid JSON only:
 
 Rules:
 - If the user provides an email address, use it exactly
-- If only a name is given, leave recipient_email as empty string
-- Generate a clear, appropriate subject line
+- ONLY put an email if user explicitly provides one. NEVER invent or guess emails like name@example.com
+- If only a name is given (e.g. "send to Abdullah"), ALWAYS leave recipient_email as empty string
 - Write a complete, professional email body based on the user's description
 - Sign off with "Best regards,\\nJarvis"
 - tone should be "formal" for professional contexts, "casual" for friendly ones

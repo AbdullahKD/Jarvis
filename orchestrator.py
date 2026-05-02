@@ -685,10 +685,21 @@ class JarvisOrchestrator:
             "premier league", "champions league", "la liga", "serie a",
             "bundesliga", "nfl", "nba", "nhl", "mlb", "f1", "formula 1",
             "football scores", "football results", "basketball scores",
-            "sports results", "match results", "game scores",
-            "who won", "did", "beat", "vs", "played", "score",
+            "sports results", "match results", "game scores", "football score",
+            "who won", "beat", "vs", "final score", "match score",
         ]
-        sports_context = any(kw in req_lower for kw in sports_keywords)
+        # ── Calendar pre-check — must come before sports to avoid "call" collision ──
+        _has_meeting = any(w in req_lower for w in ["meeting", "appointment", "event", "session"])
+        _has_schedule = any(w in req_lower for w in [
+            "schedule", "book", "create", "add", "set", "arrange",
+            "block", "put", "plan", "organise", "organize", "new"
+        ])
+        _explicit_cal = any(kw in req_lower for kw in ["add to calendar", "calendar event", "add event"])
+        if (_has_meeting and _has_schedule) or _explicit_cal:
+            # Jump straight to calendar section below
+            pass
+        else:
+            sports_context = any(kw in req_lower for kw in sports_keywords)
         from config.settings import FAVOURITE_TEAMS
         team_sports = [
             # Premier League
@@ -711,7 +722,8 @@ class JarvisOrchestrator:
         ] + [t.lower() for t in FAVOURITE_TEAMS]
         team_mentioned = any(t in req_lower for t in team_sports)
 
-        if sports_context or team_mentioned:
+        sports_context = any(kw in req_lower for kw in sports_keywords)
+        if (sports_context or team_mentioned) and not ((_has_meeting and _has_schedule) or _explicit_cal):
             import time as _tsp
             _ssp = _tsp.time()
 
@@ -806,15 +818,43 @@ class JarvisOrchestrator:
             self._pending_email = None
             return JarvisResponse(success=True, message="Email cancelled. No email was sent.")
 
+        # ── Email address reply — MUST be first, before everything ─────────────
+        # ── Email address reply — MUST be first, before everything ─────────────
+        import re as _reemail
+        # Strip markdown link format if present e.g. [email](mailto:email)
+        _ur_clean = _reemail.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", user_request.strip())
+        _email_m = _reemail.search(r"[\w._%+\-]+@[\w.\-]+\.[a-zA-Z]{2,}", _ur_clean)
+        _is_email_reply = _email_m and self._pending_email and getattr(self._pending_email, "needs_email", False)
+        if _is_email_reply:
+            import time as _teer
+            _seer = _teer.time()
+            self._pending_email.recipient_email = _email_m.group(0)
+            self._pending_email.needs_email = False
+            msg = self.composer.format_draft_for_confirmation(self._pending_email)
+            return JarvisResponse(success=True, message=msg, latency_ms=(_teer.time()-_seer)*1000)
+
+        # ── Edit pending email ─────────────────────────────────────────────────
+        _edit_kws = ["edit", "change", "modify", "rewrite", "update", "tell her",
+                     "tell him", "add that", "also say", "mention", "make it"]
+        if self._pending_email and not getattr(self._pending_email, "needs_email", False) and any(kw in req_lower for kw in _edit_kws):
+            import time as _tedit
+            _sedit = _tedit.time()
+            ep = "Edit this email body based on the instruction.\n\nCurrent body:\n" + self._pending_email.body + "\n\nInstruction: " + user_request + "\n\nReturn ONLY the updated body."
+            try:
+                nb = await self.llm.chat([{"role": "user", "content": ep}])
+                self._pending_email.body = nb.strip()
+                msg = "Updated! " + self.composer.format_draft_for_confirmation(self._pending_email)
+            except Exception as e:
+                msg = "Could not edit: " + str(e)
+            return JarvisResponse(success=True, message=msg, latency_ms=(_tedit.time()-_sedit)*1000)
+
+
         # ── Morning Briefing ──────────────────────────────────────────────────
         if self.briefing.is_morning_briefing(user_request):
             import time as _tbf
             _sbf = _tbf.time()
             msg = await self._morning_briefing()
             return JarvisResponse(success=True, message=msg, latency_ms=(_tbf.time()-_sbf)*1000)
-
-        # ── Multi-query handler ────────────────────────────────────────────────
-        if self.briefing.is_compound(user_request):
             intents = self.briefing.detect_intents(user_request)
             if len(intents) >= 2:
                 import time as _tmq
@@ -1348,20 +1388,48 @@ class JarvisOrchestrator:
             return JarvisResponse(success=True, message="Meeting cancelled. Nothing was added to your calendar.")
 
         # Schedule/create event shortcut
-        schedule_keywords = ["schedule", "book a meeting", "create an event", "add to calendar", "set up a meeting", "arrange a meeting"]
-        if any(kw in req_lower for kw in schedule_keywords):
+        # Use broader schedule detection — check individual trigger words + meeting context
+        has_meeting_word = any(w in req_lower for w in ["meeting", "call", "appointment", "event", "session"])
+        has_action_word = any(w in req_lower for w in [
+            "schedule", "book", "create", "add", "set", "arrange", "block",
+            "put", "plan", "organise", "organize", "new"
+        ])
+        explicit_schedule = any(kw in req_lower for kw in [
+            "add to calendar", "calendar event", "add event",
+        ])
+
+        if (has_meeting_word and has_action_word) or explicit_schedule:
             import time as _tcal
             _scal = _tcal.time()
 
-            # Extract title
-            title_match = _recal.search(r"(?:called|named|titled|about)\s+(.+?)\s+(?:on|at|tomorrow|next|this|for)", user_request, _recal.IGNORECASE)
-            if not title_match:
-                title_match = _recal.search(r"(?:meeting|event|appointment)\s+(?:with\s+\w+\s+)?(?:called|named|about)?\s*(.+?)\s*(?:at|on|tomorrow)", user_request, _recal.IGNORECASE)
-            title = title_match.group(1).strip() if title_match else "Meeting"
+            # Extract title — look for "called X", "named X", "titled X", "call it X"
+            # Extract title using clean patterns
+            title = None
+            req_lower_t = user_request.lower()
 
-            # Extract attendees
-            attendee_match = _recal.search(r'with\s+([\w\s,and]+?)\s+(?:at|on|tomorrow|next|called|about)', user_request, _recal.IGNORECASE)
-            attendees = []
+            # Pattern: call it X / called X / named X / titled X
+            import re as _ret
+            m1 = _ret.search(r"call(?:ed)?\s+it\s+(.+?)(?:\s+(?:for|on|at)\s+\d|\s*$)", user_request, _ret.IGNORECASE)
+            m2 = _ret.search(r"(?:called|named|titled)\s+(.+?)(?:\s+(?:at|on)\s+\d|\s+(?:today|tomorrow|next|for)\s|\s*$)", user_request, _ret.IGNORECASE)
+            m3 = _ret.search(r"about\s+([\w\s]+?)(?:\s+(?:at|on|for|today|tomorrow)|$)", user_request, _ret.IGNORECASE)
+
+            if m1:
+                title = m1.group(1).strip()
+            elif m2:
+                title = m2.group(1).strip()
+            elif m3:
+                title = m3.group(1).strip().title()
+            else:
+                title = "Meeting"
+
+            # Strip time/date noise from title
+            noise = ["today","tomorrow","tonight","monday","tuesday","wednesday",
+                     "thursday","friday","saturday","sunday","next week",
+                     "9pm","8pm","7pm","6pm","5pm","4pm","3pm","2pm","1pm",
+                     "12pm","11am","10am","9am","8am","am","pm"]
+            for n in noise:
+                title = _ret.sub(r"\b" + n + r"\b", "", title, flags=_ret.IGNORECASE).strip()
+            title = title.strip(". ").title() or "Meeting"
             if attendee_match:
                 names = attendee_match.group(1).strip()
                 for name in _recal.split(r'[,\s]+(?:and\s+)?', names):
