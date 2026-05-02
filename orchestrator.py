@@ -8,6 +8,7 @@ This is what makes Jarvis a proper Multi-Agent System.
 
 from __future__ import annotations
 
+import asyncio
 import re
 import time
 from datetime import datetime
@@ -34,6 +35,10 @@ from config.models import (
 from config.settings import OLLAMA_CHAT_MODEL
 from memory.memory_agent import MemoryAgent
 from tools.document import DocumentTool
+from tools.sports import SportsTool
+from tools.markets import MarketsTool
+from tools.prayer_times import PrayerTimesTool
+from tools.briefing import BriefingHandler
 from tools.mac_control import MacControlTool
 from tools.news import NewsTool
 from tools.spotify import SpotifyTool
@@ -86,6 +91,10 @@ class JarvisOrchestrator:
         self.mac        = MacControlTool()
         self.spotify    = SpotifyTool()
         self.document   = DocumentTool()
+        self.sports     = SportsTool()
+        self.markets    = MarketsTool()
+        self.prayer     = PrayerTimesTool()
+        self.briefing   = BriefingHandler()
 
         print(f"\n🤖 Jarvis Orchestrator ready — model: {model}")
         print(f"   Agents: Router, Memory, Planner, Critic, Evaluator, Summariser, Calendar, Gmail")
@@ -650,22 +659,108 @@ class JarvisOrchestrator:
                 latency_ms=(_time.time() - start) * 1000,
             )
 
-        # News shortcut
-        news_keywords = ["news", "headlines", "latest news", "top stories", "breaking"]
+        # News shortcut — smart category/source/topic detection
+        news_keywords = [
+            "news", "headlines", "latest news", "top stories", "breaking",
+            "what's happening", "whats happening", "current events",
+            "sports news", "tech news", "business news", "world news",
+            "science news", "ai news", "uk news", "football news",
+        ]
         if any(kw in req_lower for kw in news_keywords):
             import time as _t
             _s = _t.time()
-            # Try to detect topic filter
-            topic = None
-            for kw in ["about", "on", "regarding"]:
-                if kw in req_lower:
-                    topic = req_lower.split(kw, 1)[-1].strip().rstrip("?!. ")
-                    break
-            data = await self.news.get_headlines(topic=topic, max_items=5)
-            msg = self.news.format_headlines(data)
+            detailed = any(w in req_lower for w in ["detailed", "detail", "more info", "tell me more"])
+            data = await self.news.get_headlines(
+                query=user_request,
+                max_items=6,
+            )
+            msg = self.news.format_headlines(data, detailed=detailed)
             await self.memory.store_task_result(user_request, "get_news", True, msg[:100])
             print(f"Jarvis shortcut: news — {(_t.time()-_s)*1000:.0f}ms")
             return JarvisResponse(success=True, message=msg, latency_ms=(_t.time()-_s)*1000)
+
+        # ── Sports shortcuts ──────────────────────────────────────────────────
+        sports_keywords = [
+            "scores", "results", "fixtures", "standings", "table",
+            "premier league", "champions league", "la liga", "serie a",
+            "bundesliga", "nfl", "nba", "nhl", "mlb", "f1", "formula 1",
+            "football scores", "football results", "basketball scores",
+            "sports results", "match results", "game scores",
+            "who won", "did", "beat", "vs", "played", "score",
+        ]
+        sports_context = any(kw in req_lower for kw in sports_keywords)
+        from config.settings import FAVOURITE_TEAMS
+        team_sports = [
+            # Premier League
+            "arsenal", "chelsea", "liverpool", "manchester", "spurs",
+            "tottenham", "city", "united", "west ham", "newcastle",
+            "aston villa", "brighton", "everton", "wolves", "fulham",
+            "brentford", "crystal palace", "bournemouth", "ipswich",
+            "leicester", "southampton",
+            # European
+            "real madrid", "barcelona", "atletico", "juventus", "inter",
+            "ac milan", "napoli", "bayern", "dortmund", "psg",
+            # NBA
+            "lakers", "celtics", "warriors", "bulls", "heat", "nets",
+            "knicks", "clippers", "suns", "bucks", "nuggets", "76ers",
+            # NFL
+            "patriots", "chiefs", "cowboys", "packers", "eagles",
+            # Cricket
+            "pakistan", "india", "england cricket", "australia cricket",
+            "west indies", "south africa cricket", "new zealand cricket",
+        ] + [t.lower() for t in FAVOURITE_TEAMS]
+        team_mentioned = any(t in req_lower for t in team_sports)
+
+        if sports_context or team_mentioned:
+            import time as _tsp
+            _ssp = _tsp.time()
+
+            # Detect league
+            league_key = self.sports.detect_league(user_request)
+
+            # If team mentioned, search for that team
+            if team_mentioned and not any(kw in req_lower for kw in ["table", "standings"]):
+                if not league_key:
+                    league_key = "premier_league"
+                data = await self.sports.search_team(user_request, league_key)
+                if data.get("success") and data.get("games"):
+                    msg = self.sports.format_scores(data)
+                else:
+                    # Fallback to full league scores
+                    data = await self.sports.get_scores(league_key or "premier_league")
+                    msg = self.sports.format_scores(data)
+            elif any(kw in req_lower for kw in ["table", "standings", "top of", "who is top", "who leads"]):
+                if not league_key:
+                    league_key = "premier_league"
+                data = await self.sports.get_standings(league_key)
+                msg = self.sports.format_standings(data)
+            else:
+                if not league_key:
+                    league_key = "premier_league"
+                data = await self.sports.get_scores(league_key)
+                msg = self.sports.format_scores(data)
+
+            await self.memory.store_task_result(user_request, "sports", True, msg[:100])
+            return JarvisResponse(success=True, message=msg, latency_ms=(_tsp.time()-_ssp)*1000)
+
+        # News digest — all categories
+        if any(kw in req_lower for kw in ["morning briefing", "daily briefing", "news digest", "all news", "full news"]):
+            import time as _td
+            _sd = _td.time()
+            digest = await self.news.get_all_categories(max_per_category=2)
+            lines = ["Your news digest:"]
+            for cat, items in digest.get("digest", {}).items():
+                if items:
+                    lines.append(f"**{cat.title()}**")
+                    for item in items:
+                        lines.append(f"  • {item['title']}")
+                    lines.append("")
+            msg = chr(10).join(lines)
+            return JarvisResponse(success=True, message=msg, latency_ms=(_td.time()-_sd)*1000)
+
+        # List available news sources
+        if any(kw in req_lower for kw in ["news sources", "available news", "what news sources"]):
+            return JarvisResponse(success=True, message=self.news.list_sources())
 
         if primary_agent == AgentRole.NEWS:
             data = await self.news.get_headlines(max_items=5)
@@ -710,6 +805,23 @@ class JarvisOrchestrator:
         if self._pending_email and any(kw in req_lower for kw in cancel_keywords):
             self._pending_email = None
             return JarvisResponse(success=True, message="Email cancelled. No email was sent.")
+
+        # ── Morning Briefing ──────────────────────────────────────────────────
+        if self.briefing.is_morning_briefing(user_request):
+            import time as _tbf
+            _sbf = _tbf.time()
+            msg = await self._morning_briefing()
+            return JarvisResponse(success=True, message=msg, latency_ms=(_tbf.time()-_sbf)*1000)
+
+        # ── Multi-query handler ────────────────────────────────────────────────
+        if self.briefing.is_compound(user_request):
+            intents = self.briefing.detect_intents(user_request)
+            if len(intents) >= 2:
+                import time as _tmq
+                _smq = _tmq.time()
+                msg = await self._handle_multi_query(user_request, intents)
+                if msg:
+                    return JarvisResponse(success=True, message=msg, latency_ms=(_tmq.time()-_smq)*1000)
 
         # Pending email — user replied with just an email address
         import re as _re2
@@ -1283,6 +1395,323 @@ class JarvisOrchestrator:
             return JarvisResponse(success=True, message=msg, latency_ms=(_tcal.time()-_scal)*1000)
 
         return None  # No shortcut — proceed with full pipeline
+
+    async def _morning_briefing(self) -> str:
+        """
+        Fully personalised morning briefing for Abdullah.
+        Sections: greeting, weather, prayer times, calendar, inbox,
+                  news (detailed), tech, sports (fav teams), markets, quote.
+        All fetched in parallel for speed.
+        """
+        import random
+        now = datetime.now()
+        hour = now.hour
+        date_str = now.strftime("%A, %d %B %Y")
+
+        # ── Dynamic name + greeting ────────────────────────────────────────
+        names_morning   = ["champ", "legend", "boss", "big man", "chief"]
+        names_afternoon = ["mate", "boss", "legend", "G"]
+        names_evening   = ["night owl", "champ", "boss"]
+
+        if hour < 12:
+            time_phrase = "Good morning"
+            name = random.choice(names_morning)
+        elif hour < 17:
+            time_phrase = "Good afternoon"
+            name = random.choice(names_afternoon)
+        else:
+            time_phrase = "Good evening"
+            name = random.choice(names_evening)
+
+        # Check memory for mood
+        mood_memories = await self.memory.retrieve("mood feeling tired stressed", k=2)
+        mood_note = ""
+        if mood_memories:
+            last_mood = mood_memories[0].content
+            if any(w in last_mood.lower() for w in ["tired", "stressed", "rough", "bad"]):
+                mood_note = " Hope you're feeling better today."
+            elif any(w in last_mood.lower() for w in ["good", "great", "happy", "productive"]):
+                mood_note = " Glad to hear you were in good form."
+
+        # ── Parallel fetch everything ──────────────────────────────────────
+        from config.settings import FAVOURITE_TEAMS, FAVOURITE_FOOTBALL_LEAGUE, FAVOURITE_BASKETBALL_LEAGUE
+
+        (weather_data, prayer_data, news_data, tech_data,
+         cal_data, email_data, sports_pl, sports_ucl,
+         sports_nba, market_data) = await asyncio.gather(
+            self.weather.get_current(),
+            self.prayer.get_times(),
+            self.news.get_headlines(max_stories=5),
+            self.news.get_headlines(category="technology", max_stories=2),
+            self.calendar.search_events(),
+            self.gmail.get_inbox(max_results=5),
+            self.sports.get_scores(FAVOURITE_FOOTBALL_LEAGUE, limit=10),
+            self.sports.get_scores("champions_league", limit=8),
+            self.sports.get_scores(FAVOURITE_BASKETBALL_LEAGUE, limit=8),
+            self.markets.get_all(),
+            return_exceptions=True
+        )
+
+        lines_out = []
+
+        # ── Greeting ───────────────────────────────────────────────────────
+        lines_out.append(f"{time_phrase}, {name}!{mood_note} Here is your briefing for {date_str}.")
+        lines_out.append("")
+
+        # ── Weather ────────────────────────────────────────────────────────
+        if isinstance(weather_data, dict) and weather_data.get("success"):
+            w = weather_data
+            lines_out.append("WEATHER")
+            lines_out.append(
+                f"  {w.get('condition','')}, {w.get('temperature_c','')}°C "
+                f"(feels like {w.get('feels_like_c','')}°C) in {w.get('location','')}. "
+                f"Humidity {w.get('humidity_pct','')}%, wind {w.get('wind_kph','')} km/h."
+            )
+            lines_out.append("")
+
+        # ── Prayer times ───────────────────────────────────────────────────
+        if isinstance(prayer_data, dict) and prayer_data.get("success"):
+            lines_out.append(self.prayer.format_times(prayer_data))
+            lines_out.append("  " + self.prayer.get_next_prayer(prayer_data))
+            lines_out.append("")
+
+        # ── Calendar ───────────────────────────────────────────────────────
+        if isinstance(cal_data, dict) and cal_data.get("success"):
+            events = cal_data.get("events", [])
+            lines_out.append("YOUR DAY")
+            if events:
+                lines_out.append(f"  {len(events)} event(s) scheduled:")
+                for e in events[:5]:
+                    start_t = e.get("start", "")[:16].replace("T", " at ")
+                    lines_out.append(f"  • {e.get('title','Event')} — {start_t}")
+            else:
+                lines_out.append("  Nothing in the calendar today. A free day!")
+            lines_out.append("")
+
+        # ── Email ──────────────────────────────────────────────────────────
+        if isinstance(email_data, dict) and email_data.get("success"):
+            emails = email_data.get("emails", [])
+            count = email_data.get("count", 0)
+            lines_out.append("INBOX")
+            lines_out.append(f"  {count} unread email(s).")
+            if emails:
+                subj = emails[0].get("subject", "(no subject)")
+                sender = emails[0].get("from", "")[:50]
+                lines_out.append("  Latest: " + repr(subj) + " from " + sender)
+            lines_out.append("")
+
+        # ── Top News (detailed) ────────────────────────────────────────────
+        if isinstance(news_data, dict) and news_data.get("success"):
+            stories = news_data.get("stories", [])
+            lines_out.append("TOP NEWS")
+            for i, story in enumerate(stories[:5], 1):
+                sources = story.get("sources", [])
+                if len(sources) > 1:
+                    src_str = f"[{', '.join(sources)}] — {len(sources)} outlets"
+                else:
+                    src_str = f"[{sources[0]}]" if sources else ""
+                lines_out.append(f"  {i}. {story['title']}")
+                lines_out.append(f"     {src_str}")
+                if story.get("description"):
+                    lines_out.append(f"     {story['description'][:180]}")
+            lines_out.append("")
+
+        # ── Tech & AI ──────────────────────────────────────────────────────
+        if isinstance(tech_data, dict) and tech_data.get("success"):
+            tech_stories = tech_data.get("stories", [])
+            if tech_stories:
+                lines_out.append("TECH & AI")
+                for story in tech_stories[:2]:
+                    sources = story.get("sources", [])
+                    src_str = f" [{sources[0]}]" if sources else ""
+                    lines_out.append(f"  • {story['title']}{src_str}")
+                lines_out.append("")
+
+        # ── Sports ────────────────────────────────────────────────────────
+        fav_lower = [t.lower() for t in FAVOURITE_TEAMS]
+
+        def is_fav(game):
+            home = game.get("home_team", "").lower()
+            away = game.get("away_team", "").lower()
+            return any(
+                any(word in home or word in away for word in fav.lower().split())
+                for fav in fav_lower
+            )
+
+        def is_big_game(game):
+            big_teams = ["manchester city", "real madrid", "barcelona", "liverpool",
+                        "arsenal", "chelsea", "Bayern", "psg", "juventus",
+                        "lakers", "celtics", "heat", "nuggets"]
+            home = game.get("home_team", "").lower()
+            away = game.get("away_team", "").lower()
+            return sum(1 for t in big_teams if t in home or t in away) >= 2
+
+        sports_lines = []
+
+        for league_data, league_label in [
+            (sports_pl, "PREMIER LEAGUE"),
+            (sports_ucl, "CHAMPIONS LEAGUE"),
+            (sports_nba, "NBA"),
+        ]:
+            if not isinstance(league_data, dict) or not league_data.get("success"):
+                continue
+            games = league_data.get("games", [])
+            finished = [g for g in games if g.get("status") == "final"]
+            live = [g for g in games if g.get("status") == "live"]
+
+            fav_games = [g for g in finished if is_fav(g)]
+            big_games = [g for g in finished if is_big_game(g) and not is_fav(g)]
+            show = fav_games + big_games[:2]
+
+            if live:
+                sports_lines.append(f"{league_label} — LIVE")
+                for g in live[:2]:
+                    fav = " ★" if is_fav(g) else ""
+                    sports_lines.append(
+                        f"  {g['home_team']} {g['home_score']} - "
+                        f"{g['away_score']} {g['away_team']} [{g.get('clock','')}]{fav}"
+                    )
+
+            if show:
+                if not live:
+                    sports_lines.append(f"{league_label}")
+                for g in show[:4]:
+                    fav = " ★" if is_fav(g) else ""
+                    sports_lines.append(
+                        f"  {g['home_team']} {g['home_score']} - "
+                        f"{g['away_score']} {g['away_team']}{fav}"
+                    )
+
+        if sports_lines:
+            lines_out.extend(sports_lines)
+            lines_out.append("")
+
+        # ── Markets ───────────────────────────────────────────────────────
+        if isinstance(market_data, dict) and market_data.get("success"):
+            lines_out.append(self.markets.format_prices(market_data))
+            lines_out.append("")
+
+        # ── Witty + inspirational quote (LLM generated, unique daily) ─────
+        quote_prompt = (
+            f"Generate a single witty yet genuinely inspiring quote or observation "
+            f"that is relevant to someone starting their {date_str}. "
+            f"It should feel fresh, not cliché. Max 2 sentences. "
+            f"No quotation marks needed, just the text."
+        )
+        try:
+            quote = await self.llm.chat([{"role": "user", "content": quote_prompt}])
+            lines_out.append("THOUGHT FOR THE DAY")
+            lines_out.append(f"  {quote.strip()}")
+            lines_out.append("")
+        except Exception:
+            pass
+
+        # ── Closing ────────────────────────────────────────────────────────
+        closings = [
+            "Make it count today.",
+            "Go get it.",
+            "Let's have a good one.",
+            "You've got this.",
+            "Make it a productive one.",
+        ]
+        lines_out.append(random.choice(closings))
+
+        return chr(10).join(lines_out)
+
+    async def _handle_multi_query(self, user_request: str, intents: list) -> str:
+        """
+        Handle compound queries by running multiple intents in parallel.
+        e.g. "what's the weather and latest news and premier league scores?"
+        """
+        tasks = {}
+
+        if "weather" in intents:
+            location = self._extract_location(user_request)
+            if location:
+                tasks["weather"] = self.weather.get_current_for_location(location)
+            else:
+                tasks["weather"] = self.weather.get_current()
+
+        if "news" in intents:
+            tasks["news"] = self.news.get_headlines(query=user_request, max_stories=4)
+
+        if "sports" in intents:
+            league_key = self.sports.detect_league(user_request) or "premier_league"
+            tasks["sports"] = self.sports.get_scores(league_key)
+
+        if "calendar" in intents:
+            tasks["calendar"] = self.calendar.search_events()
+
+        if "email" in intents:
+            tasks["email"] = self.gmail.get_inbox(max_results=5)
+
+        if not tasks:
+            return ""
+
+        # Execute all in parallel
+        keys = list(tasks.keys())
+        results = await asyncio.gather(*tasks.values(), return_exceptions=True)
+        result_map = dict(zip(keys, results))
+
+        sections = []
+
+        if "weather" in result_map:
+            data = result_map["weather"]
+            if isinstance(data, dict) and data.get("success"):
+                sections.append("WEATHER")
+                sections.append("  " + self.weather.format_current(data))
+                sections.append("")
+
+        if "calendar" in result_map:
+            data = result_map["calendar"]
+            if isinstance(data, dict) and data.get("success"):
+                events = data.get("events", [])
+                sections.append("CALENDAR")
+                if events:
+                    for e in events[:4]:
+                        start = e.get("start", "")[:16].replace("T", " at ")
+                        sections.append(f"  • {e.get('title','')} — {start}")
+                else:
+                    sections.append("  No upcoming events.")
+                sections.append("")
+
+        if "email" in result_map:
+            data = result_map["email"]
+            if isinstance(data, dict) and data.get("success"):
+                count = data.get("count", 0)
+                sections.append("EMAILS")
+                sections.append(f"  {count} unread email(s).")
+                sections.append("")
+
+        if "news" in result_map:
+            data = result_map["news"]
+            if isinstance(data, dict) and data.get("success"):
+                stories = data.get("stories", [])
+                sections.append("NEWS")
+                for i, story in enumerate(stories[:4], 1):
+                    sources = story.get("sources", [])
+                    src_str = f" [{', '.join(sources[:2])}]" if len(sources) > 1 else ""
+                    sections.append(f"  {i}. {story['title']}{src_str}")
+                sections.append("")
+
+        if "sports" in result_map:
+            data = result_map["sports"]
+            if isinstance(data, dict) and data.get("success"):
+                sections.append("SPORTS")
+                sections.append(self.sports.format_scores(data))
+                sections.append("")
+
+        return chr(10).join(sections).strip()
+
+
+    def _time_greeting(self, now: datetime) -> str:
+        hour = now.hour
+        if hour < 12:
+            return "Good morning"
+        elif hour < 17:
+            return "Good afternoon"
+        else:
+            return "Good evening"
 
     def _extract_location(self, user_request: str) -> str:
         """

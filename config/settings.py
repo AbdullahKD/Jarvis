@@ -83,6 +83,11 @@ RSS_FEEDS = {
     "guardian":  "https://www.theguardian.com/world/rss",
 }
 
+# ── User preferences ──────────────────────────────────────────────────────
+FAVOURITE_TEAMS = os.getenv("FAVOURITE_TEAMS", "Manchester United,Real Madrid,Golden State Warriors,Pakistan Cricket").split(",")
+FAVOURITE_FOOTBALL_LEAGUE = os.getenv("FAVOURITE_FOOTBALL_LEAGUE", "premier_league")
+FAVOURITE_BASKETBALL_LEAGUE = os.getenv("FAVOURITE_BASKETBALL_LEAGUE", "nba")
+
 # ── Weather ────────────────────────────────────────────────────────────────
 DEFAULT_LATITUDE = float(os.getenv("DEFAULT_LATITUDE", "51.5074"))
 DEFAULT_LONGITUDE = float(os.getenv("DEFAULT_LONGITUDE", "-0.1278"))
