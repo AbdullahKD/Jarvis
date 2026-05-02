@@ -52,8 +52,10 @@ Available intents and their primary agents:
 - send_email, read_email, draft_email → email
 - set_reminder, list_reminders → reminder
 - create_note, search_notes → notes
-- web_search → websearch
-- research_topic → research
+- web_search → websearch (ANY factual question: who, what, when, where, why, how, which)
+- research_topic → research (deep multi-source research on a topic)
+
+IMPORTANT: Questions starting with who/what/when/where/why/how/which should ALWAYS route to websearch unless they clearly match another category (weather, calendar, email etc).
 - get_news → news
 - get_weather → weather
 - mac_control (open apps, volume, brightness) → mac
@@ -149,24 +151,33 @@ class RouterAgent:
     def _fallback_decision(self, request: str) -> RouterDecision:
         """Rule-based fallback when LLM is unavailable."""
         req = request.lower()
+        words = req.split()
+        first_word = words[0] if words else ""
+
         if any(w in req for w in ["meeting", "calendar", "schedule", "appointment"]):
             primary = AgentRole.CALENDAR
         elif any(w in req for w in ["email", "mail", "send", "inbox"]):
             primary = AgentRole.EMAIL
         elif any(w in req for w in ["weather", "forecast", "temperature"]):
             primary = AgentRole.WEATHER
-        elif any(w in req for w in ["news", "headline", "latest"]):
+        elif any(w in req for w in ["news", "headline", "latest news"]):
             primary = AgentRole.NEWS
-        elif any(w in req for w in ["play", "pause", "spotify", "music", "song"]):
+        elif any(w in req for w in ["play", "pause", "spotify", "music", "song", "track"]):
             primary = AgentRole.SPOTIFY
         elif any(w in req for w in ["remind", "reminder", "alert"]):
             primary = AgentRole.REMINDER
-        elif any(w in req for w in ["search", "find", "look up", "google"]):
-            primary = AgentRole.WEBSEARCH
-        elif any(w in req for w in ["note", "write down", "jot"]):
+        elif any(w in req for w in ["note", "write down", "jot", "save a note"]):
             primary = AgentRole.NOTES
-        elif any(w in req for w in ["open", "volume", "brightness", "app"]):
+        elif any(w in req for w in ["open", "launch", "volume", "brightness", "screenshot",
+                                     "dark mode", "battery", "wifi", "clipboard", "quit",
+                                     "mute", "lock", "sleep"]):
             primary = AgentRole.MAC
+        elif first_word in ("what", "who", "when", "where", "why", "how", "which",
+                            "tell", "explain", "describe", "define", "search",
+                            "find", "look", "google", "research", "investigate"):
+            primary = AgentRole.WEBSEARCH
+        elif any(w in req for w in ["research", "investigate", "analyse", "analyze"]):
+            primary = AgentRole.RESEARCH
         else:
             primary = AgentRole.PLANNER
 

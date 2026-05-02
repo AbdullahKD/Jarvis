@@ -917,93 +917,99 @@ class JarvisOrchestrator:
             msg = f"Notification sent: {message}" if result.get("success") else "Could not send notification."
             return JarvisResponse(success=result.get("success", False), message=msg, latency_ms=(_tn.time()-_sn)*1000)
 
-        # ── Information tool shortcuts ───────────────────────────────────────
+        # ── Information tool shortcuts ─────────────────────────────────────
 
-        # Web search shortcut
-        search_keywords = ["search for", "search the web", "look up", "google", "find information about", "what is", "who is", "when did", "how does", "tell me about"]
-        # Exclude queries already handled (weather, news, battery etc)
-        already_handled = any(kw in req_lower for kw in ["weather", "battery", "wifi", "volume", "brightness", "screenshot", "dark mode", "trash", "news", "headlines"])
-        if any(kw in req_lower for kw in search_keywords) and not already_handled:
+        # ── Search / Research — router-driven, no keyword list needed ──────
+        # If the router said websearch or research, we search.
+        # Also catch common question patterns the router might miss.
+        question_starters = (
+            'what', 'who', 'when', 'where', 'why', 'how', 'which',
+            'tell', 'explain', 'describe', 'define', 'search', 'find',
+            'look', 'google', 'research', 'investigate', 'analyse',
+            'analyze', 'give me', 'show me', 'can you find',
+        )
+
+        already_handled = any(kw in req_lower for kw in [
+            'weather', 'battery', 'wifi', 'volume', 'brightness',
+            'screenshot', 'dark mode', 'trash', 'news', 'headlines',
+            'schedule', 'remind', 'open ', 'quit ', 'close ',
+            'sleep the mac', 'lock screen', 'check my email',
+            'send email', 'send an email', 'my calendar', 'my emails',
+            'mute', 'unmute', 'clipboard', 'whats on my calendar',
+        ])
+
+        # Use primary_agent passed in to detect search intent
+        primary_agent_val = primary_agent.value if primary_agent else ''
+
+        is_search = (
+            primary_agent_val in ('websearch', 'research') or
+            (req_lower.split()[0] in question_starters if req_lower.split() else False)
+        ) and not already_handled
+
+        is_research = (
+            primary_agent_val == 'research' or
+            any(kw in req_lower for kw in [
+                'research', 'deep dive', 'detailed', 'comprehensive',
+                'everything about', 'investigate', 'analyse', 'analyze',
+                'in depth', 'give me a full', 'full overview',
+            ])
+        ) and not already_handled
+
+        if is_search or is_research:
             import time as _tws
             _sws = _tws.time()
 
-            # Extract search query — strip the trigger phrase
-            query = user_request
-            for phrase in ["search for", "search the web for", "look up", "google", "find information about"]:
-                if phrase in req_lower:
-                    idx = req_lower.index(phrase) + len(phrase)
-                    query = user_request[idx:].strip()
+            # Use the search tool query parser to clean the query
+            query = self.websearch.parse_query(user_request)
+            # Also strip research/investigate triggers for cleaner queries
+            for trigger in ['research ', 'investigate ', 'analyse ', 'analyze ']:
+                if query.lower().startswith(trigger):
+                    query = query[len(trigger):].strip()
                     break
+            if not query or len(query) < 2:
+                query = user_request
 
-            data = await self.websearch.search(query, max_results=5)
-
-            if data.get("success") and data.get("results"):
-                # Summarise the results with LLM for a clean response
-                parts = []
-                for i, r in enumerate(data["results"]):
-                    parts.append(str(i+1) + ". " + r.get("title","") + ": " + r.get("snippet",""))
-                results_text = chr(10).join(parts)
-                prompt = chr(10).join(["Search query: " + query, "", "Results:", results_text])
-                summary = await self.summariser.summarise(prompt, max_words=150, style="concise")
-                msg = summary
-                msg = summary
-                msg = summary
+            msg = "Could not find information about: " + query
+            if is_research:
+                searches = [query, query + " explained", query + " overview"]
+                all_results = []
+                searches = [query, query + " explained", query + " overview", query + " AI"]
+                all_results = []
+                for q in searches[:3]:
+                    data = await self.websearch.search(q, max_results=3)
+                    if data.get("success") and data.get("results"):
+                        for r in data.get("results", []):
+                            if r not in all_results:
+                                all_results.append(r)
+                # Also try direct Wikipedia for comprehensive coverage
+                if len(all_results) < 3:
+                    wiki_data = await self.websearch._wiki(query, 3)
+                    if wiki_data.get("success"):
+                        for r in wiki_data.get("results", []):
+                            if r not in all_results:
+                                all_results.append(r)
+                if all_results:
+                    snips = [r.get("snippet", "")[:200] for r in all_results[:6]]
+                    combined2 = " ".join(snips)
+                    rp = "Summarise what you know about " + query + " using these sources: " + combined2 + ". Use bullet points."
+                    report = await self.llm.chat([{"role": "user", "content": rp}])
+                    msg = "Here is what I found about " + query + ": " + report.strip()
+                else:
+                    msg = "Could not find enough information about: " + query
             else:
-                msg = f"Could not find results for: {query}"
+                # Single search
+                data = await self.websearch.search(query, max_results=5)
+                if data.get("success") and data.get("results"):
+                    snips2 = [r.get("snippet", "")[:300] for r in data["results"][:3]]
+                    ct = " ".join(snips2)
+                    ap = "Answer this question: " + query + ". Based on: " + ct + ". Be concise and clear."
+                    summary = await self.llm.chat([{"role": "user", "content": ap}])
+                    msg = summary.strip()
+                else:
+                    msg = "Could not find results for: " + query
 
-            await self.memory.store_task_result(user_request, "web_search", data.get("success", False), msg[:100])
-            return JarvisResponse(success=data.get("success", False), message=msg, latency_ms=(_tws.time()-_sws)*1000)
-
-        # Research shortcut — deep multi-step research
-        research_keywords = ["research", "deep dive", "find out everything about", "give me a detailed report on", "analyse", "investigate"]
-        if any(kw in req_lower for kw in research_keywords) and not already_handled:
-            import time as _trs
-            _srs = _trs.time()
-
-            # Extract topic
-            topic = user_request
-            for phrase in ["research", "deep dive into", "give me a detailed report on", "analyse", "investigate"]:
-                if phrase in req_lower:
-                    idx = req_lower.index(phrase) + len(phrase)
-                    topic = user_request[idx:].strip()
-                    break
-
-            # Multi-step: search 3 different angles
-            searches = [
-                topic,
-                f"{topic} explained",
-                f"{topic} latest developments",
-            ]
-
-            all_results = []
-            for q in searches:
-                data = await self.websearch.search(q, max_results=3)
-                if data.get("success"):
-                    for r in data.get("results", []):
-                        if r not in all_results:
-                            all_results.append(r)
-
-            if all_results:
-                parts2 = []
-                for r in all_results[:9]:
-                    parts2.append("- " + r.get("title","") + ": " + r.get("snippet",""))
-                combined = chr(10).join(parts2)
-                prompt2 = chr(10).join(["Topic: " + topic, "", "Sources:", combined])
-                report = await self.summariser.summarise(prompt2, max_words=250, style="bullet_points")
-                msg = "Research summary on " + str(topic) + ": " + report
-
-            else:
-                msg = "Could not find enough information about: " + str(topic)
-            await self.memory.store_task_result(user_request, "research", True, msg[:100])
-            return JarvisResponse(success=True, message=msg, latency_ms=(_trs.time()-_srs)*1000)
-        # ── Extended Mac Control shortcuts ────────────────────────────────────
-        import re as _remac
-
-        # Quit app
-        quit_match = _remac.search(r'(?:quit|close|exit|kill)\s+([a-zA-Z][a-zA-Z0-9\s]+?)(?:\s+(?:please|now|app))?$', user_request, _remac.IGNORECASE)
-        if quit_match and any(kw in req_lower for kw in ["quit", "close", "exit", "kill"]):
-            import time as _tq
-            _sq = _tq.time()
+            await self.memory.store_task_result(user_request, "web_search", True, msg[:100])
+            return JarvisResponse(success=True, message=msg, latency_ms=(_tws.time()-_sws)*1000)
             app_aliases_q = {
                 "chrome": "Google Chrome", "safari": "Safari",
                 "spotify": "Spotify", "vscode": "Visual Studio Code",
