@@ -13,6 +13,8 @@ import asyncio
 import json
 from pathlib import Path
 
+import aiohttp
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 import json as _json
@@ -39,9 +41,17 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from orchestrator import JarvisOrchestrator
+from agents.finex_agent import FinExAgent
+from tools.reminders import ReminderScheduler
 
 # ── App setup ──────────────────────────────────────────────────────────────
 app = FastAPI(title="J.A.R.V.I.S", version="1.0.0")
+
+
+@app.on_event("startup")
+async def startup():
+    scheduler = ReminderScheduler(jarvis.reminders)
+    scheduler.start()
 
 app.add_middleware(
     CORSMiddleware,
@@ -53,6 +63,7 @@ app.add_middleware(
 
 # Shared orchestrator instance
 jarvis = JarvisOrchestrator()
+finex  = FinExAgent()
 
 UI_DIR = Path(__file__).parent / "ui"
 
@@ -247,6 +258,178 @@ async def upload_document(file: "UploadFile"):
         return SafeJSONResponse({"success": True, "filename": file.filename, "path": tmp_path})
     except Exception as e:
         return SafeJSONResponse({"success": False, "error": str(e)})
+
+
+# ── FinEx Financial Statement Endpoints ───────────────────────────────────────
+
+class FinExChatRequest(BaseModel):
+    question: str
+    company: str = "Bestway Cement"
+    history: list = []
+
+
+@app.post("/finex/chat")
+async def finex_chat(req: FinExChatRequest):
+    """Financial statement Q&A — powered by the FinEx engine (6 reasoning levels)."""
+    result = await finex.chat(req.question, req.company, req.history)
+    return SafeJSONResponse(result)
+
+
+@app.post("/finex/upload")
+async def finex_upload(file: "UploadFile", company: str = "Bestway Cement"):
+    """Upload a PDF financial statement, extract data, and store in Postgres."""
+    from fastapi import UploadFile
+    import tempfile, os
+    try:
+        content = await file.read()
+        suffix = os.path.splitext(file.filename)[1]
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(content)
+            tmp_path = tmp.name
+        result = await finex.upload_pdf(tmp_path, company)
+        return SafeJSONResponse(result)
+    except Exception as e:
+        return SafeJSONResponse({"success": False, "error": str(e)})
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
+
+@app.get("/finex/companies")
+async def finex_companies():
+    """List all companies and periods stored in the FinEx database."""
+    result = await finex.list_companies()
+    return SafeJSONResponse(result)
+
+
+# Market symbol groups for the FinEx financial dashboard
+_INDICES = {
+    "^GSPC":  "S&P 500",
+    "^FTSE":  "FTSE 100",
+    "^DJI":   "Dow Jones",
+    "^IXIC":  "Nasdaq",
+    "^N225":  "Nikkei 225",
+}
+_CRYPTO = {
+    "BTC-USD": "Bitcoin",
+    "ETH-USD": "Ethereum",
+    "BNB-USD": "BNB",
+    "XRP-USD": "XRP",
+    "SOL-USD": "Solana",
+}
+_COMMODITIES = {
+    "GLD":      "Gold ETF",
+    "USO":      "Oil ETF",
+    "GBPUSD=X": "GBP/USD",
+    "EURUSD=X": "EUR/USD",
+    "JPYUSD=X": "JPY/USD",
+}
+_TECH = {
+    "AAPL":  "Apple",
+    "NVDA":  "NVIDIA",
+    "MSFT":  "Microsoft",
+    "GOOGL": "Alphabet",
+    "META":  "Meta",
+}
+_FINANCE_STOCKS = {
+    "JPM": "JPMorgan",
+    "GS":  "Goldman Sachs",
+    "BAC": "Bank of America",
+    "V":   "Visa",
+    "MA":  "Mastercard",
+}
+_ENERGY_HEALTH = {
+    "XOM": "Exxon Mobil",
+    "CVX": "Chevron",
+    "JNJ": "Johnson & Johnson",
+    "PFE": "Pfizer",
+    "UNH": "UnitedHealth",
+}
+
+# Finance-specific RSS feeds for the FinEx news panel
+_FINANCE_FEEDS = {
+    "reuters_biz":  ("Reuters Business",  "https://feeds.reuters.com/reuters/businessNews"),
+    "cnbc":         ("CNBC",              "https://www.cnbc.com/id/100003114/device/rss/rss.html"),
+    "yahoo_fin":    ("Yahoo Finance",     "https://finance.yahoo.com/news/rssindex"),
+    "marketwatch":  ("MarketWatch",       "https://feeds.marketwatch.com/marketwatch/topstories"),
+    "ft":           ("Financial Times",   "https://www.ft.com/rss/home"),
+    "investopedia": ("Investopedia",      "https://www.investopedia.com/feeds/news.xml"),
+}
+
+
+async def _fetch_finance_news() -> dict:
+    """Fetch headlines from finance-specific RSS feeds."""
+    import xml.etree.ElementTree as ET
+    TIMEOUT = aiohttp.ClientTimeout(total=8)
+    HEADERS = {"User-Agent": "Jarvis/1.0 Python/aiohttp"}
+    stories = []
+
+    async def _one(key, name, url):
+        try:
+            async with aiohttp.ClientSession(timeout=TIMEOUT, headers=HEADERS) as s:
+                async with s.get(url) as r:
+                    if r.status != 200:
+                        return []
+                    text = await r.text()
+            root = ET.fromstring(text)
+            ns = {"atom": "http://www.w3.org/2005/Atom"}
+            items = root.findall(".//item") or root.findall(".//atom:entry", ns)
+            out = []
+            for item in items[:6]:
+                title = (item.findtext("title") or item.findtext("atom:title", namespaces=ns) or "").strip()
+                desc  = (item.findtext("description") or item.findtext("atom:summary", namespaces=ns) or "").strip()
+                link  = (item.findtext("link") or item.findtext("atom:link", namespaces=ns) or "").strip()
+                if title:
+                    out.append({"title": title, "description": desc[:200], "source": name, "url": link})
+            return out
+        except Exception:
+            return []
+
+    tasks = [_one(k, n, u) for k, (n, u) in _FINANCE_FEEDS.items()]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    for r in results:
+        if isinstance(r, list):
+            stories.extend(r)
+    return {"success": True, "stories": stories[:30]}
+
+
+@app.get("/finex/sidebar")
+async def finex_sidebar():
+    """
+    All financial widget data for the FinEx dashboard — fetched in parallel.
+    Returns: indices, crypto, commodities, tech stocks, finance stocks,
+             energy/health stocks, financial news, and company list.
+    """
+    async def safe(coro):
+        try:
+            return await coro
+        except Exception:
+            return {"success": False, "prices": []}
+
+    (indices, crypto, commodities, tech, fin_stocks, energy_health,
+     fin_news, companies) = await asyncio.gather(
+        safe(jarvis.markets.get_all(_INDICES)),
+        safe(jarvis.markets.get_all(_CRYPTO)),
+        safe(jarvis.markets.get_all(_COMMODITIES)),
+        safe(jarvis.markets.get_all(_TECH)),
+        safe(jarvis.markets.get_all(_FINANCE_STOCKS)),
+        safe(jarvis.markets.get_all(_ENERGY_HEALTH)),
+        safe(_fetch_finance_news()),
+        safe(finex.list_companies()),
+    )
+
+    return SafeJSONResponse({
+        "indices":       indices,
+        "crypto":        crypto,
+        "commodities":   commodities,
+        "tech":          tech,
+        "fin_stocks":    fin_stocks,
+        "energy_health": energy_health,
+        "fin_news":      fin_news,
+        "companies":     companies,
+    })
 
 
 @app.websocket("/ws")

@@ -1,0 +1,185 @@
+"""
+FinEx Agent — Financial Statement Expert Sub-Agent
+Wraps the HBL Financial Analysis chatbot (finex/) as an async agent
+integrated into the Jarvis FastAPI server.
+
+The underlying engine (LLM_SQL.py) uses synchronous subprocess Ollama calls,
+so every call is dispatched to a thread executor to keep the event loop free.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
+from typing import Any, Dict, List, Optional
+
+# Thread pool — FinEx LLM calls are blocking subprocess calls
+_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="finex")
+
+
+def _import_engine():
+    """Lazy import so missing psycopg2 doesn't break Jarvis startup."""
+    from finex.LLM_SQL import answer, store_pdf_text, invalidate_cache, LEVEL_LABELS
+    return answer, store_pdf_text, invalidate_cache, LEVEL_LABELS
+
+
+def _import_db():
+    from finex.db_query import run_query, get_all_years
+    from finex.db_insert import insert_financials
+    return run_query, get_all_years, insert_financials
+
+
+def _import_extract():
+    from finex.extract_pdf import extract_text_only, extract_financials_intelligent
+    return extract_text_only, extract_financials_intelligent
+
+
+class FinExAgent:
+    """
+    Async wrapper around the FinEx financial statement Q&A engine.
+
+    Capabilities:
+    - Upload a PDF financial statement → extract + store in Postgres
+    - Ask questions at 6 levels of sophistication (L1 retrieval → L6 strategic)
+    - List available companies and periods
+    """
+
+    def __init__(self):
+        self._ready = False
+        self._error: Optional[str] = None
+        try:
+            _import_engine()
+            self._ready = True
+            print("💹 FinExAgent ready — financial statement Q&A enabled")
+        except ImportError as exc:
+            self._error = str(exc)
+            print(f"💹 FinExAgent unavailable: {exc} (run: pip install psycopg2-binary)")
+
+    # ── Public async API ────────────────────────────────────────────────────
+
+    async def chat(
+        self,
+        question: str,
+        company: str = "Bestway Cement",
+        history: Optional[List[Dict[str, str]]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Answer a financial question about a company.
+
+        Returns dict with keys: answer, level, level_label, question
+        """
+        if not self._ready:
+            return {
+                "answer": f"FinEx is not available: {self._error}",
+                "level": 0,
+                "level_label": "Error",
+                "question": question,
+            }
+
+        # Build history string from last 6 messages
+        history_str = ""
+        if history:
+            for msg in history[-6:]:
+                role = "User" if msg.get("role") == "user" else "Analyst"
+                history_str += f"{role}: {msg.get('content', '')}\n\n"
+
+        loop = asyncio.get_event_loop()
+        answer_fn, _, _, LEVEL_LABELS = _import_engine()
+
+        def _run():
+            resp, level, label = answer_fn(question, company, history_str)
+            return resp, level, label
+
+        resp_text, level, label = await loop.run_in_executor(_executor, _run)
+
+        return {
+            "answer": resp_text,
+            "level": level,
+            "level_label": label,
+            "question": question,
+        }
+
+    async def upload_pdf(
+        self, pdf_path: str, company: str = "Bestway Cement"
+    ) -> Dict[str, Any]:
+        """
+        Extract financials from a PDF and store in the database.
+        Returns extraction summary including validation results.
+        """
+        if not self._ready:
+            return {"success": False, "error": self._error}
+
+        import re
+        loop = asyncio.get_event_loop()
+        _, extract_fn = _import_extract()
+        _, _, insert_fn = _import_db()
+        _, store_pdf_text, invalidate_cache, _ = _import_engine()
+
+        def _run():
+            result = extract_fn(pdf_path)
+            current = result["current"]
+            prior = result["prior"]
+            meta = result["metadata"]
+            raw_text = result["raw_text"]
+
+            if not current:
+                return {"success": False, "error": "No financial data could be extracted"}
+
+            store_pdf_text(company, raw_text)
+            invalidate_cache(company)
+
+            period_str = meta.get("period_current") or "31 December 2025"
+            year_match = re.search(r"\d{4}", period_str)
+            year = int(year_match.group()) if year_match else 2025
+            period_label = f"H1 FY{year}"
+
+            insert_fn(current, company=company, year=year, period=period_label)
+
+            prior_inserted = False
+            if prior:
+                prior_str = meta.get("period_prior") or str(year - 1)
+                pm = re.search(r"\d{4}", prior_str)
+                prior_year = int(pm.group()) if pm else year - 1
+                insert_fn(prior, company=company, year=prior_year, period=f"H1 FY{prior_year}")
+                prior_inserted = True
+
+            validation = meta.get("validation", {})
+            return {
+                "success": True,
+                "company": company,
+                "period": period_label,
+                "fields_extracted": len(current),
+                "prior_year_extracted": prior_inserted,
+                "validation": {
+                    "checks_passed": len(validation.get("passed", [])),
+                    "checks_failed": len(validation.get("failed", [])),
+                    "warnings": validation.get("warnings", []),
+                },
+            }
+
+        return await loop.run_in_executor(_executor, _run)
+
+    async def list_companies(self) -> Dict[str, Any]:
+        """Return all companies and periods stored in the database."""
+        if not self._ready:
+            return {"success": False, "companies": [], "error": self._error}
+
+        loop = asyncio.get_event_loop()
+        run_query, _, _ = _import_db()
+
+        def _run():
+            result = run_query(
+                "SELECT DISTINCT company, year, period FROM financials ORDER BY company, year DESC"
+            )
+            if "error" in result:
+                return {"success": False, "companies": [], "error": result["error"]}
+            return {
+                "success": True,
+                "companies": [
+                    {"company": r[0], "year": r[1], "period": r[2]}
+                    for r in result["rows"]
+                ],
+            }
+
+        return await loop.run_in_executor(_executor, _run)

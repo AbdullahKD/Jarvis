@@ -10,6 +10,7 @@ from typing import List
 
 from config.llm_client import OllamaClient
 from config.models import AgentRole, RouterDecision
+from config.settings import OLLAMA_ROUTER_MODEL
 
 
 # All intents the router recognises
@@ -110,7 +111,7 @@ class RouterAgent:
         ]
 
         try:
-            data = await self.llm.chat_json(messages, max_tokens=80)
+            data = await self.llm.chat_json(messages, model=OLLAMA_ROUTER_MODEL, max_tokens=80)
         except Exception as exc:
             # Graceful fallback — never crash on routing
             print(f"⚠️  Router LLM error: {exc} — falling back to planner")

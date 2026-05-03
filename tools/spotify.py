@@ -33,6 +33,7 @@ from config.settings import (
     SPOTIFY_CLIENT_SECRET,
     SPOTIFY_REDIRECT_URI,
 )
+from config.llm_client import OllamaClient
 
 TOKEN_URL  = "https://accounts.spotify.com/api/token"
 API_BASE   = "https://api.spotify.com/v1"
@@ -46,7 +47,8 @@ class SpotifyTool:
     Falls back to mock mode if not authenticated.
     """
 
-    def __init__(self):
+    def __init__(self, llm: Optional["OllamaClient"] = None):
+        self._llm = llm
         self._access_token: Optional[str] = None
         self._refresh_token: Optional[str] = None
         self._token_expiry: float = 0.0
@@ -234,8 +236,7 @@ class SpotifyTool:
         natural language. Returns (track, artist) tuple.
         Costs ~1s but massively improves search accuracy.
         """
-        from config.llm_client import OllamaClient
-        _llm = OllamaClient()
+        _llm = self._llm or OllamaClient()
         prompt = (
             f'Extract the song title and artist from this request: "{raw_query}"\n'
             f'Reply with ONLY two lines:\n'

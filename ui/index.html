@@ -242,8 +242,120 @@ body{font-family:var(--sans);background:var(--bg);color:var(--tx);display:flex;f
   <div class="tsub">MULTI-AGENT AI EXECUTIVE ASSISTANT</div>
   <div class="tr">
     <div class="sdot"></div><span class="slbl" id="mdl">llama3.2 · online</span>
+    <button class="tbtn" id="finex-btn" onclick="toggleFinEx()" style="color:#34d399;border-color:rgba(52,211,153,0.35)">💹 Jarvis FinEx</button>
     <button class="tbtn" onclick="toggleTheme()" id="tbt">☀ LIGHT</button>
   </div>
+</div>
+
+<!-- ── FINEX FULL LAYOUT ── (same 4-col grid as JARVIS, finance-world widgets) -->
+<div id="finex-layout" class="layout" style="display:none">
+
+  <!-- LEFT: Indices / Crypto / Commodities -->
+  <div class="left-col">
+    <div class="wgt" style="flex:1;min-height:0">
+      <div class="wh"><span class="wt" style="color:#34d399">Global Indices</span><span class="wb" id="fx-idx-t">Live</span></div>
+      <div class="wbody" style="justify-content:space-evenly" id="fx-indices">
+        <div style="font-size:10px;color:var(--tx3);font-family:var(--mono)">Loading...</div>
+      </div>
+    </div>
+    <div class="wgt" style="flex:1;min-height:0">
+      <div class="wh"><span class="wt" style="color:#34d399">Crypto</span><span class="wb">24h change</span></div>
+      <div class="wbody" style="justify-content:space-evenly" id="fx-crypto">
+        <div style="font-size:10px;color:var(--tx3);font-family:var(--mono)">Loading...</div>
+      </div>
+    </div>
+    <div class="wgt" style="flex:1;min-height:0">
+      <div class="wh"><span class="wt" style="color:#34d399">Commodities & FX</span><span class="wb">Live</span></div>
+      <div class="wbody" style="justify-content:space-evenly" id="fx-commodities">
+        <div style="font-size:10px;color:var(--tx3);font-family:var(--mono)">Loading...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CENTER: FinEx Chat -->
+  <div class="wgt center-col">
+    <div class="chat-hd" style="border-bottom:1px solid rgba(52,211,153,0.2);flex-wrap:wrap;gap:8px">
+      <div class="ch-dot" style="background:#34d399;box-shadow:0 0 10px rgba(52,211,153,0.6),0 0 20px rgba(52,211,153,0.3);animation:none"></div>
+      <span class="ch-lbl" style="color:#34d399;letter-spacing:0.12em">FINEX · FINANCIAL EXPERT</span>
+      <div style="margin-left:auto;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <select id="finex-company" style="font-family:var(--mono);font-size:9px;background:rgba(12,6,30,0.8);border:1px solid rgba(52,211,153,0.2);border-radius:5px;color:rgba(52,211,153,0.75);padding:3px 8px;outline:none;cursor:pointer">
+          <option value="Bestway Cement">Bestway Cement</option>
+        </select>
+        <label style="font-family:var(--mono);font-size:9px;color:rgba(52,211,153,0.6);cursor:pointer;border:1px solid rgba(52,211,153,0.2);border-radius:5px;padding:3px 9px">
+          ↑ PDF<input type="file" accept=".pdf" style="display:none" onchange="finexUpload(this)">
+        </label>
+        <span id="finex-upload-status" style="font-family:var(--mono);font-size:9px;color:rgba(52,211,153,0.5)"></span>
+      </div>
+    </div>
+    <!-- status indicators — finance themed -->
+    <div class="status-bar">
+      <div class="status-indicators">
+        <div class="si"><span class="si-dot" style="background:#34d399;box-shadow:0 0 6px #34d399"></span><span class="si-lbl">FinEx Engine</span></div>
+        <div class="si"><span class="si-dot" style="background:#34d399;box-shadow:0 0 6px #34d399"></span><span class="si-lbl">L1–L6 Analysis</span></div>
+        <div class="si"><span class="si-dot" style="background:#34d399;box-shadow:0 0 6px #34d399"></span><span class="si-lbl">Live Markets</span></div>
+        <div class="si"><span class="si-dot" style="background:#34d399;box-shadow:0 0 6px #34d399"></span><span class="si-lbl">PDF Extract</span></div>
+      </div>
+      <div class="quick-actions">
+        <div class="qa-btn" onclick="finexCmd('What is the latest revenue figure?')" style="color:#34d399;border-color:rgba(52,211,153,0.3)">Revenue</div>
+        <div class="qa-btn" onclick="finexCmd('Calculate the gross profit margin')" style="color:#34d399;border-color:rgba(52,211,153,0.3)">Margins</div>
+        <div class="qa-btn" onclick="finexCmd('Compare profit year over year')" style="color:#34d399;border-color:rgba(52,211,153,0.3)">YoY Compare</div>
+        <div class="qa-btn" onclick="finexCmd('Is this company attractive to investors?')" style="color:#34d399;border-color:rgba(52,211,153,0.3)">Investor View</div>
+        <div class="qa-btn" onclick="finexCmd('What are the key financial risks?')" style="color:#34d399;border-color:rgba(52,211,153,0.3)">Risk Analysis</div>
+        <div class="qa-btn" onclick="finexCmd('Summarise the overall financial health')" style="color:#34d399;border-color:rgba(52,211,153,0.3)">Health Summary</div>
+      </div>
+    </div>
+    <div id="finex-msgs" class="msgs">
+      <div class="msg j">
+        <div class="mmeta" style="color:rgba(52,211,153,0.45)"><span class="mdot"></span>FINEX · READY</div>
+        <div class="bubble" style="background:rgba(52,211,153,0.06);border-color:rgba(52,211,153,0.18)">
+          Welcome to FinEx — your AI financial statement analyst.<br>
+          Upload a PDF report above, then ask me anything.<br><br>
+          I analyse at 6 levels: basic retrieval, YoY comparisons, ratio analysis, analytical reasoning, investor insight, and strategic outlook.
+        </div>
+      </div>
+    </div>
+    <div class="ibar" style="border-top:1px solid rgba(52,211,153,0.15)">
+      <textarea id="finex-inp" class="inp" placeholder="Ask about revenue, margins, EPS, ratios, investor outlook..." onkeydown="finexKey(event)"></textarea>
+      <button class="sbtn" onclick="finexSend()" style="background:linear-gradient(135deg,rgba(5,46,22,0.9),rgba(52,211,153,0.55));box-shadow:0 0 20px rgba(52,211,153,0.2)">➤</button>
+    </div>
+  </div>
+
+  <!-- RIGHT 1: Sector stocks -->
+  <div class="right-col">
+    <div class="wgt" style="flex:1;min-height:0">
+      <div class="wh"><span class="wt" style="color:#34d399">Technology</span><span class="wb">AAPL NVDA MSFT GOOGL META</span></div>
+      <div class="wbody" style="justify-content:space-evenly" id="fx-tech">
+        <div style="font-size:10px;color:var(--tx3);font-family:var(--mono)">Loading...</div>
+      </div>
+    </div>
+    <div class="wgt" style="flex:1;min-height:0">
+      <div class="wh"><span class="wt" style="color:#34d399">Financials</span><span class="wb">JPM GS BAC V MA</span></div>
+      <div class="wbody" style="justify-content:space-evenly" id="fx-fin-stocks">
+        <div style="font-size:10px;color:var(--tx3);font-family:var(--mono)">Loading...</div>
+      </div>
+    </div>
+    <div class="wgt" style="flex:1;min-height:0">
+      <div class="wh"><span class="wt" style="color:#34d399">Energy & Health</span><span class="wb">XOM CVX JNJ PFE UNH</span></div>
+      <div class="wbody" style="justify-content:space-evenly" id="fx-energy">
+        <div style="font-size:10px;color:var(--tx3);font-family:var(--mono)">Loading...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT 2: Financial news + companies DB -->
+  <div class="right-col">
+    <div class="wgt" style="flex:2;min-height:0">
+      <div class="wh"><span class="wt" style="color:#34d399">Financial News</span><span class="wb">Reuters · CNBC · FT · MW</span></div>
+      <div class="news-list" id="fx-news"><div style="font-size:10px;color:var(--tx3);font-family:var(--mono);padding:8px 14px">Loading...</div></div>
+    </div>
+    <div class="wgt" style="flex:1;min-height:0">
+      <div class="wh"><span class="wt" style="color:#34d399">Companies DB</span><span class="wb">uploaded reports</span></div>
+      <div class="wbody" style="overflow-y:auto" id="fx-companies-list">
+        <div style="font-size:10px;color:var(--tx3);font-family:var(--mono)">No reports uploaded yet</div>
+      </div>
+    </div>
+  </div>
+
 </div>
 
 <div class="layout">
@@ -371,19 +483,18 @@ body{font-family:var(--sans);background:var(--bg);color:var(--tx);display:flex;f
       <div class="wh"><span class="wt">Today's Calendar</span><span class="wb" id="cal-cnt">—</span></div>
       <div class="wbody" style="overflow-y:auto"><div id="callist"><div style="font-size:10px;color:var(--tx3);font-family:var(--mono)">Loading...</div></div></div>
     </div>
+    <!-- FinEx mini news -->
     <div class="wgt" style="flex:1;min-height:0">
-      <div class="wh"><span class="wt">Documents</span><span class="wb">PDF · DOCX · TXT</span></div>
-      <div class="wbody" style="gap:8px">
-        <div class="drop-zone" onclick="document.getElementById('file-inp').click()" ondragover="event.preventDefault();this.style.borderColor='var(--ac)'" ondragleave="this.style.borderColor='rgba(124,58,237,0.3)'" ondrop="handleDrop(event)">
-          <div style="font-size:24px">📄</div>
-          <div style="font-size:10px;color:var(--tx3);font-family:var(--mono);text-align:center">Drop or click to upload</div>
-          <div style="font-size:9px;color:var(--tx3);font-family:var(--mono)">PDF · DOCX · TXT</div>
-        </div>
-        <input type="file" id="file-inp" accept=".pdf,.docx,.txt" style="display:none" onchange="handleFile(this.files[0])">
-        <div id="doc-status" style="font-size:10px;color:var(--tx3);font-family:var(--mono);display:none"></div>
-        <div style="display:flex;gap:4px">
-          <div class="spb" style="flex:1" onclick="cmd('summarise the uploaded document')">summarise</div>
-          <div class="spb" style="flex:1" onclick="cmd('key points in document')">key points</div>
+      <div class="wh"><span class="wt" style="color:var(--gn)">Jarvis FinEx</span><span class="wb">Markets & Finance</span></div>
+      <div class="news-list" id="finex-mini-news"><div style="font-size:10px;color:var(--tx3);font-family:var(--mono);padding:8px">Loading...</div></div>
+    </div>
+    <!-- FinEx portal button -->
+    <div class="wgt" style="flex:0 0 90px;cursor:pointer;border-color:rgba(52,211,153,0.25);transition:all 0.25s" onclick="if(!finexActive)toggleFinEx()" onmouseenter="this.style.borderColor='var(--gn)';this.style.boxShadow='0 0 24px rgba(52,211,153,0.2)'" onmouseleave="this.style.borderColor='rgba(52,211,153,0.25)';this.style.boxShadow=''">
+      <div style="flex:1;display:flex;flex-direction:row;align-items:center;justify-content:center;gap:10px;padding:12px 16px">
+        <div style="font-size:22px">💹</div>
+        <div>
+          <div style="font-family:var(--mono);font-size:11px;font-weight:700;letter-spacing:0.15em;color:var(--gn)">Jarvis FinEx</div>
+          <div style="font-size:8px;color:var(--tx3);font-family:var(--mono);letter-spacing:0.08em;margin-top:2px">Financial Intelligence</div>
         </div>
       </div>
     </div>
@@ -909,6 +1020,7 @@ async function loadSidebar(){
   }catch(e){}
 }
 loadSidebar();setInterval(loadSidebar,60000);
+loadFinExMiniNews();setInterval(loadFinExMiniNews,300000); // refresh every 5 min
 
 async function handleFile(file){
   if(!file)return;const status=document.getElementById('doc-status');
@@ -920,6 +1032,17 @@ async function handleFile(file){
   }catch(e){status.textContent='Could not upload';status.style.color='var(--rd)'}
 }
 function handleDrop(e){e.preventDefault();document.querySelector('.drop-zone').style.borderColor='rgba(124,58,237,0.3)';const file=e.dataTransfer.files[0];if(file)handleFile(file)}
+function handleFinExDrop(e){
+  e.preventDefault();
+  e.currentTarget.style.borderColor='rgba(52,211,153,0.3)';
+  const file=e.dataTransfer.files[0];
+  if(!file)return;
+  if(!finexActive)toggleFinEx();
+  // create a fake input element to reuse finexUpload
+  const dt=new DataTransfer();dt.items.add(file);
+  const inp=document.getElementById('file-inp');inp.files=dt.files;
+  finexUpload(inp);
+}
 
 function svm(m){vmode=m;['tap','hold','hey'].forEach(x=>document.getElementById('v'+x).classList.toggle('active',x===m))}
 function handleMic(){
@@ -930,6 +1053,202 @@ function handleMic(){
   recog.onresult=e=>{document.getElementById('inp').value=e.results[0][0].transcript;send()};
   recog.onend=()=>{listening=false;document.getElementById('mic').classList.remove('on')};
   recog.start();listening=true;document.getElementById('mic').classList.add('on');
+}
+
+// ── FINEX ──
+let finexHistory=[], finexTyping=false, finexActive=false, finexNewsExp={}, finexNewsStories=[];
+
+// ── Toggle between JARVIS and FinEx layouts ──
+function toggleFinEx(){
+  finexActive=!finexActive;
+  const main=document.querySelector('.layout');
+  const fx=document.getElementById('finex-layout');
+  const btn=document.getElementById('finex-btn');
+  const logo=document.querySelector('.logo');
+  const sub=document.querySelector('.tsub');
+  if(finexActive){
+    main.style.display='none';
+    fx.style.display='grid';
+    btn.style.background='rgba(52,211,153,0.15)';
+    btn.style.boxShadow='0 0 12px rgba(52,211,153,0.25)';
+    btn.textContent='✕ JARVIS';
+    if(logo)logo.textContent='Jarvis FinEx';
+    if(sub)sub.textContent='FINANCIAL STATEMENT EXPERT · LIVE MARKETS';
+    loadFinExSidebar();
+  } else {
+    main.style.display='grid';
+    fx.style.display='none';
+    btn.style.background='';
+    btn.style.boxShadow='';
+    btn.textContent='💹 Jarvis FinEx';
+    if(logo)logo.textContent='J.A.R.V.I.S';
+    if(sub)sub.textContent='MULTI-AGENT AI EXECUTIVE ASSISTANT';
+  }
+}
+
+// ── Render a market price row (reuses JARVIS .mkt-row CSS) ──
+function fxMktRow(sym, name, price, chgPct){
+  const up=chgPct>=0;
+  const cls=up?'up':'dn';
+  const arrow=up?'▲':'▼';
+  const priceStr=price>1000?`$${price.toLocaleString('en',{maximumFractionDigits:0})}`:price>100?`$${price.toFixed(2)}`:`$${price.toFixed(4)}`;
+  const symShort=sym.replace('-USD','').replace('=X','').replace('^','').slice(0,5);
+  return`<div class="mkt-row">
+    <span class="mkt-sym" style="background:linear-gradient(135deg,#6ee7b7,#34d399);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text">${symShort}</span>
+    <span class="mkt-nm">${name.slice(0,12)}</span>
+    <span class="mkt-p">${priceStr}</span>
+    <span class="mkt-c ${cls}">${arrow} ${Math.abs(chgPct).toFixed(2)}%</span>
+  </div>`;
+}
+
+function fxRenderMarkets(data, elId){
+  const el=document.getElementById(elId);if(!el)return;
+  const prices=data&&data.prices||[];
+  if(!prices.length){el.innerHTML='<div style="font-size:10px;color:var(--tx3);font-family:var(--mono)">Unavailable</div>';return;}
+  el.innerHTML=prices.map(p=>fxMktRow(p.symbol,p.name,p.price,p.change_pct)).join('');
+}
+
+// ── Financial news renderer ──
+function fxRenderNews(stories){
+  const el=document.getElementById('fx-news');if(!el)return;
+  finexNewsStories=stories||[];
+  if(!finexNewsStories.length){el.innerHTML='<div style="font-size:10px;color:var(--tx3);font-family:var(--mono);padding:8px 14px">No news available</div>';return;}
+  el.innerHTML=finexNewsStories.slice(0,18).map((s,i)=>`
+    <div class="ni" onclick="fxToggleNews(${i})" style="border-bottom:1px solid rgba(52,211,153,0.07)">
+      <div class="ni-title">${s.title||''}</div>
+      <div class="ni-src"><span class="ni-dot" style="background:#34d399;box-shadow:0 0 4px #34d399"></span>${s.source||''}</div>
+      ${finexNewsExp[i]&&s.description?`<div class="ni-exp" style="border-left-color:#34d399">${s.description.slice(0,220)}</div>`:''}
+    </div>`).join('');
+  fxRenderMiniNews(finexNewsStories);
+}
+function fxRenderMiniNews(stories){
+  const el=document.getElementById('finex-mini-news');if(!el)return;
+  if(!stories||!stories.length){el.innerHTML='<div style="font-size:10px;color:var(--tx3);font-family:var(--mono);padding:8px">No news</div>';return;}
+  el.innerHTML=stories.slice(0,5).map(s=>`
+    <div class="ni" style="border-bottom:1px solid rgba(52,211,153,0.07)">
+      <div class="ni-title">${s.title||''}</div>
+      <div class="ni-src"><span class="ni-dot" style="background:#34d399;box-shadow:0 0 4px #34d399"></span>${s.source||''}</div>
+    </div>`).join('');
+}
+function fxToggleNews(i){finexNewsExp[i]=!finexNewsExp[i];fxRenderNews(finexNewsStories);}
+
+// ── Companies DB widget ──
+function fxRenderCompanies(companies){
+  const el=document.getElementById('fx-companies-list');if(!el)return;
+  const sel=document.getElementById('finex-company');
+  if(!companies||!companies.length){
+    el.innerHTML='<div style="font-size:10px;color:var(--tx3);font-family:var(--mono)">No reports uploaded yet</div>';
+    return;
+  }
+  // Update dropdown
+  const existing=new Set(Array.from(sel.options).map(o=>o.value));
+  companies.forEach(c=>{
+    if(!existing.has(c.company)){
+      const o=document.createElement('option');o.value=c.company;
+      o.textContent=`${c.company} (${c.period||c.year})`;sel.appendChild(o);
+    }
+  });
+  // Render list
+  el.innerHTML=companies.map(c=>`
+    <div style="padding:5px 0;border-bottom:1px solid rgba(52,211,153,0.08);cursor:pointer" onclick="document.getElementById('finex-company').value='${c.company.replace(/'/g,"\\'")}';finexCmd('Summarise the latest financial data for ${c.company.replace(/'/g,"\\'")}')">
+      <div style="font-size:10.5px;color:var(--tx)">${c.company}</div>
+      <div style="font-size:8.5px;color:rgba(52,211,153,0.55);font-family:var(--mono);margin-top:2px">${c.period||'FY '+c.year}</div>
+    </div>`).join('');
+}
+
+// ── Load mini news on JARVIS page load ──
+async function loadFinExMiniNews(){
+  try{
+    const r=await fetch(`${API}/finex/sidebar`);
+    const d=await r.json();
+    if(d.fin_news&&d.fin_news.stories) fxRenderMiniNews(d.fin_news.stories);
+  }catch(e){console.warn('FinEx mini-news error:',e);}
+}
+
+// ── Load all FinEx sidebar data ──
+async function loadFinExSidebar(){
+  try{
+    const r=await fetch(`${API}/finex/sidebar`);
+    const d=await r.json();
+    if(d.indices)   fxRenderMarkets(d.indices,   'fx-indices');
+    if(d.crypto)    fxRenderMarkets(d.crypto,     'fx-crypto');
+    if(d.commodities)fxRenderMarkets(d.commodities,'fx-commodities');
+    if(d.tech)      fxRenderMarkets(d.tech,       'fx-tech');
+    if(d.fin_stocks)fxRenderMarkets(d.fin_stocks, 'fx-fin-stocks');
+    if(d.energy_health)fxRenderMarkets(d.energy_health,'fx-energy');
+    if(d.fin_news&&d.fin_news.stories) fxRenderNews(d.fin_news.stories);
+    if(d.companies&&d.companies.companies) fxRenderCompanies(d.companies.companies);
+    document.getElementById('fx-idx-t').textContent=new Date().toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+  }catch(e){console.error('FinEx sidebar error:',e);}
+}
+
+function finexCmd(c){document.getElementById('finex-inp').value=c;finexSend();}
+
+function finexAddMsg(role, text, level_label){
+  const msgs=document.getElementById('finex-msgs');
+  const d=document.createElement('div');
+  const isUser=role==='user';
+  const n=new Date(),p=v=>String(v).padStart(2,'0'),t=`${p(n.getHours())}:${p(n.getMinutes())}`;
+  const badge=level_label?`<span style="font-family:var(--mono);font-size:8px;background:rgba(52,211,153,0.12);border:1px solid rgba(52,211,153,0.25);border-radius:4px;padding:1px 7px;color:rgba(52,211,153,0.7);margin-left:6px">${level_label}</span>`:'';
+  d.style.cssText=`align-self:${isUser?'flex-end;align-items:flex-end':'flex-start'};display:flex;flex-direction:column;gap:3px;max-width:78%;animation:fu 0.3s cubic-bezier(0.34,1.56,0.64,1)`;
+  d.innerHTML=`<div style="font-size:8px;letter-spacing:0.1em;font-family:var(--mono);color:${isUser?'rgba(255,255,255,0.3)':'rgba(52,211,153,0.45)'};display:flex;align-items:center;gap:4px">${isUser?'YOU':'FINEX'} · ${t}${badge}</div>
+    <div style="padding:11px 16px;font-size:12.5px;line-height:1.75;border-radius:12px;${isUser?'background:rgba(109,40,217,0.22);border:1px solid rgba(167,139,250,0.25);border-bottom-right-radius:3px':'background:rgba(52,211,153,0.06);border:1px solid rgba(52,211,153,0.18);border-bottom-left-radius:3px'};color:rgba(255,255,255,0.9);word-break:break-word">${fmt(text)}</div>`;
+  msgs.appendChild(d);msgs.scrollTop=msgs.scrollHeight;
+}
+
+function finexShowTyping(){
+  if(finexTyping)return;finexTyping=true;
+  const msgs=document.getElementById('finex-msgs');
+  const w=document.createElement('div');w.id='finex-tw';
+  w.style.cssText='align-self:flex-start';
+  w.innerHTML='<div class="typing" style="border-color:rgba(52,211,153,0.2)"><div class="td" style="background:rgba(52,211,153,0.8)"></div><div class="td" style="background:rgba(52,211,153,0.8)"></div><div class="td" style="background:rgba(52,211,153,0.8)"></div></div>';
+  msgs.appendChild(w);msgs.scrollTop=msgs.scrollHeight;
+}
+
+function finexHideTyping(){
+  finexTyping=false;const tw=document.getElementById('finex-tw');if(tw)tw.remove();
+}
+
+async function finexSend(){
+  const el=document.getElementById('finex-inp');
+  const txt=el.value.trim();if(!txt)return;
+  el.value='';el.style.height='36px';
+  finexAddMsg('user',txt);
+  finexHistory.push({role:'user',content:txt});
+  finexShowTyping();
+  const company=document.getElementById('finex-company').value;
+  try{
+    const r=await fetch(`${API}/finex/chat`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:txt,company,history:finexHistory.slice(-8)})});
+    const d=await r.json();
+    finexHideTyping();
+    const ans=d.answer||d.error||'No response';
+    finexHistory.push({role:'assistant',content:ans});
+    finexAddMsg('finex',ans,d.level_label);
+  }catch(e){finexHideTyping();finexAddMsg('finex','Connection error. Is the server running?');}
+}
+
+function finexKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();finexSend()}}
+
+async function finexUpload(input){
+  const file=input.files[0];if(!file)return;
+  const status=document.getElementById('finex-upload-status');
+  const company=document.getElementById('finex-company').value;
+  status.textContent='Extracting...';status.style.color='rgba(251,191,36,0.8)';
+  try{
+    const fd=new FormData();fd.append('file',file);fd.append('company',company);
+    const r=await fetch(`${API}/finex/upload?company=${encodeURIComponent(company)}`,{method:'POST',body:fd});
+    const d=await r.json();
+    if(d.success){
+      status.textContent=`✓ ${d.fields_extracted} fields extracted`;
+      status.style.color='rgba(52,211,153,0.8)';
+      finexAddMsg('finex',`PDF processed: ${d.company} ${d.period}\n${d.fields_extracted} financial fields extracted. ${d.prior_year_extracted?'Prior year data included.':''}\nValidation: ${d.validation?.checks_passed||0} checks passed.${d.validation?.checks_failed>0?' ⚠ '+d.validation.checks_failed+' checks failed.':''}\n\nYou can now ask me about the financial statements.`);
+      loadFinExCompanies();
+    } else {
+      status.textContent='Extraction failed';status.style.color='rgba(248,113,113,0.8)';
+      finexAddMsg('finex',`Upload failed: ${d.error||'Unknown error'}`);
+    }
+  }catch(e){status.textContent='Error';status.style.color='rgba(248,113,113,0.8)';}
+  input.value='';
 }
 </script>
 </body>

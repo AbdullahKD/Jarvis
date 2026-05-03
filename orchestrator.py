@@ -45,6 +45,7 @@ from tools.spotify import SpotifyTool
 from tools.weather import WeatherTool
 from tools.web_search import WebSearchTool
 from tools.file_manager import FileManagerTool, PendingFileOp
+from tools.reminders import ReminderStore
 
 MAX_REPLAN_ATTEMPTS = 2
 
@@ -91,13 +92,14 @@ class JarvisOrchestrator:
         self.websearch  = WebSearchTool()
         self.news       = NewsTool()
         self.mac        = MacControlTool()
-        self.spotify    = SpotifyTool()
+        self.spotify    = SpotifyTool(llm=self.llm)
         self.document   = DocumentTool()
         self.sports     = SportsTool()
         self.markets    = MarketsTool()
         self.prayer     = PrayerTimesTool()
         self.briefing   = BriefingHandler()
         self.files      = FileManagerTool()
+        self.reminders  = ReminderStore()
 
         print(f"\n🤖 Jarvis Orchestrator ready — model: {model}")
         print(f"   Agents: Router, Memory, Planner, Critic, Evaluator, Summariser, Calendar, Gmail")
@@ -464,6 +466,30 @@ class JarvisOrchestrator:
                         max_results=params.get("max_results", 5),
                     )
                     return result
+
+            # ── Reminders ───────────────────────────────────────────────────
+            elif agent == "reminder":
+                if action == "add_reminder":
+                    rid = self.reminders.add(
+                        title=params.get("title", "Reminder"),
+                        body=params.get("body", ""),
+                        due_at=params.get("due_at"),
+                        recurring_minutes=params.get("recurring_minutes"),
+                        offset_minutes=params.get("offset_minutes"),
+                    )
+                    due = params.get("due_at") or f"in {params.get('offset_minutes', 5)} minutes"
+                    return {"success": True, "id": rid,
+                            "message": f"Reminder set: '{params.get('title', 'Reminder')}' — {due}"}
+                elif action == "list_reminders":
+                    pending = self.reminders.list_pending()
+                    return {"success": True, "result": pending,
+                            "message": self.reminders.format_list(pending)}
+                elif action == "complete_reminder":
+                    ok = self.reminders.complete(params.get("id", ""))
+                    return {"success": ok, "message": "Reminder marked complete." if ok else "Reminder not found."}
+                elif action == "delete_reminder":
+                    ok = self.reminders.delete(params.get("id", ""))
+                    return {"success": ok, "message": "Reminder deleted." if ok else "Reminder not found."}
 
             # ── Fallback ────────────────────────────────────────────────────
             else:
