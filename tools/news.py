@@ -125,10 +125,11 @@ class NewsTool:
         # Topic filter
         if topic:
             topic_lower = topic.lower()
+            topic_words = [w for w in topic_lower.split() if len(w) > 3]
             filtered = [
                 a for a in all_articles
-                if topic_lower in a.get("title", "").lower()
-                or topic_lower in a.get("description", "").lower()
+                if any(w in a.get("title", "").lower() or w in a.get("description", "").lower()
+                       for w in topic_words)
             ]
             all_articles = filtered if filtered else all_articles
 
@@ -296,9 +297,13 @@ class NewsTool:
         if source and source in FEEDS:
             return [source]
         if category == "general":
-            # Mix of UK and international outlets
             return ["bbc", "guardian", "reuters", "sky", "independent",
                     "bbc_world", "aljazeera", "metro"]
+        if category == "technology":
+            # Only genuine tech/AI sources — no generic aggregators
+            return ["techcrunch", "theverge", "wired", "arstechnica", "mit_tech"]
+        if category == "sports":
+            return ["bbc_sport", "skysports", "espn", "guardian_sport"]
         if category:
             return [k for k, (_, _, cat) in FEEDS.items() if cat == category]
         # Default: broad mix of different outlets and perspectives
@@ -323,6 +328,20 @@ class NewsTool:
         except Exception:
             return None
 
+    # Patterns that indicate promotional/deal/junk articles (not real news)
+    _JUNK_PATTERNS = re.compile(
+        r'\b(promo\s*code|discount|deal|off\s+\||% off|coupon|voucher|'
+        r'referral|best buy|review roundup|gift guide|black friday|'
+        r'cyber monday|prime day|sale ends|limited time|sign up|'
+        r'subscription|free trial|sponsored|affiliate)\b',
+        re.IGNORECASE,
+    )
+
+    def _is_junk(self, title: str, description: str) -> bool:
+        """Return True if this article looks like a promo/deal/sponsored piece."""
+        combined = f"{title} {description}"
+        return bool(self._JUNK_PATTERNS.search(combined))
+
     def _parse_rss(self, xml_text: str) -> List[Dict]:
         """Parse RSS XML into structured article dicts."""
         articles = []
@@ -341,7 +360,7 @@ class NewsTool:
                     except Exception:
                         desc = re.sub(r"<[^>]+>", "", desc)
 
-                if title and len(title) > 10:
+                if title and len(title) > 10 and not self._is_junk(title, desc):
                     articles.append({
                         "title": title,
                         "description": desc[:300],

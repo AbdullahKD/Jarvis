@@ -44,6 +44,7 @@ from tools.news import NewsTool
 from tools.spotify import SpotifyTool
 from tools.weather import WeatherTool
 from tools.web_search import WebSearchTool
+from tools.file_manager import FileManagerTool, PendingFileOp
 
 MAX_REPLAN_ATTEMPTS = 2
 
@@ -83,6 +84,7 @@ class JarvisOrchestrator:
         # Pending confirmation states
         self._pending_email: EmailDraft | None = None
         self._pending_meeting: dict | None = None
+        self._pending_file_op: PendingFileOp | None = None
 
         # Tool instances
         self.weather    = WeatherTool()
@@ -95,10 +97,11 @@ class JarvisOrchestrator:
         self.markets    = MarketsTool()
         self.prayer     = PrayerTimesTool()
         self.briefing   = BriefingHandler()
+        self.files      = FileManagerTool()
 
         print(f"\n🤖 Jarvis Orchestrator ready — model: {model}")
         print(f"   Agents: Router, Memory, Planner, Critic, Evaluator, Summariser, Calendar, Gmail")
-        print(f"   Tools:  Weather, WebSearch, News, Mac, Spotify, Document\n")
+        print(f"   Tools:  Weather, WebSearch, News, Mac, Spotify, Document, FileManager\n")
 
     # ── Main entry point ───────────────────────────────────────────────────
 
@@ -134,11 +137,11 @@ class JarvisOrchestrator:
         }
 
         try:
-            # ── Step 1: Route ──────────────────────────────────────────────
-            routing = await self.router.route(user_request)
-
-            # ── Step 2: Memory retrieval ───────────────────────────────────
-            memories = await self.memory.retrieve(user_request)
+            # ── Steps 1+2: Route + Memory in PARALLEL ─────────────────────
+            routing, memories = await asyncio.gather(
+                self.router.route(user_request),
+                self.memory.retrieve(user_request),
+            )
             print(f"🧠 Retrieved {len(memories)} relevant memories")
 
             # ── Step 2.5: Short-circuit for simple deterministic tools ───
@@ -151,46 +154,55 @@ class JarvisOrchestrator:
                 user_request, ctx, memories, model_override=model
             )
 
-            # ── Step 4: Critic reviews plan (with replan loop) ────────────
-            plan_verdict = await self.critic.review_plan(plan)
-            planning_score = plan_verdict.score
+            # ── Step 4: Critic — only for complex/low-confidence queries ──
+            # Skip critic for high-confidence single-agent tasks to save 6-10s
+            _needs_critic = (
+                routing.confidence < 0.82 or
+                len(plan.subtasks) > 2 or
+                any(a in routing.primary_agent.value for a in ["planner", "research"])
+            )
+            planning_score = 0.8  # default when skipped
 
-            replan_attempts = 0
-            while plan_verdict.replan_needed and replan_attempts < MAX_REPLAN_ATTEMPTS:
-                replan_attempts += 1
-                print(f"🔄 Replanning (attempt {replan_attempts})...")
-
-                # Inject critic feedback into context
-                feedback_ctx = {
-                    **ctx,
-                    "critic_feedback": "; ".join(plan_verdict.issues),
-                    "critic_suggestions": "; ".join(plan_verdict.suggestions),
-                }
-                plan = await self.planner.plan(
-                    user_request, feedback_ctx, memories, model_override=model
-                )
-                plan.replan_count = replan_attempts
+            if _needs_critic:
                 plan_verdict = await self.critic.review_plan(plan)
-                planning_score = max(planning_score, plan_verdict.score)
+                planning_score = plan_verdict.score
+                replan_attempts = 0
+                while plan_verdict.replan_needed and replan_attempts < MAX_REPLAN_ATTEMPTS:
+                    replan_attempts += 1
+                    print(f"🔄 Replanning (attempt {replan_attempts})...")
+                    feedback_ctx = {
+                        **ctx,
+                        "critic_feedback": "; ".join(plan_verdict.issues),
+                        "critic_suggestions": "; ".join(plan_verdict.suggestions),
+                    }
+                    plan = await self.planner.plan(
+                        user_request, feedback_ctx, memories, model_override=model
+                    )
+                    plan.replan_count = replan_attempts
+                    plan_verdict = await self.critic.review_plan(plan)
+                    planning_score = max(planning_score, plan_verdict.score)
+            else:
+                print(f"⚡ Critic skipped — high confidence ({routing.confidence:.2f}), single-agent task")
 
             # ── Step 5: Execute subtasks ───────────────────────────────────
             results = await self._execute_dag(plan, routing.primary_agent)
 
-            # ── Step 6: Critic reviews results ────────────────────────────
-            result_verdict = await self.critic.review_result(plan, results)
+            # ── Step 6: Critic reviews results — only when needed ─────────
+            if _needs_critic:
+                result_verdict = await self.critic.review_result(plan, results)
 
             # ── Step 7: Evaluate ───────────────────────────────────────────
             evaluation = self.evaluator.evaluate(
                 plan, results, start_time, planning_score=planning_score
             )
 
-            # ── Step 8: Store episodic memory ──────────────────────────────
-            await self.memory.store_task_result(
+            # ── Step 8: Store episodic memory (non-blocking fire-and-forget)
+            asyncio.ensure_future(self.memory.store_task_result(
                 user_request=user_request,
                 intent=plan.intent,
                 success=evaluation.success,
                 summary=evaluation.feedback,
-            )
+            ))
 
             # ── Build response ─────────────────────────────────────────────
             message = self._build_response_message(
@@ -649,9 +661,9 @@ class JarvisOrchestrator:
                     data = await self.weather.get_current()
 
             msg = self.weather.format_forecast(data) if is_forecast else self.weather.format_current(data)
-            await self.memory.store_task_result(
+            asyncio.ensure_future(self.memory.store_task_result(
                 user_request, "get_weather", data.get("success", False), msg[:100]
-            )
+            ))
             print(f"Jarvis shortcut: weather — {(_time.time()-start)*1000:.0f}ms")
             return JarvisResponse(
                 success=data.get("success", False),
@@ -675,9 +687,29 @@ class JarvisOrchestrator:
                 max_items=6,
             )
             msg = self.news.format_headlines(data, detailed=detailed)
-            await self.memory.store_task_result(user_request, "get_news", True, msg[:100])
+            asyncio.ensure_future(self.memory.store_task_result(user_request, "get_news", True, msg[:100]))
             print(f"Jarvis shortcut: news — {(_t.time()-_s)*1000:.0f}ms")
             return JarvisResponse(success=True, message=msg, latency_ms=(_t.time()-_s)*1000)
+
+        # ── Early Spotify intercept — catches "play X" BEFORE sports routing ──
+        _early_play = (
+            req_lower.startswith("play ") and
+            not any(kw in req_lower for kw in ["play premier", "play match", "play game",
+                                                "play the game", "play the match"])
+        )
+        if _early_play:
+            import time as _tep
+            _sep = _tep.time()
+            _query_ep = re.sub(r'^play\s+', '', user_request, flags=re.IGNORECASE).strip()
+            _query_ep = re.sub(r'\s+on spotify$', '', _query_ep, flags=re.IGNORECASE).strip()
+            if _query_ep and _query_ep.lower() not in ("music", "something", "anything", "spotify"):
+                result = await self.spotify.play_by_name(_query_ep)
+                msg = self.spotify.format_play_result(result)
+            else:
+                result = await self.spotify.play()
+                msg = "Resumed playback." if result.get("success") else result.get("error", "Could not resume.")
+            return JarvisResponse(success=result.get("success", False), message=msg,
+                                  latency_ms=(_tep.time()-_sep)*1000)
 
         # ── Sports shortcuts ──────────────────────────────────────────────────
         sports_keywords = [
@@ -686,7 +718,7 @@ class JarvisOrchestrator:
             "bundesliga", "nfl", "nba", "nhl", "mlb", "f1", "formula 1",
             "football scores", "football results", "basketball scores",
             "sports results", "match results", "game scores", "football score",
-            "who won", "beat", "vs", "final score", "match score",
+            "who won", "vs", "final score", "match score",
         ]
         # ── Calendar pre-check — must come before sports to avoid "call" collision ──
         _has_meeting = any(w in req_lower for w in ["meeting", "appointment", "event", "session"])
@@ -723,12 +755,46 @@ class JarvisOrchestrator:
         team_mentioned = any(t in req_lower for t in team_sports)
 
         sports_context = any(kw in req_lower for kw in sports_keywords)
-        if (sports_context or team_mentioned) and not ((_has_meeting and _has_schedule) or _explicit_cal):
+        # Exclude clear music/Spotify requests from sports routing
+        _is_music_req = (
+            req_lower.startswith("play ") or
+            any(kw in req_lower for kw in ["play song", "play track", "play music", "by michael", "by drake",
+                                            "by the weeknd", "by kanye", "by taylor", "by eminem",
+                                            "on spotify", "spotify", "pause music", "skip track"])
+        )
+        if (sports_context or team_mentioned) and not ((_has_meeting and _has_schedule) or _explicit_cal) and not _is_music_req:
             import time as _tsp
             _ssp = _tsp.time()
 
-            # Detect league
+            # Team → league mapping (used when detect_league returns nothing)
+            _team_league_map = {
+                # La Liga
+                "real madrid": "la_liga", "barcelona": "la_liga", "atletico": "la_liga",
+                "sevilla": "la_liga", "villarreal": "la_liga", "real sociedad": "la_liga",
+                # Serie A
+                "juventus": "serie_a", "inter": "serie_a", "ac milan": "serie_a",
+                "napoli": "serie_a", "roma": "serie_a", "lazio": "serie_a",
+                # Bundesliga
+                "bayern": "bundesliga", "dortmund": "bundesliga", "leverkusen": "bundesliga",
+                "leipzig": "bundesliga",
+                # Ligue 1
+                "psg": "ligue_1", "paris saint": "ligue_1", "marseille": "ligue_1",
+                # NBA
+                "lakers": "nba", "celtics": "nba", "warriors": "nba", "bulls": "nba",
+                "heat": "nba", "nets": "nba", "knicks": "nba", "clippers": "nba",
+                "suns": "nba", "bucks": "nba", "nuggets": "nba", "76ers": "nba",
+                # Cricket
+                "pakistan": "cricket", "india": "cricket", "west indies": "cricket",
+                # Premier League teams stay as default
+            }
+
+            # Detect league from request, then from team name
             league_key = self.sports.detect_league(user_request)
+            if not league_key:
+                for team_kw, mapped_league in _team_league_map.items():
+                    if team_kw in req_lower:
+                        league_key = mapped_league
+                        break
 
             # If team mentioned, search for that team
             if team_mentioned and not any(kw in req_lower for kw in ["table", "standings"]):
@@ -752,7 +818,7 @@ class JarvisOrchestrator:
                 data = await self.sports.get_scores(league_key)
                 msg = self.sports.format_scores(data)
 
-            await self.memory.store_task_result(user_request, "sports", True, msg[:100])
+            asyncio.ensure_future(self.memory.store_task_result(user_request, "sports", True, msg[:100]))
             return JarvisResponse(success=True, message=msg, latency_ms=(_tsp.time()-_ssp)*1000)
 
         # News digest — all categories
@@ -777,9 +843,9 @@ class JarvisOrchestrator:
         if primary_agent == AgentRole.NEWS:
             data = await self.news.get_headlines(max_items=5)
             msg = self.news.format_headlines(data)
-            await self.memory.store_task_result(
+            asyncio.ensure_future(self.memory.store_task_result(
                 user_request, "get_news", True, msg[:100]
-            )
+            ))
             return JarvisResponse(
                 success=True,
                 message=msg,
@@ -793,7 +859,7 @@ class JarvisOrchestrator:
             _s2 = _t2.time()
             result = await self.gmail.get_inbox(max_results=5)
             msg = result.get("message", "Could not read inbox.")
-            await self.memory.store_task_result(user_request, "read_email", True, msg[:100])
+            asyncio.ensure_future(self.memory.store_task_result(user_request, "read_email", True, msg[:100]))
             return JarvisResponse(success=True, message=msg, latency_ms=(_t2.time()-_s2)*1000)
 
         # Email shortcut — confirmation check first
@@ -809,7 +875,10 @@ class JarvisOrchestrator:
                 body=draft.body,
             )
             msg = result.get("message", f"Email sent to {draft.recipient_email}")
-            await self.memory.store_task_result(user_request, "send_email", result.get("success", False), msg[:100])
+            # Auto-save contact after successful send
+            if result.get("success") and draft.recipient_email and draft.recipient_name:
+                self.contacts.add(draft.recipient_name, draft.recipient_email)
+            asyncio.ensure_future(self.memory.store_task_result(user_request, "send_email", result.get("success", False), msg[:100]))
             return JarvisResponse(success=result.get("success", False), message=msg, latency_ms=(_tc.time()-_sc)*1000)
 
         # Cancel pending email
@@ -830,6 +899,9 @@ class JarvisOrchestrator:
             _seer = _teer.time()
             self._pending_email.recipient_email = _email_m.group(0)
             self._pending_email.needs_email = False
+            # Auto-save this new contact so we remember them next time
+            if self._pending_email.recipient_name and self._pending_email.recipient_email:
+                self.contacts.add(self._pending_email.recipient_name, self._pending_email.recipient_email)
             msg = self.composer.format_draft_for_confirmation(self._pending_email)
             return JarvisResponse(success=True, message=msg, latency_ms=(_teer.time()-_seer)*1000)
 
@@ -863,6 +935,164 @@ class JarvisOrchestrator:
                 if msg:
                     return JarvisResponse(success=True, message=msg, latency_ms=(_tmq.time()-_smq)*1000)
 
+        # ── File Manager — confirmation flow ──────────────────────────────────
+        import time as _tfile
+        _sfile = _tfile.time()
+
+        # Handle pending file operation confirmation
+        if self._pending_file_op:
+            _low = req_lower.strip()
+            if _low in ("confirm", "yes", "do it", "go ahead", "proceed", "ok"):
+                op = self._pending_file_op
+                self._pending_file_op = None
+                if op.operation == "delete":
+                    result = self.files.execute_delete(op)
+                elif op.operation == "move":
+                    result = self.files.execute_move(op)
+                elif op.operation == "rename":
+                    result = self.files.execute_rename(op)
+                else:
+                    result = {"success": False, "error": "Unknown operation"}
+                msg = result.get("message", "Done.") if result.get("success") else f"Failed: {result.get('error')}"
+                return JarvisResponse(success=result.get("success", False), message=msg,
+                                      latency_ms=(_tfile.time()-_sfile)*1000)
+            elif _low in ("cancel", "no", "stop", "abort", "nevermind", "never mind"):
+                self._pending_file_op = None
+                return JarvisResponse(success=True, message="Cancelled.",
+                                      latency_ms=(_tfile.time()-_sfile)*1000)
+
+        # Detect file intent keywords
+        _file_kw = [
+            "folder", "directory", "file", "files", "desktop", "documents", "downloads",
+            "create folder", "make folder", "new folder", "create file", "new file",
+            "delete file", "delete folder", "remove file", "remove folder",
+            "rename", "move to", "find file", "search file", "list files",
+            "show files", "browse", "what's on my desktop", "whats on my desktop",
+            "what's on my documents", "whats on my documents",
+            "show me what's on", "show me whats on", "show me my files",
+            "what files", "what do i have on my", "list my files",
+        ]
+        _is_file_request = any(kw in req_lower for kw in _file_kw)
+
+        if _is_file_request:
+            parsed = self.files.parse_request(user_request)
+            action = parsed.get("action")
+            loc = parsed.get("location", "desktop")
+            path = parsed.get("path")
+            name = parsed.get("name")
+            dest = parsed.get("destination")
+
+            # ── List directory ──────────────────────────────────────────────
+            if action == "list" or (not action and any(w in req_lower for w in ["list", "show", "browse", "what's on", "whats on"])):
+                target = loc  # always use the location key ('desktop','documents','downloads','all')
+                data = self.files.list_directory(target)
+                msg = self.files.format_listing(data)
+                return JarvisResponse(success=data.get("success", False), message=msg,
+                                      latency_ms=(_tfile.time()-_sfile)*1000)
+
+            # ── Search ──────────────────────────────────────────────────────
+            elif action == "search" and path:
+                data = self.files.search(path, location=loc)
+                msg = self.files.format_search(data)
+                return JarvisResponse(success=True, message=msg,
+                                      latency_ms=(_tfile.time()-_sfile)*1000)
+
+            # ── Read file ───────────────────────────────────────────────────
+            elif action == "read" and path:
+                data = self.files.read_file(path)
+                if data.get("success"):
+                    content = data.get("content", "")
+                    trunc = "\n\n[File truncated at 50KB]" if data.get("truncated") else ""
+                    # Let LLM summarise if large
+                    if len(content) > 2000:
+                        prompt = (
+                            f"The user wants to read this file: {data['name']}\n\n"
+                            f"Content:\n{content[:4000]}\n\n"
+                            f"Give a brief summary of what this file contains, then show the first ~30 lines."
+                        )
+                        summary = await self.llm.chat([{"role": "user", "content": prompt}])
+                        msg = summary.strip() + trunc
+                    else:
+                        msg = f"{data['display_path']}:\n\n{content}{trunc}"
+                else:
+                    msg = data.get("error", "Could not read file.")
+                return JarvisResponse(success=data.get("success", False), message=msg,
+                                      latency_ms=(_tfile.time()-_sfile)*1000)
+
+            # ── Create folder ───────────────────────────────────────────────
+            elif action == "create_folder" and name:
+                # Build full path using detected location
+                from pathlib import Path as _P
+                from tools.file_manager import ALLOWED_ROOTS as _ROOTS
+                target_root = _ROOTS.get(loc, _ROOTS["desktop"])
+                full_path = str(target_root / name)
+                data = self.files.create_folder(full_path)
+                msg = data.get("message", data.get("error", "Could not create folder."))
+                return JarvisResponse(success=data.get("success", False), message=msg,
+                                      latency_ms=(_tfile.time()-_sfile)*1000)
+
+            # ── Create file ─────────────────────────────────────────────────
+            elif action == "create_file" and name:
+                from pathlib import Path as _P
+                from tools.file_manager import ALLOWED_ROOTS as _ROOTS
+                target_root = _ROOTS.get(loc, _ROOTS["desktop"])
+                full_path = str(target_root / name)
+                data = self.files.create_file(full_path)
+                msg = data.get("message", data.get("error", "Could not create file."))
+                return JarvisResponse(success=data.get("success", False), message=msg,
+                                      latency_ms=(_tfile.time()-_sfile)*1000)
+
+            # ── Delete — requires approval ───────────────────────────────────
+            elif action == "delete" and path:
+                from tools.file_manager import ALLOWED_ROOTS as _ROOTS
+                # Try direct resolve first, then search by name in detected location
+                op = self.files.prepare_delete(path)
+                if isinstance(op, dict):
+                    # Not found directly — search by name in detected root
+                    search_root = _ROOTS.get(loc, None)
+                    found_path = None
+                    search_roots = [search_root] if search_root else list(_ROOTS.values())
+                    for root in search_roots:
+                        for candidate in root.rglob("*"):
+                            if candidate.name.lower() == path.lower() or \
+                               candidate.name.lower().replace(" ", "") == path.lower().replace(" ", ""):
+                                found_path = candidate
+                                break
+                        if found_path:
+                            break
+                    if found_path:
+                        op = self.files.prepare_delete(str(found_path))
+                    else:
+                        return JarvisResponse(success=False,
+                            message=f"Could not find \"{path}\" on your {loc}. Try: find {path}",
+                            latency_ms=(_tfile.time()-_sfile)*1000)
+                if isinstance(op, dict):
+                    return JarvisResponse(success=False, message=op.get("error", "Could not prepare delete."),
+                                          latency_ms=(_tfile.time()-_sfile)*1000)
+                self._pending_file_op = op
+                return JarvisResponse(success=True, message=op.summary(),
+                                      latency_ms=(_tfile.time()-_sfile)*1000)
+
+            # ── Rename — requires approval ───────────────────────────────────
+            elif action == "rename" and path and name:
+                op = self.files.prepare_rename(path, name)
+                if isinstance(op, dict):
+                    return JarvisResponse(success=False, message=op.get("error", "Could not prepare rename."),
+                                          latency_ms=(_tfile.time()-_sfile)*1000)
+                self._pending_file_op = op
+                return JarvisResponse(success=True, message=op.summary(),
+                                      latency_ms=(_tfile.time()-_sfile)*1000)
+
+            # ── Move — requires approval ─────────────────────────────────────
+            elif action == "move" and path and dest:
+                op = self.files.prepare_move(path, dest)
+                if isinstance(op, dict):
+                    return JarvisResponse(success=False, message=op.get("error", "Could not prepare move."),
+                                          latency_ms=(_tfile.time()-_sfile)*1000)
+                self._pending_file_op = op
+                return JarvisResponse(success=True, message=op.summary(),
+                                      latency_ms=(_tfile.time()-_sfile)*1000)
+
         # Pending email — user replied with just an email address
         import re as _re2
         email_only_match = _re2.search(r'^\s*[\w._%+\-]+@[\w.\-]+\.[a-zA-Z]{2,}\s*$', user_request)
@@ -880,7 +1110,15 @@ class JarvisOrchestrator:
         if any(kw in req_lower for kw in send_keywords):
             import time as _ts
             _ss = _ts.time()
-            draft = await self.composer.compose(user_request, self.contacts)
+
+            # Inject context so LLM writes on behalf of Abdullah, not as itself
+            _jarvis_context = (
+                "Write this email on behalf of Abdullah. "
+                "Do NOT make up facts not stated in the request — only use information explicitly given. "
+                "Write professionally in first person as Abdullah.\n\n"
+                f"Email request: {user_request}"
+            )
+            draft = await self.composer.compose(_jarvis_context, self.contacts)
 
             # Level 3: Contact not found — ask for email
             if draft.needs_email:
@@ -918,6 +1156,124 @@ class JarvisOrchestrator:
         if any(kw in req_lower for kw in ["my contacts", "list contacts", "show contacts"]):
             return JarvisResponse(success=True, message=self.contacts.format_list())
 
+        # ── Spotify shortcuts ──────────────────────────────────────────────────
+        import time as _tsp2
+        _ssp2 = _tsp2.time()
+
+        _spotify_kw = [
+            "play", "pause", "skip", "next song", "previous song", "last song",
+            "spotify", "music", "song", "track", "artist", "playlist",
+            "volume up", "volume down", "shuffle", "repeat",
+            "what's playing", "whats playing", "now playing", "currently playing",
+            "queue", "add to queue",
+        ]
+        _is_spotify = any(kw in req_lower for kw in _spotify_kw)
+
+        # Avoid collision with mac volume/open app shortcuts
+        _is_mac_vol = bool(re.search(r'(?:set\s+)?(?:volume|vol)\s+(?:to\s+)?\d+', req_lower))
+        _is_open    = req_lower.startswith("open ") or req_lower.startswith("launch ")
+
+        if _is_spotify and not _is_mac_vol and not _is_open:
+
+            # Now playing
+            if any(kw in req_lower for kw in ["what's playing", "whats playing", "now playing", "currently playing", "what song"]):
+                data = await self.spotify.get_now_playing()
+                msg = self.spotify.format_now_playing(data)
+                return JarvisResponse(success=data.get("success", False), message=msg,
+                                      latency_ms=(_tsp2.time()-_ssp2)*1000)
+
+            # Pause
+            if any(kw in req_lower for kw in ["pause", "stop music", "stop playing", "stop spotify"]):
+                result = await self.spotify.pause()
+                msg = "Paused." if result.get("success") else result.get("error", "Could not pause.")
+                return JarvisResponse(success=result.get("success", False), message=msg,
+                                      latency_ms=(_tsp2.time()-_ssp2)*1000)
+
+            # Skip / next
+            if any(kw in req_lower for kw in ["skip", "next song", "next track", "next please"]):
+                result = await self.spotify.skip()
+                msg = "Skipped to next track." if result.get("success") else result.get("error", "Could not skip.")
+                return JarvisResponse(success=result.get("success", False), message=msg,
+                                      latency_ms=(_tsp2.time()-_ssp2)*1000)
+
+            # Previous
+            if any(kw in req_lower for kw in ["previous", "last song", "go back", "prev track"]):
+                result = await self.spotify.previous()
+                msg = "Going back to previous track." if result.get("success") else result.get("error", "Could not go back.")
+                return JarvisResponse(success=result.get("success", False), message=msg,
+                                      latency_ms=(_tsp2.time()-_ssp2)*1000)
+
+            # Shuffle
+            if "shuffle" in req_lower:
+                state = "off" not in req_lower
+                result = await self.spotify.shuffle(state)
+                msg = f"Shuffle {'on' if state else 'off'}." if result.get("success") else result.get("error", "Could not set shuffle.")
+                return JarvisResponse(success=result.get("success", False), message=msg,
+                                      latency_ms=(_tsp2.time()-_ssp2)*1000)
+
+            # Repeat
+            if "repeat" in req_lower:
+                if "off" in req_lower:
+                    mode = "off"
+                elif "track" in req_lower or "song" in req_lower:
+                    mode = "track"
+                else:
+                    mode = "context"
+                result = await self.spotify.repeat(mode)
+                msg = f"Repeat set to {mode}." if result.get("success") else result.get("error", "Could not set repeat.")
+                return JarvisResponse(success=result.get("success", False), message=msg,
+                                      latency_ms=(_tsp2.time()-_ssp2)*1000)
+
+            # Spotify volume
+            _spvol = re.search(r'(?:spotify\s+)?volume\s+(?:to\s+)?(\d+)', req_lower)
+            if _spvol:
+                level = int(_spvol.group(1))
+                result = await self.spotify.set_volume(level)
+                msg = f"Spotify volume set to {level}%." if result.get("success") else result.get("error", "Could not set volume.")
+                return JarvisResponse(success=result.get("success", False), message=msg,
+                                      latency_ms=(_tsp2.time()-_ssp2)*1000)
+
+            # My playlists
+            if any(kw in req_lower for kw in ["my playlists", "show playlists", "list playlists"]):
+                data = await self.spotify.get_playlists()
+                if data.get("success"):
+                    plists = data.get("playlists", [])
+                    if plists:
+                        lines = ["Your Spotify playlists:\n"]
+                        for i, p in enumerate(plists, 1):
+                            lines.append(f"{i}. {p['name']} ({p['tracks']} tracks)")
+                        msg = "\n".join(lines)
+                    else:
+                        msg = "No playlists found."
+                else:
+                    msg = data.get("error", "Could not get playlists.")
+                return JarvisResponse(success=data.get("success", False), message=msg,
+                                      latency_ms=(_tsp2.time()-_ssp2)*1000)
+
+            # Play / resume — with or without a song name
+            _play_match = re.search(
+                r'play\s+(?:some\s+)?(?:me\s+)?(?:the\s+)?(?:song\s+|track\s+|artist\s+|playlist\s+)?'
+                r'["\']?(.+?)["\']?\s*(?:on spotify|by .+)?$',
+                user_request, re.IGNORECASE
+            )
+            if "play" in req_lower:
+                if _play_match:
+                    query = _play_match.group(1).strip()
+                    # Strip trailing "on spotify"
+                    query = re.sub(r'\s+on spotify$', '', query, flags=re.IGNORECASE).strip()
+                    if query and query.lower() not in ("spotify", "music", "something", "anything"):
+                        result = await self.spotify.play_by_name(query)
+                        msg = self.spotify.format_play_result(result)
+                    else:
+                        # Resume
+                        result = await self.spotify.play()
+                        msg = "Resumed playback." if result.get("success") else result.get("error", "Could not resume.")
+                else:
+                    # Just "play" or "resume"
+                    result = await self.spotify.play()
+                    msg = "Resumed playback." if result.get("success") else result.get("error", "Could not resume.")
+                return JarvisResponse(success=result.get("success", False), message=msg,
+                                      latency_ms=(_tsp2.time()-_ssp2)*1000)
 
         # Calendar shortcut — check schedule
         cal_read_keywords = ["what's on my calendar", "my schedule", "my meetings", "what do i have", "events today", "events this week"]
@@ -926,7 +1282,7 @@ class JarvisOrchestrator:
             _s3 = _t3.time()
             result = await self.calendar.search_events()
             msg = result.get("message", "No events found.")
-            await self.memory.store_task_result(user_request, "check_calendar", True, msg[:100])
+            asyncio.ensure_future(self.memory.store_task_result(user_request, "check_calendar", True, msg[:100]))
             return JarvisResponse(success=True, message=msg, latency_ms=(_t3.time()-_s3)*1000)
 
         # ── Mac Control shortcuts ──────────────────────────────────────────
@@ -1122,18 +1478,40 @@ class JarvisOrchestrator:
                 query = user_request
 
             msg = "Could not find information about: " + query
+
+            # Detect query complexity for adaptive length
+            _simple_triggers = ["who is", "what is the", "when did", "where is",
+                                 "capital of", "ceo of", "founder of", "born in",
+                                 "how old is", "what year", "who won", "who owns"]
+            _elaborate_triggers = ["elaborate", "explain in detail", "tell me more",
+                                   "comprehensive", "deep dive", "in depth", "full overview",
+                                   "everything about", "give me a full"]
+            _req_low = user_request.lower()
+            is_elaborate = any(t in _req_low for t in _elaborate_triggers)
+            is_simple = (not is_research and not is_elaborate and
+                         any(_req_low.startswith(t) or t in _req_low for t in _simple_triggers))
+
+            if is_simple:
+                length_instruction = "- Answer in 3-5 sentences. Be direct and factual. No lists needed."
+            elif is_elaborate or is_research:
+                length_instruction = "- Give a thorough response of 200-350 words. Cover background, key facts, current state, and significance. Use numbered lists where appropriate."
+            else:
+                length_instruction = "- Aim for 5-10 sentences. Cover the key facts and essential context. Use a numbered list only if there are genuinely multiple distinct items."
+
             if is_research:
-                searches = [query, query + " explained", query + " overview"]
+                # Run all 3 searches IN PARALLEL instead of sequentially
+                search_queries = [query, query + " explained", query + " overview"]
+                search_results = await asyncio.gather(
+                    *[self.websearch.search(q, max_results=3) for q in search_queries],
+                    return_exceptions=True
+                )
                 all_results = []
-                searches = [query, query + " explained", query + " overview", query + " AI"]
-                all_results = []
-                for q in searches[:3]:
-                    data = await self.websearch.search(q, max_results=3)
+                for data in search_results:
+                    if isinstance(data, Exception): continue
                     if data.get("success") and data.get("results"):
                         for r in data.get("results", []):
                             if r not in all_results:
                                 all_results.append(r)
-                # Also try direct Wikipedia for comprehensive coverage
                 if len(all_results) < 3:
                     wiki_data = await self.websearch._wiki(query, 3)
                     if wiki_data.get("success"):
@@ -1141,26 +1519,41 @@ class JarvisOrchestrator:
                             if r not in all_results:
                                 all_results.append(r)
                 if all_results:
-                    snips = [r.get("snippet", "")[:200] for r in all_results[:6]]
+                    snips = [r.get("snippet", "")[:300] for r in all_results[:8]]
                     combined2 = " ".join(snips)
-                    rp = "Summarise what you know about " + query + " using these sources: " + combined2 + ". Use bullet points."
+                    rp = (
+                        f"Answer this question: {query}\n\n"
+                        f"Source material:\n{combined2}\n\n"
+                        f"Instructions:\n"
+                        f"{length_instruction}\n"
+                        f"- Organise logically. Use numbered points (1. 2. 3.) for lists.\n"
+                        f"- Write in clear prose. NO markdown asterisks (*) or hash (#).\n"
+                        f"- You are Jarvis, an AI assistant. Never refer to yourself as the user."
+                    )
                     report = await self.llm.chat([{"role": "user", "content": rp}])
-                    msg = "Here is what I found about " + query + ": " + report.strip()
+                    msg = report.strip()
                 else:
                     msg = "Could not find enough information about: " + query
             else:
                 # Single search
                 data = await self.websearch.search(query, max_results=5)
                 if data.get("success") and data.get("results"):
-                    snips2 = [r.get("snippet", "")[:300] for r in data["results"][:3]]
+                    snips2 = [r.get("snippet", "")[:400] for r in data["results"][:5]]
                     ct = " ".join(snips2)
-                    ap = "Answer this question: " + query + ". Based on: " + ct + ". Be concise and clear."
+                    ap = (
+                        f"Answer this question: {query}\n\n"
+                        f"Source material:\n{ct}\n\n"
+                        f"Instructions:\n"
+                        f"{length_instruction}\n"
+                        f"- Write in natural prose. NO markdown asterisks (*) or hash (#) symbols.\n"
+                        f"- You are Jarvis, an AI assistant. Never refer to yourself as the user."
+                    )
                     summary = await self.llm.chat([{"role": "user", "content": ap}])
                     msg = summary.strip()
                 else:
                     msg = "Could not find results for: " + query
 
-            await self.memory.store_task_result(user_request, "web_search", True, msg[:100])
+            asyncio.ensure_future(self.memory.store_task_result(user_request, "web_search", True, msg[:100]))
             return JarvisResponse(success=True, message=msg, latency_ms=(_tws.time()-_sws)*1000)
             app_aliases_q = {
                 "chrome": "Google Chrome", "safari": "Safari",
@@ -1379,7 +1772,7 @@ class JarvisOrchestrator:
             else:
                 msg = f"Could not create event: {result.get('error', 'unknown error')}"
 
-            await self.memory.store_task_result(user_request, "schedule_meeting", result.get("success", False), msg[:100])
+            asyncio.ensure_future(self.memory.store_task_result(user_request, "schedule_meeting", result.get("success", False), msg[:100]))
             return JarvisResponse(success=result.get("success", False), message=msg, latency_ms=(_tconf.time()-_sconf)*1000)
 
         # Cancel pending meeting

@@ -110,7 +110,7 @@ class RouterAgent:
         ]
 
         try:
-            data = await self.llm.chat_json(messages)
+            data = await self.llm.chat_json(messages, max_tokens=80)
         except Exception as exc:
             # Graceful fallback — never crash on routing
             print(f"⚠️  Router LLM error: {exc} — falling back to planner")
@@ -172,6 +172,11 @@ class RouterAgent:
                                      "dark mode", "battery", "wifi", "clipboard", "quit",
                                      "mute", "lock", "sleep"]):
             primary = AgentRole.MAC
+        elif any(w in req for w in ["folder", "directory", "create folder", "make folder",
+                                     "new folder", "create file", "new file", "delete file",
+                                     "rename", "move file", "find file", "list files",
+                                     "what's on my desktop", "browse files"]):
+            primary = AgentRole.FILE
         elif first_word in ("what", "who", "when", "where", "why", "how", "which",
                             "tell", "explain", "describe", "define", "search",
                             "find", "look", "google", "research", "investigate"):
