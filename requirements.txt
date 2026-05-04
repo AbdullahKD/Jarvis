@@ -39,6 +39,12 @@ websockets>=12.0
 # ── Natural language date parsing ──────────────────────────────────────────
 python-dateutil>=2.8.2
 
+# ── Market data (stocks + crypto, no API key needed) ───────────────────────
+yfinance>=0.2.40
+
+# ── HTTP requests (used by FinEx LLM engine) ────────────────────────────────
+requests>=2.31.0
+
 # ── FinEx financial statement analysis ─────────────────────────────────────
 psycopg2-binary>=2.9.0
 

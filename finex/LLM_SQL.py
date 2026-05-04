@@ -11,23 +11,28 @@ All 8 improvements implemented:
 8. Unit normalization awareness
 """
 
-import subprocess
 import re
+import requests
 from finex.db_query import run_query, get_financial_context, get_all_years, format_result
+from finex.chroma_store import pdf_store
 
 # ── Global stores ──────────────────────────────────────────────────────────────
-_pdf_text_store = {}
 _context_cache  = {}  # Fix 5: cache financial context per company
 
-def store_pdf_text(company: str, text: str):
-    _pdf_text_store[company] = text
-    # Invalidate cache when new data uploaded
+def store_pdf_text(company: str, text: str, filename: str = ""):
+    """Persist PDF text to disk (survives server restarts)."""
+    pdf_store.save(company, filename, text)
+    # Invalidate context cache when new data uploaded
     if company in _context_cache:
         del _context_cache[company]
 
 def get_pdf_text(company: str) -> str:
-    # Fix 6: always look up by exact company key
-    return _pdf_text_store.get(company, "")
+    """Retrieve PDF text from persistent store."""
+    return pdf_store.load(company)
+
+def search_pdf_text(company: str, query: str, n: int = 5):
+    """Semantic search within the company PDF (uses ChromaDB if available)."""
+    return pdf_store.search(company, query, n)
 
 def get_cached_context(company: str) -> str:
     # Fix 5: return cached context, rebuild if stale
@@ -40,17 +45,40 @@ def invalidate_cache(company: str):
         del _context_cache[company]
 
 
-# ── Ollama wrapper ─────────────────────────────────────────────────────────────
+# ── Ollama wrapper (HTTP, not subprocess — saves 3-5s per call) ───────────────
+
+_OLLAMA_URL = "http://localhost:11434/api/chat"
+_FINEX_MODEL = "llama3.2:latest"
+
 
 def ask_llm(prompt: str, system: str = "") -> str:
-    full_prompt = f"{system}\n\n{prompt}" if system else prompt
-    result = subprocess.run(
-        ["ollama", "run", "llama3:8b"],
-        input=full_prompt.encode(),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE
-    )
-    return result.stdout.decode().strip()
+    """
+    Send a prompt to the local Ollama server via HTTP POST.
+    Uses the REST API directly — no subprocess overhead.
+    Falls back gracefully if Ollama is unreachable.
+    """
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+
+    try:
+        resp = requests.post(
+            _OLLAMA_URL,
+            json={
+                "model": _FINEX_MODEL,
+                "messages": messages,
+                "stream": False,
+                "options": {"temperature": 0.1, "num_predict": 512},
+            },
+            timeout=60,
+        )
+        resp.raise_for_status()
+        return resp.json()["message"]["content"].strip()
+    except requests.exceptions.ConnectionError:
+        return "[Ollama is not running. Please start Ollama and try again.]"
+    except Exception as e:
+        return f"[LLM error: {e}]"
 
 
 # ── Fix 2: Hallucination guard ─────────────────────────────────────────────────
@@ -522,16 +550,21 @@ End your response with exactly this line: "Need more detail? Just ask." """
 
 def handle_text(question: str, company: str, history: str = "") -> str:
     # Fix 6: look up PDF text by exact company name
-    pdf_text = get_pdf_text(company)
+    # Use semantic search for relevant chunks if available, else fall back to full text
+    chunks = search_pdf_text(company, question, n=5)
 
-    if not pdf_text:
-        return "The PDF text is not available. Please re-upload the report."
+    if not chunks:
+        # Try full text as last resort
+        pdf_text = get_pdf_text(company)
+        if not pdf_text:
+            return "The PDF text is not available. Please re-upload the report."
+        chunks = [pdf_text[:8000]]
 
-    trimmed = pdf_text[:8000]
+    context = "\n\n---\n\n".join(chunks)
 
     prompt = f"""Report text from {company}'s financial report:
 
-{trimmed}
+{context}
 
 {f"Previous conversation:{chr(10)}{history}{chr(10)}" if history else ""}
 Question: {question}
@@ -546,8 +579,9 @@ End your response with exactly this line: "Need more detail? Just ask." """
 
 def handle_detail(question: str, company: str, history: str = "") -> str:
     context = get_cached_context(company)
-    pdf_text = get_pdf_text(company)
-    text_snippet = pdf_text[:1500] if pdf_text else ""
+    # Use semantic search for the most relevant snippet
+    chunks = search_pdf_text(company, question, n=3)
+    text_snippet = "\n\n".join(chunks)[:2000] if chunks else ""
 
     prompt = f"""Financial data (PKR thousands):
 {context}
@@ -567,8 +601,9 @@ Use numbered points for clarity. Only reference data shown above."""
 
 def handle_l6(question: str, company: str, history: str = "") -> str:
     context = get_cached_context(company)
-    pdf_text = get_pdf_text(company)
-    text_snippet = pdf_text[:4000] if pdf_text else ""
+    # Semantic search for strategic context from PDF
+    chunks = search_pdf_text(company, question, n=4)
+    text_snippet = "\n\n".join(chunks)[:4000] if chunks else ""
 
     prompt = f"""Financial data (PKR thousands):
 {context}

@@ -225,8 +225,16 @@ async def hardware():
     bat_raw = await run("pmset -g batt | grep -Eo '[0-9]+%' | head -1")
     battery = bat_raw.replace('%','') if bat_raw else None
 
-    wifi_raw = await run("networksetup -getairportnetwork en0")
-    wifi = wifi_raw.split(":",1)[-1].strip() if ":" in wifi_raw else "Unknown"
+    # Dynamically detect the Wi-Fi interface (en0 on most Macs, en1 on some)
+    iface_raw = await run("networksetup -listallhardwareports | awk '/Wi-Fi/{getline; print $2}'")
+    wifi_iface = iface_raw.strip() or "en0"
+    wifi_raw = await run(f"networksetup -getairportnetwork {wifi_iface}")
+    if ":" in wifi_raw:
+        wifi_name = wifi_raw.split(":", 1)[-1].strip()
+        wifi = wifi_name if wifi_name else "Not Connected"
+    else:
+        # "You are not associated with an AirPort network." → show disconnect state
+        wifi = "Not Connected"
 
     disk_raw = await run("df -h / | tail -1 | awk '{print $3, $4}'")
     parts = disk_raw.split() if disk_raw else []
@@ -459,16 +467,25 @@ async def websocket_endpoint(websocket: WebSocket):
             if not message:
                 continue
 
-            # Signal typing
+            # Signal typing immediately
             await websocket.send_text(json.dumps({"type": "typing"}))
 
-            # Process with Jarvis — with timeout to detect crashes
+            # ── Stream response via handle_stream() ────────────────────────
             try:
+                last_response = None
+                async def _stream_with_timeout():
+                    async for event in jarvis.handle_stream(message):
+                        yield event
+
+                async def _run():
+                    nonlocal last_response
+                    async for event in _stream_with_timeout():
+                        await websocket.send_text(json.dumps(event))
+                        if event.get("type") == "response":
+                            last_response = event
+
                 try:
-                    response = await asyncio.wait_for(
-                        jarvis.handle(message),
-                        timeout=120.0  # 2 minute max
-                    )
+                    await asyncio.wait_for(_run(), timeout=120.0)
                 except asyncio.TimeoutError:
                     await websocket.send_text(json.dumps({
                         "type": "response",
@@ -477,26 +494,20 @@ async def websocket_endpoint(websocket: WebSocket):
                         "timeout": True,
                     }))
                     continue
-                await websocket.send_text(json.dumps({
-                    "type": "response",
-                    "message": response.message,
-                    "success": response.success,
-                    "latency_ms": response.latency_ms,
-                }))
 
-                # Push updated sidebar data after actions that might change it
+                # Push updated sidebar data after state-changing actions
                 keywords = ["schedule", "email", "spotify", "play", "pause", "volume"]
                 if any(kw in message.lower() for kw in keywords):
                     try:
                         updated = await sidebar()
                         body = json.loads(updated.body)
                         for key, val in body.items():
-                            payload = {"type": key}
+                            spayload = {"type": key}
                             if isinstance(val, dict):
-                                payload.update(val)
+                                spayload.update(val)
                             else:
-                                payload["data"] = val
-                            await websocket.send_text(json.dumps(payload))
+                                spayload["data"] = val
+                            await websocket.send_text(json.dumps(spayload))
                     except Exception:
                         pass
 

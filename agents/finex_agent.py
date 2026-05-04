@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from typing import Any, Dict, List, Optional
 
-# Thread pool — FinEx LLM calls are blocking subprocess calls
+# Thread pool — FinEx LLM calls are blocking (HTTP, but still synchronous)
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="finex")
 
 
@@ -126,7 +126,8 @@ class FinExAgent:
             if not current:
                 return {"success": False, "error": "No financial data could be extracted"}
 
-            store_pdf_text(company, raw_text)
+            import os as _os
+            store_pdf_text(company, raw_text, filename=_os.path.basename(pdf_path))
             invalidate_cache(company)
 
             period_str = meta.get("period_current") or "31 December 2025"

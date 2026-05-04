@@ -112,6 +112,7 @@ class JarvisOrchestrator:
         user_request: str,
         context: Optional[Dict[str, Any]] = None,
         model_override: Optional[str] = None,
+        _routing=None,  # pre-computed RouterDecision — skips router step when provided
     ) -> JarvisResponse:
         """
         Handle a user request end-to-end.
@@ -138,36 +139,109 @@ class JarvisOrchestrator:
             "user_id": "user_001",
         }
 
+        def _t(label: str, t0: float):
+            elapsed = time.time() - t0
+            print(f"[JARVIS] ⏱  {label}: {elapsed:.2f}s")
+            return elapsed
+
         try:
-            # ── Steps 1+2: Route + Memory in PARALLEL ─────────────────────
-            routing, memories = await asyncio.gather(
-                self.router.route(user_request),
-                self.memory.retrieve(user_request),
-            )
+            # ── Step 1: Route ──────────────────────────────────────────────
+            if _routing is not None:
+                routing = _routing
+                print(f"🔀 Router skipped — reusing pre-computed routing ({routing.primary_agent.value}, tier {routing.tier})")
+            else:
+                t0 = time.time()
+                routing = await self.router.route(user_request)
+                _t("router", t0)
+            tier = routing.tier
+
+            # ── Tier 1: tool-only — skip memory, run shortcut, return fast ─
+            if tier == 1:
+                t0 = time.time()
+                shortcut = await self._try_shortcut(routing.primary_agent, user_request)
+                _t("tool_shortcut", t0)
+                if shortcut is not None:
+                    print(f"[JARVIS] ⚡ Tier 1 complete — total: {time.time()-start_time:.2f}s")
+                    return shortcut
+
+            # ── Step 2: Memory retrieval (Tier 2 + 3 only) ────────────────
+            t0 = time.time()
+            memories = await self.memory.retrieve(user_request)
+            _t("memory_retrieve", t0)
             print(f"🧠 Retrieved {len(memories)} relevant memories")
 
-            # ── Step 2.5: Short-circuit for simple deterministic tools ───
+            # ── Tier 1 fallback: shortcut missed, treat as Tier 2 ─────────
+            if tier == 1:
+                t0 = time.time()
+                shortcut = await self._try_shortcut(routing.primary_agent, user_request)
+                _t("tool_shortcut_fallback", t0)
+                if shortcut is not None:
+                    return shortcut
+                tier = 2  # escalate
+
+            # ── Tier 2: single LLM call, skip Planner/Critic/Evaluator ────
+            if tier == 2:
+                t0 = time.time()
+                context_str = ""
+                agent = routing.primary_agent
+                if agent == AgentRole.WEBSEARCH:
+                    data = await self.websearch.search(user_request)
+                    context_str = self.websearch.format_results(data)
+                    _t("websearch_tool", t0)
+                elif agent == AgentRole.NEWS:
+                    data = await self.news.get_headlines(query=user_request, max_items=5)
+                    context_str = self.news.format_headlines(data)
+                    _t("news_tool", t0)
+
+                user_content = (
+                    f"Context:\n{context_str}\n\nUser: {user_request}"
+                    if context_str else user_request
+                )
+                msgs = [{"role": "user", "content": user_content}]
+
+                t0 = time.time()
+                llm_response = await self.llm.chat(msgs, max_tokens=200)
+                _t("llm_single_call", t0)
+
+                total_ms = (time.time() - start_time) * 1000
+                print(f"[JARVIS] ⚡ Tier 2 complete — total: {total_ms/1000:.2f}s")
+                asyncio.ensure_future(self.memory.store_task_result(
+                    user_request=user_request, intent=routing.primary_agent.value,
+                    success=True, summary=llm_response[:100]
+                ))
+                return JarvisResponse(
+                    success=True, message=llm_response,
+                    latency_ms=total_ms,
+                )
+
+            # ── Tier 3: full pipeline ──────────────────────────────────────
+            # Short-circuit for deterministic tools even in Tier 3
+            t0 = time.time()
             shortcut = await self._try_shortcut(routing.primary_agent, user_request)
+            _t("shortcut_check", t0)
             if shortcut is not None:
                 return shortcut
 
             # ── Step 3: Plan ───────────────────────────────────────────────
+            t0 = time.time()
             plan = await self.planner.plan(
                 user_request, ctx, memories, model_override=model
             )
+            _t("planner", t0)
 
-            # ── Step 4: Critic — only for complex/low-confidence queries ──
-            # Skip critic for high-confidence single-agent tasks to save 6-10s
+            # ── Step 4: Critic ─────────────────────────────────────────────
             _needs_critic = (
                 routing.confidence < 0.82 or
                 len(plan.subtasks) > 2 or
                 any(a in routing.primary_agent.value for a in ["planner", "research"])
             )
-            planning_score = 0.8  # default when skipped
+            planning_score = 0.8
 
             if _needs_critic:
+                t0 = time.time()
                 plan_verdict = await self.critic.review_plan(plan)
                 planning_score = plan_verdict.score
+                _t("critic_plan", t0)
                 replan_attempts = 0
                 while plan_verdict.replan_needed and replan_attempts < MAX_REPLAN_ATTEMPTS:
                     replan_attempts += 1
@@ -177,28 +251,36 @@ class JarvisOrchestrator:
                         "critic_feedback": "; ".join(plan_verdict.issues),
                         "critic_suggestions": "; ".join(plan_verdict.suggestions),
                     }
+                    t0 = time.time()
                     plan = await self.planner.plan(
                         user_request, feedback_ctx, memories, model_override=model
                     )
                     plan.replan_count = replan_attempts
                     plan_verdict = await self.critic.review_plan(plan)
                     planning_score = max(planning_score, plan_verdict.score)
+                    _t(f"replan_{replan_attempts}", t0)
             else:
-                print(f"⚡ Critic skipped — high confidence ({routing.confidence:.2f}), single-agent task")
+                print(f"⚡ Critic skipped — high confidence ({routing.confidence:.2f})")
 
-            # ── Step 5: Execute subtasks ───────────────────────────────────
+            # ── Step 5: Execute ────────────────────────────────────────────
+            t0 = time.time()
             results = await self._execute_dag(plan, routing.primary_agent)
+            _t("execute_dag", t0)
 
-            # ── Step 6: Critic reviews results — only when needed ─────────
+            # ── Step 6: Critic result review ───────────────────────────────
             if _needs_critic:
+                t0 = time.time()
                 result_verdict = await self.critic.review_result(plan, results)
+                _t("critic_result", t0)
 
             # ── Step 7: Evaluate ───────────────────────────────────────────
+            t0 = time.time()
             evaluation = self.evaluator.evaluate(
                 plan, results, start_time, planning_score=planning_score
             )
+            _t("evaluator", t0)
 
-            # ── Step 8: Store episodic memory (non-blocking fire-and-forget)
+            # ── Step 8: Store episodic memory ──────────────────────────────
             asyncio.ensure_future(self.memory.store_task_result(
                 user_request=user_request,
                 intent=plan.intent,
@@ -207,9 +289,14 @@ class JarvisOrchestrator:
             ))
 
             # ── Build response ─────────────────────────────────────────────
+            t0 = time.time()
             message = self._build_response_message(
                 user_request, plan, results, routing.primary_agent
             )
+            _t("build_response", t0)
+
+            total_ms = (time.time() - start_time) * 1000
+            print(f"[JARVIS] ✅ Tier 3 complete — total: {total_ms/1000:.2f}s")
 
             return JarvisResponse(
                 success=evaluation.success,
@@ -230,6 +317,122 @@ class JarvisOrchestrator:
                 error=str(exc),
                 latency_ms=latency_ms,
             )
+
+    # ── Streaming entry point ─────────────────────────────────────────────
+
+    async def handle_stream(
+        self,
+        user_request: str,
+        context: Optional[Dict[str, Any]] = None,
+        model_override: Optional[str] = None,
+    ):
+        """
+        Async generator version of handle().
+        Yields dicts: {"type":"thinking"}, {"type":"chunk","text":"..."}, {"type":"response",...}
+
+        Tier 1 → single {"type":"response"} (instant, no LLM)
+        Tier 2 → {"type":"thinking"} then streamed {"type":"chunk"} tokens then {"type":"response"}
+        Tier 3 → {"type":"thinking"} then full pipeline result as {"type":"response"}
+        """
+        start_time = time.time()
+        model = model_override or self.model
+        ctx = context or {
+            "current_datetime": datetime.now().isoformat(),
+            "timezone": "Europe/London",
+            "user_id": "user_001",
+        }
+
+        def _t(label: str, t0: float):
+            elapsed = time.time() - t0
+            print(f"[JARVIS] ⏱  {label}: {elapsed:.2f}s")
+
+        try:
+            # Router (always needed — 1b model, fast)
+            t0 = time.time()
+            routing = await self.router.route(user_request)
+            _t("router", t0)
+            tier = routing.tier
+
+            # ── Tier 1: instant tool response ─────────────────────────────
+            if tier == 1:
+                t0 = time.time()
+                shortcut = await self._try_shortcut(routing.primary_agent, user_request)
+                _t("tool_shortcut", t0)
+                if shortcut is not None:
+                    print(f"[JARVIS] ⚡ Stream Tier 1 — {(time.time()-start_time):.2f}s")
+                    yield {
+                        "type": "response",
+                        "message": shortcut.message,
+                        "success": shortcut.success,
+                        "latency_ms": (time.time() - start_time) * 1000,
+                    }
+                    return
+                tier = 2  # escalate if no shortcut matched
+
+            # ── Tier 2: stream LLM response token by token ────────────────
+            if tier == 2:
+                yield {"type": "thinking"}
+
+                context_str = ""
+                agent = routing.primary_agent
+                if agent == AgentRole.WEBSEARCH:
+                    t0 = time.time()
+                    data = await self.websearch.search(user_request)
+                    context_str = self.websearch.format_results(data)
+                    _t("websearch_tool", t0)
+                elif agent == AgentRole.NEWS:
+                    t0 = time.time()
+                    data = await self.news.get_headlines(query=user_request, max_items=5)
+                    context_str = self.news.format_headlines(data)
+                    _t("news_tool", t0)
+
+                user_content = (
+                    f"Context:\n{context_str}\n\nUser: {user_request}"
+                    if context_str else user_request
+                )
+                msgs = [{"role": "user", "content": user_content}]
+
+                full_text = ""
+                t0 = time.time()
+                async for chunk in self.llm.chat_stream(msgs, model=model, max_tokens=200):
+                    full_text += chunk
+                    yield {"type": "chunk", "text": chunk}
+                _t("llm_stream", t0)
+
+                total_ms = (time.time() - start_time) * 1000
+                print(f"[JARVIS] ⚡ Stream Tier 2 — {total_ms/1000:.2f}s")
+                asyncio.ensure_future(self.memory.store_task_result(
+                    user_request, routing.primary_agent.value, True, full_text[:100]
+                ))
+                yield {
+                    "type": "response",
+                    "message": full_text,
+                    "success": True,
+                    "latency_ms": total_ms,
+                }
+                return
+
+            # ── Tier 3: full pipeline, show thinking indicator ─────────────
+            yield {"type": "thinking"}
+
+            # Pass pre-computed routing to avoid double-routing (saves ~2-3s)
+            response = await self.handle(user_request, context=ctx, model_override=model_override, _routing=routing)
+            yield {
+                "type": "response",
+                "message": response.message,
+                "success": response.success,
+                "latency_ms": response.latency_ms,
+            }
+
+        except Exception as exc:
+            print(f"❌ Stream error: {exc}")
+            import traceback; traceback.print_exc()
+            yield {
+                "type": "response",
+                "message": f"I encountered an error: {exc}",
+                "success": False,
+                "latency_ms": (time.time() - start_time) * 1000,
+            }
 
     # ── DAG Execution ──────────────────────────────────────────────────────
 
