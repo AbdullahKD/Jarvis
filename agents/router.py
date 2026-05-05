@@ -65,12 +65,18 @@ IMPORTANT: Questions starting with who/what/when/where/why/how/which should ALWA
 - summarise → summariser
 - general_chat → planner
 
+Tier classification rules (add "tier" field to your JSON):
+- tier 1 (tool-only, instant, NO LLM response needed): weather, get_news, spotify_control, mac_control, get_sports, get_markets, check_calendar, list_reminders, prayer_times, open_file
+- tier 2 (single LLM call, simple conversational): general_chat, web_search, summarise, set_reminder, send_email, draft_email
+- tier 3 (full pipeline, complex/multi-step): research_topic, morning_briefing, read_document, schedule_meeting, any multi-step task
+
 Respond with valid JSON only:
 {
   "intent": "<one of the intents above>",
   "primary_agent": "<agent name>",
   "supporting_agents": ["memory"],
   "confidence": 0.95,
+  "tier": 1,
   "reasoning": "Brief explanation"
 }
 
@@ -78,7 +84,7 @@ Rules:
 - Always include "memory" in supporting_agents
 - Add "summariser" to supporting_agents if the response will be long
 - confidence is 0.0–1.0
-- If you are unsure, use general_chat intent
+- If you are unsure, use general_chat intent with tier 2
 """
 
 
@@ -128,16 +134,24 @@ class RouterAgent:
         if AgentRole.MEMORY not in supporting:
             supporting.insert(0, AgentRole.MEMORY)
 
+        # Parse tier — clamp to 1-3
+        raw_tier = data.get("tier", 3)
+        try:
+            tier = max(1, min(3, int(raw_tier)))
+        except (TypeError, ValueError):
+            tier = 3
+
         decision = RouterDecision(
             primary_agent=primary,
             supporting_agents=supporting,
             confidence=float(data.get("confidence", 0.8)),
             reasoning=data.get("reasoning", ""),
+            tier=tier,
         )
 
         print(
             f"🔀 Routed → {decision.primary_agent.value} "
-            f"(confidence: {decision.confidence:.2f})"
+            f"(confidence: {decision.confidence:.2f}, tier: {decision.tier})"
         )
         return decision
 
@@ -187,9 +201,21 @@ class RouterAgent:
         else:
             primary = AgentRole.PLANNER
 
+        # Assign tier for fallback routes
+        tier1_agents = {AgentRole.WEATHER, AgentRole.NEWS, AgentRole.SPOTIFY,
+                        AgentRole.MAC, AgentRole.REMINDER, AgentRole.FILE}
+        tier3_agents = {AgentRole.RESEARCH}
+        if primary in tier1_agents:
+            tier = 1
+        elif primary in tier3_agents:
+            tier = 3
+        else:
+            tier = 2
+
         return RouterDecision(
             primary_agent=primary,
             supporting_agents=[AgentRole.MEMORY],
             confidence=0.5,
             reasoning="Fallback rule-based routing",
+            tier=tier,
         )

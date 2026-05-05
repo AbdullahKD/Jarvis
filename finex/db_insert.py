@@ -6,15 +6,19 @@ CREATE TABLE IF NOT EXISTS financials (
     id                      SERIAL PRIMARY KEY,
     company                 TEXT NOT NULL,
     year                    INT  NOT NULL,
-    period                  TEXT,                  -- e.g. "Q1 2025" or "FY 2025"
+    period                  TEXT,
+
+    -- Currency / unit metadata (from extractor)
+    currency                TEXT DEFAULT 'Unknown',
+    unit_label              TEXT DEFAULT 'millions (assumed)',
 
     -- Income Statement
-    revenue                 FLOAT,                 -- Gross turnover / Net turnover
+    revenue                 FLOAT,
     gross_profit            FLOAT,
-    operating_profit        FLOAT,                 -- EBIT
+    operating_profit        FLOAT,
     profit_before_tax       FLOAT,
-    net_profit              FLOAT,                 -- Profit after tax
-    eps                     FLOAT,                 -- Earnings per share (PKR)
+    net_profit              FLOAT,
+    eps                     FLOAT,
     dividend_per_share      FLOAT,
 
     -- Cost items
@@ -49,12 +53,48 @@ CREATE TABLE IF NOT EXISTS financials (
 );
 """
 
+# Safe migration — adds currency/unit_label to tables created before this schema
+_MIGRATE_SQL = """
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name='financials' AND column_name='currency'
+    ) THEN
+        ALTER TABLE financials
+            ADD COLUMN currency   TEXT DEFAULT 'Unknown',
+            ADD COLUMN unit_label TEXT DEFAULT 'millions (assumed)';
+        RAISE NOTICE 'Migrated: added currency + unit_label columns';
+    END IF;
+END$$;
+"""
 
-def create_schema(conn):
-    cur = conn.cursor()
+# Financial data fields (no metadata cols)
+_DATA_FIELDS = [
+    "revenue", "gross_profit", "operating_profit", "profit_before_tax", "net_profit",
+    "eps", "dividend_per_share",
+    "cost_of_goods_sold", "operating_expenses", "depreciation", "finance_cost", "tax_expense",
+    "total_assets", "current_assets", "non_current_assets", "cash_balance",
+    "trade_receivables", "inventory",
+    "total_liabilities", "current_liabilities", "non_current_liabilities",
+    "total_equity", "share_capital", "long_term_debt",
+    "operating_cashflow", "investing_cashflow", "financing_cashflow",
+]
+
+
+def create_schema(conn=None):
+    """
+    Create/migrate the financials table.
+    Runs on its OWN autocommit connection so DDL never deadlocks
+    with any open read transactions on other connections.
+    """
+    ac = get_connection()
+    ac.set_session(autocommit=True)   # DDL outside any transaction block
+    cur = ac.cursor()
     cur.execute(SCHEMA_SQL)
-    conn.commit()
+    cur.execute(_MIGRATE_SQL)
     cur.close()
+    ac.close()
 
 
 def get_connection():
@@ -65,37 +105,67 @@ def get_connection():
     )
 
 
-def insert_financials(data: dict, company: str = "Bestway Cement", year: int = 2025, period: str = "FY 2025"):
-    conn = get_connection()
-    create_schema(conn)
+def _col_exists(conn, col: str) -> bool:
     cur = conn.cursor()
+    cur.execute(
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_name='financials' AND column_name=%s",
+        (col,)
+    )
+    result = cur.fetchone() is not None
+    cur.close()
+    return result
 
-    fields = [
-        "company", "year", "period",
-        "revenue", "gross_profit", "operating_profit", "profit_before_tax", "net_profit",
-        "eps", "dividend_per_share",
-        "cost_of_goods_sold", "operating_expenses", "depreciation", "finance_cost", "tax_expense",
-        "total_assets", "current_assets", "non_current_assets", "cash_balance",
-        "trade_receivables", "inventory",
-        "total_liabilities", "current_liabilities", "non_current_liabilities",
-        "total_equity", "share_capital", "long_term_debt",
-        "operating_cashflow", "investing_cashflow", "financing_cashflow"
-    ]
 
-    values = [company, year, period] + [data.get(f) for f in fields[3:]]
-    placeholders = ", ".join(["%s"] * len(fields))
-    col_names = ", ".join(fields)
+def insert_financials(
+    data: dict,
+    company: str = "Bestway Cement",
+    year: int = 2025,
+    period: str = "FY 2025",
+    currency: str = "Unknown",
+    unit_label: str = "millions (assumed)",
+):
+    # Step 1 — ensure schema exists (runs on its own autocommit connection)
+    try:
+        create_schema()
+    except Exception as e:
+        print(f"⚠ Schema/migration warning (non-fatal): {e}")
 
-    # Upsert: update on conflict
+    # Step 2 — insert on a fresh dedicated connection
+    conn = get_connection()
+    cur = conn.cursor()
+    # Fail fast (10s) if another connection holds a conflicting lock
+    cur.execute("SET lock_timeout = '10s'")
+    cur.execute("SET statement_timeout = '30s'")
+
+    # Check if currency/unit_label columns exist (they might not on very old installs)
+    has_meta = _col_exists(conn, "currency")
+
+    if has_meta:
+        fields = ["company", "year", "period", "currency", "unit_label"] + _DATA_FIELDS
+        values = [company, year, period, currency, unit_label] + [data.get(f) for f in _DATA_FIELDS]
+    else:
+        # Fallback: insert without meta columns so data is never lost
+        print("⚠ currency/unit_label columns missing — inserting without them")
+        fields = ["company", "year", "period"] + _DATA_FIELDS
+        values = [company, year, period] + [data.get(f) for f in _DATA_FIELDS]
+
+    placeholders  = ", ".join(["%s"] * len(fields))
+    col_names     = ", ".join(fields)
     update_clause = ", ".join([f"{f} = EXCLUDED.{f}" for f in fields[3:]])
 
-    cur.execute(f"""
-        INSERT INTO financials ({col_names})
-        VALUES ({placeholders})
-        ON CONFLICT (company, year, period) DO UPDATE SET {update_clause}
-    """, values)
-
-    conn.commit()
-    cur.close()
-    conn.close()
-    print(f"✅ Inserted/updated: {company} | {period}")
+    try:
+        cur.execute(f"""
+            INSERT INTO financials ({col_names})
+            VALUES ({placeholders})
+            ON CONFLICT (company, year, period) DO UPDATE SET {update_clause}
+        """, values)
+        conn.commit()
+        print(f"✅ Inserted/updated: {company} | {period} | {currency} | {unit_label}")
+    except Exception as e:
+        conn.rollback()
+        print(f"❌ Insert failed: {e}")
+        raise
+    finally:
+        cur.close()
+        conn.close()

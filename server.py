@@ -15,7 +15,7 @@ from pathlib import Path
 
 import aiohttp
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, Form
 from fastapi.responses import JSONResponse
 import json as _json
 
@@ -250,9 +250,8 @@ async def hardware():
 
 
 @app.post("/upload")
-async def upload_document(file: "UploadFile"):
+async def upload_document(file: UploadFile):
     """Accept document upload and store for analysis."""
-    from fastapi import UploadFile
     import tempfile, os
     try:
         content_bytes = await file.read()
@@ -284,25 +283,36 @@ async def finex_chat(req: FinExChatRequest):
 
 
 @app.post("/finex/upload")
-async def finex_upload(file: "UploadFile", company: str = "Bestway Cement"):
+async def finex_upload(
+    file: UploadFile,
+    company: str = Form("Bestway Cement"),
+):
     """Upload a PDF financial statement, extract data, and store in Postgres."""
-    from fastapi import UploadFile
     import tempfile, os
+    tmp_path = None
     try:
         content = await file.read()
-        suffix = os.path.splitext(file.filename)[1]
+        if not content:
+            return SafeJSONResponse({"success": False, "error": "Uploaded file is empty."})
+        suffix = os.path.splitext(file.filename or "upload")[1] or ".pdf"
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             tmp.write(content)
             tmp_path = tmp.name
+        print(f"💹 FinEx upload: company={company!r}  file={file.filename!r}  tmp={tmp_path}")
         result = await finex.upload_pdf(tmp_path, company)
+        print(f"💹 FinEx result: success={result.get('success')}  error={result.get('error','—')}")
         return SafeJSONResponse(result)
     except Exception as e:
-        return SafeJSONResponse({"success": False, "error": str(e)})
+        import traceback
+        tb = traceback.format_exc()
+        print(f"💹 FinEx upload exception:\n{tb}")
+        return SafeJSONResponse({"success": False, "error": str(e), "traceback": tb})
     finally:
-        try:
-            os.unlink(tmp_path)
-        except Exception:
-            pass
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
 
 
 @app.get("/finex/companies")
@@ -448,15 +458,18 @@ async def websocket_endpoint(websocket: WebSocket):
     """
     await websocket.accept()
 
-    # Send initial sidebar data
-    try:
-        sidebar_data = await sidebar()
-        await websocket.send_text(json.dumps({
-            "type": "sidebar",
-            "data": json.loads(sidebar_data.body),
-        }))
-    except Exception:
-        pass
+    # Push sidebar data in the background — don't block the receive loop
+    async def _push_sidebar():
+        try:
+            sidebar_data = await sidebar()
+            await websocket.send_text(json.dumps({
+                "type": "sidebar",
+                "data": json.loads(sidebar_data.body),
+            }))
+        except Exception:
+            pass
+
+    asyncio.ensure_future(_push_sidebar())
 
     try:
         while True:
@@ -512,14 +525,17 @@ async def websocket_endpoint(websocket: WebSocket):
                         pass
 
             except Exception as e:
-                await websocket.send_text(json.dumps({
-                    "type": "response",
-                    "message": f"Error: {str(e)}",
-                    "success": False,
-                }))
+                try:
+                    await websocket.send_text(json.dumps({
+                        "type": "response",
+                        "message": f"Error: {str(e)}",
+                        "success": False,
+                    }))
+                except Exception:
+                    break  # Connection gone — exit the loop cleanly
 
-    except WebSocketDisconnect:
-        pass
+    except (WebSocketDisconnect, RuntimeError):
+        pass  # Client disconnected — normal, not an error
 
 
 # ── Run ────────────────────────────────────────────────────────────────────

@@ -141,10 +141,57 @@ body{font-family:var(--sans);background:var(--bg);color:var(--tx);display:flex;f
 .qa-btn{font-family:var(--mono);font-size:8.5px;color:var(--ac);border:1px solid var(--pb);border-radius:6px;padding:4px 10px;cursor:pointer;background:var(--ps);transition:all 0.18s;white-space:nowrap;position:relative;overflow:hidden}
 .qa-btn:hover{border-color:var(--ac);color:var(--ac2);background:rgba(124,58,237,0.2);box-shadow:0 0 12px rgba(124,58,237,0.25);transform:translateY(-1px)}
 .qa-btn:active{transform:translateY(0) scale(0.96)}
-.chat-hd{padding:9px 16px;border-bottom:1px solid var(--br);display:flex;align-items:center;gap:9px;flex-shrink:0;background:var(--panel-bg)}
-.ch-dot{width:5px;height:5px;border-radius:50%;background:var(--p1);box-shadow:0 0 10px var(--p1),0 0 20px rgba(124,58,237,0.5);animation:cdp 2s ease-in-out infinite}
-@keyframes cdp{0%,100%{box-shadow:0 0 10px var(--p1),0 0 20px rgba(124,58,237,0.5)}50%{box-shadow:0 0 5px var(--p1)}}
-.ch-lbl{font-family:var(--mono);font-size:9px;color:var(--ac);letter-spacing:0.12em}
+.chat-hd{padding:10px 16px;border-bottom:1px solid var(--br);display:flex;align-items:center;gap:10px;flex-shrink:0;background:linear-gradient(135deg,rgba(8,4,24,0.9),rgba(14,7,36,0.75));position:relative}
+.chat-hd::after{content:'';position:absolute;bottom:-1px;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,var(--p1) 25%,var(--ac) 50%,var(--p1) 75%,transparent);opacity:0.45}
+/* ring pulse around status dot */
+.ch-ring{width:30px;height:30px;border-radius:50%;border:1px solid rgba(124,58,237,0.35);display:flex;align-items:center;justify-content:center;position:relative;flex-shrink:0}
+.ch-ring::before{content:'';position:absolute;inset:-4px;border-radius:50%;border:1px solid rgba(124,58,237,0.12);animation:ring-out 2.5s ease-in-out infinite}
+@keyframes ring-out{0%,100%{opacity:0.7;transform:scale(1)}50%{opacity:0.15;transform:scale(1.1)}}
+.ch-dot{width:7px;height:7px;border-radius:50%;background:var(--p1);box-shadow:0 0 8px var(--p1),0 0 16px rgba(124,58,237,0.4);animation:cdp 2s ease-in-out infinite}
+@keyframes cdp{0%,100%{box-shadow:0 0 8px var(--p1),0 0 16px rgba(124,58,237,0.5)}50%{box-shadow:0 0 4px var(--p1)}}
+.ch-lbl{font-family:var(--mono);font-size:9px;color:var(--ac);letter-spacing:0.12em} /* kept for compat */
+.ch-name{font-family:var(--mono);font-size:11px;font-weight:700;letter-spacing:0.2em;background:linear-gradient(90deg,var(--ac2),var(--ac));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.ch-sub{font-family:var(--mono);font-size:6.5px;color:var(--tx3);letter-spacing:0.09em;margin-top:2px}
+.ch-badge{font-family:var(--mono);font-size:7px;letter-spacing:0.14em;color:var(--gn);border:1px solid rgba(52,211,153,0.3);border-radius:4px;padding:2px 8px;background:rgba(52,211,153,0.07);white-space:nowrap;animation:badge-glow 3s ease-in-out infinite}
+@keyframes badge-glow{0%,100%{box-shadow:0 0 6px rgba(52,211,153,0.1)}50%{box-shadow:0 0 14px rgba(52,211,153,0.3)}}
+.ch-model{font-family:var(--mono);font-size:7.5px;color:var(--tx3);letter-spacing:0.06em;white-space:nowrap}
+/* pipeline bar */
+.pipeline-bar{display:flex;align-items:center;padding:7px 14px 6px;flex-shrink:0;background:rgba(6,3,18,0.35);border-bottom:1px solid rgba(124,58,237,0.08)}
+.pipe-node{display:flex;flex-direction:column;align-items:center;gap:2px}
+.pipe-icon{width:26px;height:26px;border-radius:7px;background:rgba(124,58,237,0.06);border:1px solid rgba(124,58,237,0.12);display:flex;align-items:center;justify-content:center;font-size:10px;transition:all 0.3s;color:rgba(167,139,250,0.4)}
+.pipe-lbl{font-family:var(--mono);font-size:5.5px;color:var(--tx3);letter-spacing:0.05em;text-align:center;margin-top:1px}
+.pipe-sep{font-size:8px;color:rgba(124,58,237,0.18);padding:0 4px;padding-bottom:10px;flex-shrink:0;align-self:center}
+.pipe-node.lit .pipe-icon{background:rgba(124,58,237,0.22);border-color:var(--ac);box-shadow:0 0 12px rgba(124,58,237,0.35);color:var(--ac2)}
+.pipe-node.lit .pipe-lbl{color:var(--ac)}
+.pipe-node.done .pipe-icon{background:rgba(52,211,153,0.1);border-color:rgba(52,211,153,0.35);box-shadow:0 0 8px rgba(52,211,153,0.2);color:#6ee7b7}
+.pipe-node.done .pipe-lbl{color:rgba(52,211,153,0.6)}
+/* capability chips */
+.cap-row{display:flex;gap:4px;padding:5px 14px 6px;flex-wrap:wrap;border-bottom:1px solid var(--br);flex-shrink:0}
+.cap-chip{display:flex;align-items:center;gap:4px;padding:2px 8px;background:rgba(124,58,237,0.05);border:1px solid rgba(124,58,237,0.1);border-radius:20px;font-family:var(--mono);font-size:7px;color:var(--tx3);letter-spacing:0.05em;white-space:nowrap}
+.cap-dot{width:4px;height:4px;border-radius:50%;background:var(--gn);box-shadow:0 0 5px var(--gn);flex-shrink:0}
+/* quick access tile grid */
+.qa-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:5px;padding:7px 14px 8px;flex-shrink:0;border-bottom:1px solid var(--br)}
+.qa-tile{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;padding:8px 4px 7px;background:rgba(124,58,237,0.05);border:1px solid rgba(124,58,237,0.1);border-radius:9px;cursor:pointer;transition:all 0.2s;position:relative;overflow:hidden}
+.qa-tile::before{content:'';position:absolute;top:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,var(--ac),transparent);opacity:0;transition:opacity 0.2s}
+.qa-tile:hover{background:rgba(124,58,237,0.14);border-color:rgba(167,139,250,0.32);transform:translateY(-1px);box-shadow:0 4px 16px rgba(124,58,237,0.15)}
+.qa-tile:hover::before{opacity:1}
+.qa-tile:active{transform:scale(0.95);transition:transform 0.08s}
+.qa-ico{font-size:13px;line-height:1}
+.qa-lbl{font-family:var(--mono);font-size:6px;color:var(--ac);letter-spacing:0.07em;text-align:center;line-height:1.2}
+/* morning brief button */
+.morning-btn{margin:8px 14px;padding:11px 16px;display:flex;align-items:center;justify-content:space-between;background:linear-gradient(135deg,rgba(124,58,237,0.1) 0%,rgba(76,29,149,0.06) 100%);border:1px solid rgba(124,58,237,0.22);border-radius:10px;cursor:pointer;transition:all 0.22s;position:relative;overflow:hidden;flex-shrink:0}
+.morning-btn::before{content:'';position:absolute;top:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,var(--p1) 30%,var(--ac) 50%,var(--p1) 70%,transparent);opacity:0.5}
+.morning-btn::after{content:'';position:absolute;inset:0;background:linear-gradient(90deg,rgba(167,139,250,0.06),transparent);opacity:0;transition:opacity 0.22s}
+.morning-btn:hover{border-color:rgba(167,139,250,0.45);box-shadow:0 0 24px rgba(124,58,237,0.18),inset 0 0 20px rgba(124,58,237,0.06);transform:translateY(-1px)}
+.morning-btn:hover::after{opacity:1}
+.morning-btn:active{transform:scale(0.99)}
+.mb-left{display:flex;align-items:center;gap:12px;z-index:1}
+.mb-ico{font-size:22px;line-height:1;filter:drop-shadow(0 0 8px rgba(251,191,36,0.5));animation:sun-spin 12s linear infinite}
+@keyframes sun-spin{0%{filter:drop-shadow(0 0 6px rgba(251,191,36,0.4))}50%{filter:drop-shadow(0 0 14px rgba(251,191,36,0.7))}100%{filter:drop-shadow(0 0 6px rgba(251,191,36,0.4))}}
+.mb-title{font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:0.18em;color:var(--ac2)}
+.mb-sub{font-family:var(--mono);font-size:7px;color:var(--tx3);letter-spacing:0.07em;margin-top:3px}
+.mb-arrow{font-size:10px;color:rgba(167,139,250,0.3);transition:all 0.22s;z-index:1}
+.morning-btn:hover .mb-arrow{color:var(--ac);transform:translateX(3px)}
 .msgs{flex:1;overflow-y:auto;padding:14px 16px;display:flex;flex-direction:column;gap:11px}
 .msgs::-webkit-scrollbar{width:2px}.msgs::-webkit-scrollbar-thumb{background:var(--pb);border-radius:2px}
 .msg{display:flex;flex-direction:column;gap:3px;max-width:82%;animation:fu 0.3s cubic-bezier(0.34,1.56,0.64,1)}
@@ -247,8 +294,20 @@ body{font-family:var(--sans);background:var(--bg);color:var(--tx);display:flex;f
   </div>
 </div>
 
-<!-- ── FINEX FULL LAYOUT ── (same 4-col grid as JARVIS, finance-world widgets) -->
-<div id="finex-layout" class="layout" style="display:none">
+<!-- ── FINEX FULLSCREEN OVERLAY ── -->
+<div id="finex-layout" style="display:none;position:fixed;inset:0;z-index:300;background:var(--bg);grid-template-columns:220px 1fr 240px 240px;gap:8px;padding:52px 8px 8px;overflow:hidden;">
+
+  <!-- FinEx own topbar — sits above the grid via negative margin trick -->
+  <div id="finex-topbar" style="position:absolute;top:0;left:0;right:0;height:44px;background:rgba(5,46,22,0.85);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);border-bottom:1px solid rgba(52,211,153,0.25);display:flex;align-items:center;padding:0 20px;gap:16px;z-index:10">
+    <button onclick="toggleFinEx()" style="font-family:var(--mono);font-size:9px;color:var(--tx2);border:1px solid rgba(52,211,153,0.2);border-radius:5px;padding:3px 10px;cursor:pointer;background:transparent;letter-spacing:0.06em;transition:all 0.2s" onmouseenter="this.style.color='var(--gn)';this.style.borderColor='var(--gn)'" onmouseleave="this.style.color='var(--tx2)';this.style.borderColor='rgba(52,211,153,0.2)'">← JARVIS</button>
+    <div style="width:1px;height:18px;background:rgba(52,211,153,0.15)"></div>
+    <span style="font-family:var(--mono);font-size:13px;font-weight:700;letter-spacing:0.2em;background:linear-gradient(90deg,#6ee7b7,#34d399);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text">Jarvis FinEx</span>
+    <span style="font-size:9px;color:rgba(52,211,153,0.5);font-family:var(--mono);letter-spacing:0.1em">FINANCIAL STATEMENT EXPERT · LIVE MARKETS</span>
+    <div style="margin-left:auto;display:flex;align-items:center;gap:14px">
+      <div style="width:6px;height:6px;border-radius:50%;background:#34d399;box-shadow:0 0 10px #34d399;animation:sdp 3s ease-in-out infinite"></div>
+      <span style="font-size:10px;color:rgba(52,211,153,0.6);font-family:var(--mono)">FINEX ONLINE</span>
+    </div>
+  </div>
 
   <!-- LEFT: Indices / Crypto / Commodities -->
   <div class="left-col">
@@ -274,35 +333,56 @@ body{font-family:var(--sans);background:var(--bg);color:var(--tx);display:flex;f
 
   <!-- CENTER: FinEx Chat -->
   <div class="wgt center-col">
-    <div class="chat-hd" style="border-bottom:1px solid rgba(52,211,153,0.2);flex-wrap:wrap;gap:8px">
-      <div class="ch-dot" style="background:#34d399;box-shadow:0 0 10px rgba(52,211,153,0.6),0 0 20px rgba(52,211,153,0.3);animation:none"></div>
-      <span class="ch-lbl" style="color:#34d399;letter-spacing:0.12em">FINEX · FINANCIAL EXPERT</span>
-      <div style="margin-left:auto;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-        <select id="finex-company" style="font-family:var(--mono);font-size:9px;background:rgba(12,6,30,0.8);border:1px solid rgba(52,211,153,0.2);border-radius:5px;color:rgba(52,211,153,0.75);padding:3px 8px;outline:none;cursor:pointer">
+    <!-- ── FinEx chat header ── -->
+    <div class="chat-hd" style="border-bottom:1px solid rgba(52,211,153,0.18);background:linear-gradient(135deg,rgba(3,24,14,0.9),rgba(5,30,18,0.75))">
+      <div class="ch-ring" style="border-color:rgba(52,211,153,0.35)">
+        <div class="ch-dot" style="background:#34d399;box-shadow:0 0 8px #34d399,0 0 16px rgba(52,211,153,0.4)"></div>
+      </div>
+      <div>
+        <div class="ch-name" style="background:linear-gradient(90deg,#6ee7b7,#34d399);-webkit-background-clip:text;background-clip:text">Jarvis FinEx</div>
+        <div class="ch-sub">L1–L6 FINANCIAL ANALYSIS ENGINE</div>
+      </div>
+      <div class="ch-badge" style="color:#34d399;border-color:rgba(52,211,153,0.3);background:rgba(52,211,153,0.07)">READY</div>
+      <div style="margin-left:auto;display:flex;align-items:center;gap:8px">
+        <select id="finex-company" style="font-family:var(--mono);font-size:8px;background:rgba(3,20,12,0.9);border:1px solid rgba(52,211,153,0.2);border-radius:5px;color:rgba(52,211,153,0.75);padding:3px 8px;outline:none;cursor:pointer">
           <option value="Bestway Cement">Bestway Cement</option>
         </select>
-        <label style="font-family:var(--mono);font-size:9px;color:rgba(52,211,153,0.6);cursor:pointer;border:1px solid rgba(52,211,153,0.2);border-radius:5px;padding:3px 9px">
-          ↑ PDF<input type="file" accept=".pdf" style="display:none" onchange="finexUpload(this)">
-        </label>
-        <span id="finex-upload-status" style="font-family:var(--mono);font-size:9px;color:rgba(52,211,153,0.5)"></span>
+        <button onclick="openPdfModal()" style="font-family:var(--mono);font-size:8px;color:rgba(52,211,153,0.8);cursor:pointer;border:1px solid rgba(52,211,153,0.25);border-radius:5px;padding:4px 10px;white-space:nowrap;background:rgba(52,211,153,0.05);transition:all 0.2s" onmouseenter="this.style.borderColor='#34d399';this.style.background='rgba(52,211,153,0.12)'" onmouseleave="this.style.borderColor='rgba(52,211,153,0.25)';this.style.background='rgba(52,211,153,0.05)'">⬆ Upload PDF</button>
+        <span id="finex-upload-status" style="font-family:var(--mono);font-size:8px;color:rgba(52,211,153,0.5)"></span>
       </div>
     </div>
-    <!-- status indicators — finance themed -->
-    <div class="status-bar">
-      <div class="status-indicators">
-        <div class="si"><span class="si-dot" style="background:#34d399;box-shadow:0 0 6px #34d399"></span><span class="si-lbl">FinEx Engine</span></div>
-        <div class="si"><span class="si-dot" style="background:#34d399;box-shadow:0 0 6px #34d399"></span><span class="si-lbl">L1–L6 Analysis</span></div>
-        <div class="si"><span class="si-dot" style="background:#34d399;box-shadow:0 0 6px #34d399"></span><span class="si-lbl">Live Markets</span></div>
-        <div class="si"><span class="si-dot" style="background:#34d399;box-shadow:0 0 6px #34d399"></span><span class="si-lbl">PDF Extract</span></div>
-      </div>
-      <div class="quick-actions">
-        <div class="qa-btn" onclick="finexCmd('What is the latest revenue figure?')" style="color:#34d399;border-color:rgba(52,211,153,0.3)">Revenue</div>
-        <div class="qa-btn" onclick="finexCmd('Calculate the gross profit margin')" style="color:#34d399;border-color:rgba(52,211,153,0.3)">Margins</div>
-        <div class="qa-btn" onclick="finexCmd('Compare profit year over year')" style="color:#34d399;border-color:rgba(52,211,153,0.3)">YoY Compare</div>
-        <div class="qa-btn" onclick="finexCmd('Is this company attractive to investors?')" style="color:#34d399;border-color:rgba(52,211,153,0.3)">Investor View</div>
-        <div class="qa-btn" onclick="finexCmd('What are the key financial risks?')" style="color:#34d399;border-color:rgba(52,211,153,0.3)">Risk Analysis</div>
-        <div class="qa-btn" onclick="finexCmd('Summarise the overall financial health')" style="color:#34d399;border-color:rgba(52,211,153,0.3)">Health Summary</div>
-      </div>
+    <!-- ── Analysis level pipeline ── -->
+    <div class="pipeline-bar" style="background:rgba(2,12,7,0.4);border-bottom:1px solid rgba(52,211,153,0.07)">
+      <div class="pipe-node" id="fpn-l1"><div class="pipe-icon" style="border-color:rgba(52,211,153,0.12);color:rgba(52,211,153,0.3)">L1</div><div class="pipe-lbl">RETRIEVE</div></div>
+      <div class="pipe-sep" style="color:rgba(52,211,153,0.15)">▸</div>
+      <div class="pipe-node" id="fpn-l2"><div class="pipe-icon" style="border-color:rgba(52,211,153,0.12);color:rgba(52,211,153,0.3)">L2</div><div class="pipe-lbl">COMPARE</div></div>
+      <div class="pipe-sep" style="color:rgba(52,211,153,0.15)">▸</div>
+      <div class="pipe-node" id="fpn-l3"><div class="pipe-icon" style="border-color:rgba(52,211,153,0.12);color:rgba(52,211,153,0.3)">L3</div><div class="pipe-lbl">RATIOS</div></div>
+      <div class="pipe-sep" style="color:rgba(52,211,153,0.15)">▸</div>
+      <div class="pipe-node" id="fpn-l4"><div class="pipe-icon" style="border-color:rgba(52,211,153,0.12);color:rgba(52,211,153,0.3)">L4</div><div class="pipe-lbl">ANALYSE</div></div>
+      <div class="pipe-sep" style="color:rgba(52,211,153,0.15)">▸</div>
+      <div class="pipe-node" id="fpn-l5"><div class="pipe-icon" style="border-color:rgba(52,211,153,0.12);color:rgba(52,211,153,0.3)">L5</div><div class="pipe-lbl">INSIGHT</div></div>
+      <div class="pipe-sep" style="color:rgba(52,211,153,0.15)">▸</div>
+      <div class="pipe-node" id="fpn-l6"><div class="pipe-icon" style="border-color:rgba(52,211,153,0.12);color:rgba(52,211,153,0.3)">L6</div><div class="pipe-lbl">STRATEGY</div></div>
+      <div style="margin-left:auto"><span style="font-family:var(--mono);font-size:6px;color:rgba(52,211,153,0.25);letter-spacing:0.08em">6-LEVEL REASONING</span></div>
+    </div>
+    <!-- ── FinEx capability chips ── -->
+    <div class="cap-row" style="border-bottom:1px solid rgba(52,211,153,0.08)">
+      <div class="cap-chip" style="border-color:rgba(52,211,153,0.12)"><span class="cap-dot" style="background:#34d399;box-shadow:0 0 5px #34d399"></span>Statement Parser</div>
+      <div class="cap-chip" style="border-color:rgba(52,211,153,0.12)"><span class="cap-dot" style="background:#34d399;box-shadow:0 0 5px #34d399"></span>PDF Extract</div>
+      <div class="cap-chip" style="border-color:rgba(52,211,153,0.12)"><span class="cap-dot" style="background:#34d399;box-shadow:0 0 5px #34d399"></span>Ratio Engine</div>
+      <div class="cap-chip" style="border-color:rgba(52,211,153,0.12)"><span class="cap-dot" style="background:#34d399;box-shadow:0 0 5px #34d399"></span>YoY Compare</div>
+      <div class="cap-chip" style="border-color:rgba(52,211,153,0.12)"><span class="cap-dot" style="background:#34d399;box-shadow:0 0 5px #34d399"></span>PostgreSQL</div>
+      <div class="cap-chip" style="border-color:rgba(52,211,153,0.12)"><span class="cap-dot" style="background:#34d399;box-shadow:0 0 5px #34d399"></span>Live Markets</div>
+    </div>
+    <!-- ── FinEx quick access tiles ── -->
+    <div class="qa-grid" style="border-bottom:1px solid rgba(52,211,153,0.08)">
+      <div class="qa-tile" onclick="finexCmd('What is the latest revenue figure?')" style="border-color:rgba(52,211,153,0.12)"><span class="qa-ico">💰</span><span class="qa-lbl" style="color:#34d399">REVENUE</span></div>
+      <div class="qa-tile" onclick="finexCmd('Calculate the gross profit margin')" style="border-color:rgba(52,211,153,0.12)"><span class="qa-ico">📊</span><span class="qa-lbl" style="color:#34d399">MARGINS</span></div>
+      <div class="qa-tile" onclick="finexCmd('Compare profit year over year')" style="border-color:rgba(52,211,153,0.12)"><span class="qa-ico">📈</span><span class="qa-lbl" style="color:#34d399">YoY</span></div>
+      <div class="qa-tile" onclick="finexCmd('Is this company attractive to investors?')" style="border-color:rgba(52,211,153,0.12)"><span class="qa-ico">🎯</span><span class="qa-lbl" style="color:#34d399">INVESTOR</span></div>
+      <div class="qa-tile" onclick="finexCmd('What are the key financial risks?')" style="border-color:rgba(52,211,153,0.12)"><span class="qa-ico">⚠️</span><span class="qa-lbl" style="color:#34d399">RISKS</span></div>
+      <div class="qa-tile" onclick="finexCmd('Summarise the overall financial health')" style="border-color:rgba(52,211,153,0.12)"><span class="qa-ico">🏥</span><span class="qa-lbl" style="color:#34d399">HEALTH</span></div>
     </div>
     <div id="finex-msgs" class="msgs">
       <div class="msg j">
@@ -418,25 +498,60 @@ body{font-family:var(--sans);background:var(--bg);color:var(--tx);display:flex;f
 
   <!-- CENTER -->
   <div class="wgt center-col">
-    <div class="chat-hd"><div class="ch-dot"></div><span class="ch-lbl">JARVIS · ACTIVE</span></div>
-    <div class="status-bar">
-      <div class="status-indicators">
-        <div class="si"><span class="si-dot" style="background:var(--gn);box-shadow:0 0 6px var(--gn)"></span><span class="si-lbl">LLM</span></div>
-        <div class="si"><span class="si-dot" style="background:var(--gn);box-shadow:0 0 6px var(--gn)"></span><span class="si-lbl">Memory</span></div>
-        <div class="si"><span class="si-dot" style="background:var(--gn);box-shadow:0 0 6px var(--gn)"></span><span class="si-lbl">Calendar</span></div>
-        <div class="si"><span class="si-dot" style="background:var(--gn);box-shadow:0 0 6px var(--gn)"></span><span class="si-lbl">Gmail</span></div>
-        <div class="si"><span class="si-dot" style="background:var(--gn);box-shadow:0 0 6px var(--gn)"></span><span class="si-lbl">Weather</span></div>
-        <div class="si"><span class="si-dot" style="background:var(--gn);box-shadow:0 0 6px var(--gn)"></span><span class="si-lbl">News</span></div>
-        <div class="si"><span class="si-dot" style="background:var(--gn);box-shadow:0 0 6px var(--gn)"></span><span class="si-lbl">Sports</span></div>
+    <!-- ── Chat header ── -->
+    <div class="chat-hd">
+      <div class="ch-ring"><div class="ch-dot"></div></div>
+      <div>
+        <div class="ch-name">J.A.R.V.I.S</div>
+        <div class="ch-sub">MULTI-AGENT AI EXECUTIVE ASSISTANT</div>
       </div>
-      <div class="quick-actions">
-        <div class="qa-btn" onclick="cmd('good morning Jarvis')">☀ Morning Brief</div>
-        <div class="qa-btn" onclick="cmd('what are the latest news headlines')">📰 Headlines</div>
-        <div class="qa-btn" onclick="cmd('premier league scores')">⚽ Scores</div>
-        <div class="qa-btn" onclick="cmd('what is my battery level')">🔋 Battery</div>
-        <div class="qa-btn" onclick="cmd('check my emails')">📧 Inbox</div>
-        <div class="qa-btn" onclick="cmd('whats on my calendar today')">📅 Today</div>
+      <div class="ch-badge">ACTIVE</div>
+      <div style="margin-left:auto;display:flex;align-items:center;gap:10px">
+        <span class="ch-model" id="tier-lbl"></span>
+        <div style="width:1px;height:14px;background:rgba(124,58,237,0.2)"></div>
+        <span class="ch-model" id="mdl">llama3.2 · online</span>
       </div>
+    </div>
+    <!-- ── MAS Pipeline visualisation ── -->
+    <div class="pipeline-bar">
+      <div class="pipe-node" id="pn-router"><div class="pipe-icon">⇌</div><div class="pipe-lbl">ROUTER</div></div>
+      <div class="pipe-sep">▸</div>
+      <div class="pipe-node" id="pn-memory"><div class="pipe-icon">◈</div><div class="pipe-lbl">MEMORY</div></div>
+      <div class="pipe-sep">▸</div>
+      <div class="pipe-node" id="pn-planner"><div class="pipe-icon">⊞</div><div class="pipe-lbl">PLANNER</div></div>
+      <div class="pipe-sep">▸</div>
+      <div class="pipe-node" id="pn-critic"><div class="pipe-icon">◉</div><div class="pipe-lbl">CRITIC</div></div>
+      <div class="pipe-sep">▸</div>
+      <div class="pipe-node" id="pn-executor"><div class="pipe-icon">⚙</div><div class="pipe-lbl">EXECUTOR</div></div>
+      <div class="pipe-sep">▸</div>
+      <div class="pipe-node" id="pn-eval"><div class="pipe-icon">≡</div><div class="pipe-lbl">EVAL</div></div>
+      <div style="margin-left:auto;display:flex;align-items:center;gap:6px">
+        <span style="font-family:var(--mono);font-size:6px;color:var(--tx3);letter-spacing:0.08em">6-AGENT PIPELINE</span>
+      </div>
+    </div>
+    <!-- ── Capability chips ── -->
+    <div class="cap-row">
+      <div class="cap-chip"><span class="cap-dot"></span>LLM</div>
+      <div class="cap-chip"><span class="cap-dot"></span>Memory</div>
+      <div class="cap-chip"><span class="cap-dot"></span>Gmail</div>
+      <div class="cap-chip"><span class="cap-dot"></span>Calendar</div>
+      <div class="cap-chip"><span class="cap-dot"></span>Weather</div>
+      <div class="cap-chip"><span class="cap-dot"></span>News</div>
+      <div class="cap-chip"><span class="cap-dot"></span>Sports</div>
+      <div class="cap-chip"><span class="cap-dot"></span>Markets</div>
+      <div class="cap-chip"><span class="cap-dot"></span>Spotify</div>
+      <div class="cap-chip"><span class="cap-dot"></span>Mac OS</div>
+    </div>
+    <!-- ── Morning Brief ── -->
+    <div class="morning-btn" onclick="cmd('good morning Jarvis')">
+      <div class="mb-left">
+        <span class="mb-ico">☀</span>
+        <div>
+          <div class="mb-title">MORNING BRIEF</div>
+          <div class="mb-sub">Weather · News · Calendar · Markets · Prayer</div>
+        </div>
+      </div>
+      <div class="mb-arrow">▶</div>
     </div>
     <div class="msgs" id="msgs"></div>
     <div class="ibar">
@@ -521,6 +636,7 @@ body{font-family:var(--sans);background:var(--bg);color:var(--tx);display:flex;f
 <script>
 const API='http://localhost:8000',WSU='ws://localhost:8000/ws';
 let ws=null,wsOk=false,typingEl=null,vmode='tap',listening=false,recog=null;
+let streamingEl=null,streamingText=''; // for real-time token streaming
 let sportsData={pl:[],ucl:[],nba:[],cricket:[]},sportTab='pl';
 let newsExp={},techExp={},sportsNewsExp={},newsStories=[],techStories=[],sportsNewsStories=[];
 let dark=true; // declared here so the canvas IIFE below can read it
@@ -754,7 +870,7 @@ function applyTheme(t){
   const tb=document.querySelector('.topbar');
   if(tb)tb.style.background=THEMES[t]['--topbar-bg'];
   // status bar, chat header, input bar
-  document.querySelectorAll('.status-bar,.chat-hd').forEach(el=>el.style.background=THEMES[t]['--panel-bg']);
+  // chat-hd backgrounds are now gradient-controlled via CSS, no inline override needed
   const ibar=document.querySelector('.ibar');
   if(ibar)ibar.style.background=THEMES[t]['--ibar-bg'];
   // input field
@@ -784,8 +900,29 @@ function connectWS(){
     ws.onopen=()=>{wsOk=true;document.getElementById('mdl').textContent='llama3.2 · online'};
     ws.onmessage=e=>{
       const d=JSON.parse(e.data);
-      if(d.type==='response'){hideTyping();addMsg('j',d.message)}
       if(d.type==='typing')showTyping();
+      if(d.type==='thinking'){showTyping();} // Tier 3 thinking indicator
+      if(d.tier){const tl=document.getElementById('tier-lbl');if(tl)tl.textContent='TIER '+d.tier;}
+      if(d.type==='chunk'){
+        // Streaming token — build message bubble incrementally
+        if(!streamingEl){
+          hideTyping();
+          streamingEl=_makeStreamBubble();
+        }
+        streamingText+=d.text;
+        streamingEl.querySelector('.bubble').innerHTML=fmt(streamingText);
+        const msgs=document.getElementById('msgs');msgs.scrollTop=msgs.scrollHeight;
+      }
+      if(d.type==='response'){
+        if(streamingEl){
+          // Finalise streamed bubble (already in DOM, just clean up state)
+          streamingEl.querySelector('.bubble').innerHTML=fmt(d.message);
+          streamingEl=null;streamingText='';
+        } else {
+          hideTyping();addMsg('j',d.message);
+        }
+        clearTimeout(respTimer);
+      }
       if(d.type==='weather')setWeather(d);
       if(d.type==='markets')setMarkets(d);
       if(d.type==='calendar')setCal(d);
@@ -820,6 +957,13 @@ function addMsg(role,text){
   d.innerHTML=`<div class="mmeta"><span class="mdot"></span>${who}</div><div class="bubble">${fmt(text)}</div>`;
   msgs.appendChild(d);msgs.scrollTop=msgs.scrollHeight;
 }
+function _makeStreamBubble(){
+  const msgs=document.getElementById('msgs'),d=document.createElement('div');d.className='msg j';
+  const n=new Date(),p=v=>String(v).padStart(2,'0'),t=`${p(n.getHours())}:${p(n.getMinutes())}`;
+  d.innerHTML=`<div class="mmeta"><span class="mdot"></span>J.A.R.V.I.S · ${t}</div><div class="bubble"></div>`;
+  msgs.appendChild(d);msgs.scrollTop=msgs.scrollHeight;
+  return d;
+}
 function fmt(t){
   if(!t)return'';
   // Section headers (all-caps lines)
@@ -849,8 +993,64 @@ function showTyping(){
   const w=document.createElement('div');w.className='msg j';w.id='tw';
   w.innerHTML='<div class="mmeta"><span class="mdot"></span>J.A.R.V.I.S · THINKING</div><div class="typing"><div class="td"></div><div class="td"></div><div class="td"></div></div>';
   msgs.appendChild(w);msgs.scrollTop=msgs.scrollHeight;typingEl=w;
+  pipelineStart();
 }
-function hideTyping(){if(typingEl){typingEl.remove();typingEl=null}clearTimeout(respTimer)}
+function hideTyping(){if(typingEl){typingEl.remove();typingEl=null}clearTimeout(respTimer);pipelineDone();}
+
+// ── Pipeline animation ──────────────────────────────────────────────────────
+const _PIPE=['pn-router','pn-memory','pn-planner','pn-critic','pn-executor','pn-eval'];
+let _pipeTimer=null, _pipeIdx=0;
+function pipelineStart(){
+  _pipeIdx=0;
+  _PIPE.forEach(id=>{const el=document.getElementById(id);if(el){el.classList.remove('lit','done');}});
+  clearInterval(_pipeTimer);
+  _pipeTimer=setInterval(()=>{
+    _PIPE.forEach((id,i)=>{const el=document.getElementById(id);if(!el)return;el.classList.toggle('lit',i===_pipeIdx);});
+    _pipeIdx=(_pipeIdx+1)%_PIPE.length;
+  },380);
+}
+function pipelineDone(){
+  clearInterval(_pipeTimer);_pipeTimer=null;
+  _PIPE.forEach(id=>{const el=document.getElementById(id);if(el){el.classList.remove('lit');el.classList.add('done');}});
+  setTimeout(()=>_PIPE.forEach(id=>{const el=document.getElementById(id);if(el)el.classList.remove('done');}),2200);
+}
+
+// FinEx analysis pipeline animation (green theme)
+const _FPIPE=['fpn-l1','fpn-l2','fpn-l3','fpn-l4','fpn-l5','fpn-l6'];
+let _fpipeTimer=null, _fpipeIdx=0;
+function finexPipelineStart(){
+  _fpipeIdx=0;
+  _FPIPE.forEach(id=>{const el=document.getElementById(id);if(el){el.classList.remove('lit','done');}});
+  clearInterval(_fpipeTimer);
+  _fpipeTimer=setInterval(()=>{
+    _FPIPE.forEach((id,i)=>{
+      const el=document.getElementById(id);if(!el)return;
+      const icon=el.querySelector('.pipe-icon');
+      if(icon){
+        icon.style.background=i===_fpipeIdx?'rgba(52,211,153,0.2)':'rgba(52,211,153,0.04)';
+        icon.style.borderColor=i===_fpipeIdx?'#34d399':'rgba(52,211,153,0.12)';
+        icon.style.boxShadow=i===_fpipeIdx?'0 0 12px rgba(52,211,153,0.35)':'none';
+        icon.style.color=i===_fpipeIdx?'#6ee7b7':'rgba(52,211,153,0.3)';
+      }
+    });
+    _fpipeIdx=(_fpipeIdx+1)%_FPIPE.length;
+  },380);
+}
+function finexPipelineDone(){
+  clearInterval(_fpipeTimer);_fpipeTimer=null;
+  _FPIPE.forEach(id=>{
+    const el=document.getElementById(id);if(!el)return;
+    const icon=el.querySelector('.pipe-icon');
+    if(icon){icon.style.background='rgba(52,211,153,0.1)';icon.style.borderColor='rgba(52,211,153,0.35)';icon.style.boxShadow='0 0 8px rgba(52,211,153,0.2)';icon.style.color='#6ee7b7';}
+  });
+  setTimeout(()=>{
+    _FPIPE.forEach(id=>{
+      const el=document.getElementById(id);if(!el)return;
+      const icon=el.querySelector('.pipe-icon');
+      if(icon){icon.style.background='';icon.style.borderColor='rgba(52,211,153,0.12)';icon.style.boxShadow='';icon.style.color='rgba(52,211,153,0.3)';}
+    });
+  },2200);
+}
 
 // ── WIDGETS ──
 function setWeather(d){
@@ -1058,31 +1258,26 @@ function handleMic(){
 // ── FINEX ──
 let finexHistory=[], finexTyping=false, finexActive=false, finexNewsExp={}, finexNewsStories=[];
 
-// ── Toggle between JARVIS and FinEx layouts ──
+// ── Toggle FinEx fullscreen overlay ──
 function toggleFinEx(){
   finexActive=!finexActive;
   const main=document.querySelector('.layout');
+  const topbar=document.querySelector('.topbar');
   const fx=document.getElementById('finex-layout');
   const btn=document.getElementById('finex-btn');
-  const logo=document.querySelector('.logo');
-  const sub=document.querySelector('.tsub');
   if(finexActive){
-    main.style.display='none';
+    // FinEx covers everything — hide main layout and JARVIS topbar
+    if(main)main.style.display='none';
+    if(topbar)topbar.style.display='none';
     fx.style.display='grid';
-    btn.style.background='rgba(52,211,153,0.15)';
-    btn.style.boxShadow='0 0 12px rgba(52,211,153,0.25)';
-    btn.textContent='✕ JARVIS';
-    if(logo)logo.textContent='Jarvis FinEx';
-    if(sub)sub.textContent='FINANCIAL STATEMENT EXPERT · LIVE MARKETS';
+    if(btn){btn.style.background='rgba(52,211,153,0.15)';btn.style.boxShadow='0 0 12px rgba(52,211,153,0.25)';}
     loadFinExSidebar();
+    loadFinExCompanies();
   } else {
-    main.style.display='grid';
     fx.style.display='none';
-    btn.style.background='';
-    btn.style.boxShadow='';
-    btn.textContent='💹 Jarvis FinEx';
-    if(logo)logo.textContent='J.A.R.V.I.S';
-    if(sub)sub.textContent='MULTI-AGENT AI EXECUTIVE ASSISTANT';
+    if(main)main.style.display='grid';
+    if(topbar)topbar.style.display='';
+    if(btn){btn.style.background='';btn.style.boxShadow='';btn.textContent='💹 Jarvis FinEx';}
   }
 }
 
@@ -1165,6 +1360,14 @@ async function loadFinExMiniNews(){
   }catch(e){console.warn('FinEx mini-news error:',e);}
 }
 
+async function loadFinExCompanies(){
+  try{
+    const r=await fetch(`${API}/finex/companies`);
+    const d=await r.json();
+    if(d.success&&d.companies) fxRenderCompanies(d.companies);
+  }catch(e){console.warn('FinEx companies error:',e);}
+}
+
 // ── Load all FinEx sidebar data ──
 async function loadFinExSidebar(){
   try{
@@ -1203,10 +1406,12 @@ function finexShowTyping(){
   w.style.cssText='align-self:flex-start';
   w.innerHTML='<div class="typing" style="border-color:rgba(52,211,153,0.2)"><div class="td" style="background:rgba(52,211,153,0.8)"></div><div class="td" style="background:rgba(52,211,153,0.8)"></div><div class="td" style="background:rgba(52,211,153,0.8)"></div></div>';
   msgs.appendChild(w);msgs.scrollTop=msgs.scrollHeight;
+  finexPipelineStart();
 }
 
 function finexHideTyping(){
   finexTyping=false;const tw=document.getElementById('finex-tw');if(tw)tw.remove();
+  finexPipelineDone();
 }
 
 async function finexSend(){
@@ -1236,8 +1441,9 @@ async function finexUpload(input){
   status.textContent='Extracting...';status.style.color='rgba(251,191,36,0.8)';
   try{
     const fd=new FormData();fd.append('file',file);fd.append('company',company);
-    const r=await fetch(`${API}/finex/upload?company=${encodeURIComponent(company)}`,{method:'POST',body:fd});
-    const d=await r.json();
+    const r=await fetch(`${API}/finex/upload`,{method:'POST',body:fd});
+    const raw=await r.text();let d;try{d=JSON.parse(raw);}catch(_){d={success:false,error:`HTTP ${r.status}: ${raw.slice(0,200)}`};}
+    if(!r.ok&&d.success===undefined)d={success:false,error:`HTTP ${r.status}: ${(d.detail&&JSON.stringify(d.detail))||raw.slice(0,200)}`};
     if(d.success){
       status.textContent=`✓ ${d.fields_extracted} fields extracted`;
       status.style.color='rgba(52,211,153,0.8)';
@@ -1250,6 +1456,342 @@ async function finexUpload(input){
   }catch(e){status.textContent='Error';status.style.color='rgba(248,113,113,0.8)';}
   input.value='';
 }
+
+// ── PDF UPLOAD MODAL ─────────────────────────────────────────────────────────
+let _pdfModalFile=null;
+
+function openPdfModal(){
+  _pdfModalFile=null;
+  const m=document.getElementById('pdf-modal');
+  if(m){
+    // reset state
+    document.getElementById('pm-company').value='';
+    document.getElementById('pm-filename').textContent='No file selected';
+    document.getElementById('pm-file-inp').value='';
+    _pmSetStep(0);
+    _pmSetResult(null);
+    m.style.display='flex';
+    // animate in
+    requestAnimationFrame(()=>{m.querySelector('.pm-card').style.opacity='1';m.querySelector('.pm-card').style.transform='translateY(0)';});
+  }
+}
+
+function closePdfModal(){
+  const m=document.getElementById('pdf-modal');
+  if(m){
+    const card=m.querySelector('.pm-card');
+    card.style.opacity='0';card.style.transform='translateY(20px)';
+    setTimeout(()=>{m.style.display='none'; _pmProgressReset();},220);
+  }
+}
+
+function _pmSetStep(idx){
+  // idx: 0=idle, 1=reading, 2=extracting, 3=storing, 4=done
+  const steps=['pm-s1','pm-s2','pm-s3','pm-s4'];
+  steps.forEach((id,i)=>{
+    const el=document.getElementById(id);if(!el)return;
+    if(i<idx){el.className='pm-step done';}
+    else if(i===idx){el.className='pm-step active';}
+    else{el.className='pm-step';}
+  });
+}
+
+function _pmSetResult(data){
+  const res=document.getElementById('pm-result');
+  const err=document.getElementById('pm-error');
+  const btn=document.getElementById('pm-upload-btn');
+  if(!data){res.style.display='none';err.style.display='none';if(btn)btn.disabled=false;return;}
+  if(data.success){
+    err.style.display='none';
+    res.innerHTML=`
+      <div style="color:#34d399;font-size:13px;font-weight:700;margin-bottom:10px">✓ Extraction Complete</div>
+      <div class="pm-row"><span class="pm-lbl">Company</span><span class="pm-val">${data.company||'—'}</span></div>
+      <div class="pm-row"><span class="pm-lbl">Period</span><span class="pm-val">${data.period||'—'}</span></div>
+      <div class="pm-row"><span class="pm-lbl">Fields extracted</span><span class="pm-val" style="color:#34d399">${data.fields_extracted||0}</span></div>
+      <div class="pm-row"><span class="pm-lbl">Prior year</span><span class="pm-val">${data.prior_year_extracted?'✓ Included':'—'}</span></div>
+      <div class="pm-row"><span class="pm-lbl">Validation</span><span class="pm-val">${data.validation?.checks_passed||0} passed${(data.validation?.checks_failed||0)>0?' · <span style="color:#f87171">⚠ '+(data.validation.checks_failed)+' failed</span>':' · all clear'}</span></div>
+      ${(data.validation?.warnings||[]).length?`<div style="margin-top:8px;font-size:9px;color:rgba(251,191,36,0.8);font-family:var(--mono)">${data.validation.warnings.join('<br>')}</div>`:''}
+    `;
+    res.style.display='block';
+    if(btn)btn.disabled=true;
+    // sync company select
+    const sel=document.getElementById('finex-company');
+    if(sel&&data.company){sel.value=data.company;}
+    loadFinExCompanies();
+    _pmSetStep(4);
+  } else {
+    res.style.display='none';
+    const errMsg=data.error||data.message||'Unknown error — check server logs';
+    const trace=data.traceback||'';
+    err.innerHTML=`
+      <div style="color:#f87171;font-size:12px;font-weight:700;margin-bottom:8px">✗ Upload Failed</div>
+      <div style="font-family:var(--mono);font-size:10px;color:rgba(248,113,113,0.9);background:rgba(248,113,113,0.06);border:1px solid rgba(248,113,113,0.2);border-radius:6px;padding:10px;word-break:break-all;white-space:pre-wrap">${errMsg}</div>
+      ${trace?`<details style="margin-top:8px"><summary style="font-family:var(--mono);font-size:9px;color:rgba(248,113,113,0.5);cursor:pointer">Stack trace</summary><pre style="font-size:8px;color:rgba(248,113,113,0.4);overflow:auto;max-height:120px;margin:6px 0 0">${trace}</pre></details>`:''}
+    `;
+    err.style.display='block';
+    if(btn)btn.disabled=false;
+  }
+}
+
+function pmPickFile(){
+  document.getElementById('pm-file-inp').click();
+}
+
+function pmFileChosen(inp){
+  const f=inp.files[0];if(!f)return;
+  _pdfModalFile=f;
+  document.getElementById('pm-filename').textContent=f.name;
+  document.getElementById('pm-filename').style.color='#34d399';
+}
+
+// ── Progress bar helpers ────────────────────────────────────────────────────
+let _pmBarTarget = 0;
+let _pmBarActual = 0;
+let _pmBarTimer  = null;
+let _pmElapsed   = 0;
+let _pmElapsedTimer = null;
+
+function _pmProgressStart(){
+  document.getElementById('pm-progress-wrap').style.display='block';
+  document.getElementById('pm-steps-idle').style.display='none';
+  _pmBarActual = 0; _pmBarTarget = 0;
+  document.getElementById('pm-bar').style.width='0%';
+  document.getElementById('pm-bar').style.background='linear-gradient(90deg,#34d399,#6ee7b7)';
+  // elapsed timer
+  _pmElapsed = 0;
+  document.getElementById('pm-elapsed').textContent='0s';
+  _pmElapsedTimer = setInterval(()=>{
+    _pmElapsed++;
+    document.getElementById('pm-elapsed').textContent=`${_pmElapsed}s`;
+  },1000);
+  // smooth bar animation toward target
+  _pmBarTimer = setInterval(()=>{
+    if(_pmBarActual < _pmBarTarget){
+      // ease toward target — slows as it approaches
+      _pmBarActual += (_pmBarTarget - _pmBarActual) * 0.06 + 0.05;
+      if(_pmBarActual > _pmBarTarget) _pmBarActual = _pmBarTarget;
+      document.getElementById('pm-bar').style.width = Math.min(_pmBarActual,100).toFixed(1)+'%';
+    }
+  },40);
+}
+
+function _pmProgressSet(pct, label, sub){
+  _pmBarTarget = pct;
+  if(label) document.getElementById('pm-stage-label').textContent = label;
+  if(sub)   document.getElementById('pm-substatus').textContent   = sub;
+}
+
+function _pmProgressDone(success){
+  clearInterval(_pmBarTimer);
+  clearInterval(_pmElapsedTimer);
+  _pmBarActual = 100; _pmBarTarget = 100;
+  const bar = document.getElementById('pm-bar');
+  bar.style.transition='width 0.3s ease';
+  bar.style.width='100%';
+  if(success){
+    bar.style.background='linear-gradient(90deg,#34d399,#6ee7b7)';
+    bar.style.boxShadow='0 0 14px rgba(52,211,153,0.7)';
+    _pmProgressSet(100,'✓ Complete',`Finished in ${_pmElapsed}s`);
+    document.getElementById('pm-stage-label').style.color='#34d399';
+  } else {
+    bar.style.background='linear-gradient(90deg,#f87171,#fca5a5)';
+    bar.style.boxShadow='0 0 14px rgba(248,113,113,0.5)';
+    _pmProgressSet(100,'✗ Failed','See error below');
+    document.getElementById('pm-stage-label').style.color='#f87171';
+    document.getElementById('pm-elapsed').style.color='#f87171';
+  }
+}
+
+function _pmProgressReset(){
+  clearInterval(_pmBarTimer);
+  clearInterval(_pmElapsedTimer);
+  document.getElementById('pm-progress-wrap').style.display='none';
+  document.getElementById('pm-steps-idle').style.display='flex';
+  document.getElementById('pm-stage-label').style.color='#34d399';
+  document.getElementById('pm-elapsed').style.color='var(--tx3)';
+}
+
+async function pmUpload(){
+  if(!_pdfModalFile){alert('Please select a PDF file first.');return;}
+  const company=(document.getElementById('pm-company').value||'').trim();
+  if(!company){alert('Please enter a company name.');return;}
+  const btn=document.getElementById('pm-upload-btn');
+  btn.disabled=true;
+  btn.textContent='⏳ PROCESSING…';
+  _pmSetResult(null);
+  _pmProgressStart();
+
+  // Stage 1 — reading (instant)
+  _pmProgressSet(8,'Reading PDF…','Sending file to server…');
+  _pmSetStep(0);
+  await new Promise(r=>setTimeout(r,150));
+
+  // Stage 2 — extracting (this is the slow part — animate toward 85% asymptotically)
+  _pmProgressSet(20,'Extracting financials…','Running table detection — Stage 1 of 3…');
+  _pmSetStep(1);
+
+  // Gradually update substatus messages while the fetch runs
+  const extractMsgs=[
+    [4000,  72, 'Running text/regex fallback — Stage 2 of 3…'],
+    [10000, 80, 'Checking for LLM gap-fill — Stage 3 of 3…'],
+    [18000, 85, 'Deriving ratios and validating…'],
+    [26000, 87, 'Large PDF — still extracting tables…'],
+    [50000, 88, 'Processing 100+ pages — almost there…'],
+    [90000, 89, 'Nearly done — running final validation…'],
+    [150000,90, 'Complex report — wrapping up extraction…'],
+    [210000,91, 'Final checks — inserting into database soon…'],
+  ];
+  const msgTimers = extractMsgs.map(([delay, pct, msg])=>
+    setTimeout(()=>_pmProgressSet(pct,'Extracting financials…',msg), delay)
+  );
+
+  let data;
+  try{
+    const fd=new FormData();
+    fd.append('file',_pdfModalFile);
+    fd.append('company',company);
+    const r=await fetch(`${API}/finex/upload`,{method:'POST',body:fd});
+    msgTimers.forEach(t=>clearTimeout(t));
+
+    // Stage 3 — storing
+    _pmProgressSet(92,'Storing to database…','Writing records to PostgreSQL…');
+    _pmSetStep(2);
+    await new Promise(r=>setTimeout(r,300));
+
+    const raw=await r.text();
+    try{data=JSON.parse(raw);}catch(_){data={success:false,error:`Server error (HTTP ${r.status}): ${raw.slice(0,300)}`};}
+    if(!r.ok&&data.success===undefined){data={success:false,error:`HTTP ${r.status}: ${(data.detail&&JSON.stringify(data.detail))||raw.slice(0,300)}`};}
+  } catch(e){
+    msgTimers.forEach(t=>clearTimeout(t));
+    data={success:false,error:`Network error: ${e.message||e}`};
+  }
+
+  _pmProgressDone(data.success);
+  _pmSetStep(data.success ? 3 : -1);
+  _pmSetResult(data);
+  btn.disabled=false;
+  btn.textContent='⬆ UPLOAD & EXTRACT';
+
+  // update topbar status
+  if(finexActive){
+    const status=document.getElementById('finex-upload-status');
+    if(status){
+      if(data.success){
+        status.textContent=`✓ ${data.fields_extracted} fields extracted`;
+        status.style.color='rgba(52,211,153,0.8)';
+        finexAddMsg('finex',`PDF processed: ${data.company} ${data.period}\n${data.fields_extracted} financial fields extracted. ${data.prior_year_extracted?'Prior year data included.':''}\nValidation: ${data.validation?.checks_passed||0} checks passed.${(data.validation?.checks_failed||0)>0?' ⚠ '+data.validation.checks_failed+' checks failed.':''}\n\nYou can now ask me about the financial statements.`);
+      } else {
+        status.textContent='Extraction failed';
+        status.style.color='rgba(248,113,113,0.8)';
+      }
+    }
+  }
+  if(data.success) loadFinExCompanies();
+}
+
+// drag-and-drop support on the modal dropzone
+function pmDragOver(e){e.preventDefault();document.getElementById('pm-dropzone').style.borderColor='#34d399';}
+function pmDragLeave(){document.getElementById('pm-dropzone').style.borderColor='rgba(52,211,153,0.2)';}
+function pmDrop(e){
+  e.preventDefault();
+  pmDragLeave();
+  const f=e.dataTransfer.files[0];
+  if(!f||!f.name.endsWith('.pdf'))return;
+  _pdfModalFile=f;
+  const fn=document.getElementById('pm-filename');
+  fn.textContent=f.name;fn.style.color='#34d399';
+}
 </script>
+
+<!-- ── PDF UPLOAD MODAL ─────────────────────────────────────────────────────── -->
+<div id="pdf-modal" style="display:none;position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,0.75);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);align-items:center;justify-content:center;padding:20px">
+  <div class="pm-card" style="width:100%;max-width:520px;background:rgba(3,12,6,0.98);border:1px solid rgba(52,211,153,0.25);border-radius:16px;box-shadow:0 0 80px rgba(52,211,153,0.12),0 32px 64px rgba(0,0,0,0.6);padding:28px 32px;opacity:0;transform:translateY(20px);transition:opacity 0.22s ease,transform 0.22s ease">
+
+    <!-- Header -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px">
+      <div style="display:flex;align-items:center;gap:12px">
+        <div style="width:36px;height:36px;border-radius:10px;background:rgba(52,211,153,0.1);border:1px solid rgba(52,211,153,0.25);display:flex;align-items:center;justify-content:center;font-size:18px">💹</div>
+        <div>
+          <div style="font-family:var(--mono);font-size:13px;font-weight:700;letter-spacing:0.12em;color:#34d399">UPLOAD FINANCIAL REPORT</div>
+          <div style="font-family:var(--mono);font-size:9px;color:var(--tx3);margin-top:2px;letter-spacing:0.08em">Jarvis FinEx · PDF Analysis Engine</div>
+        </div>
+      </div>
+      <button onclick="closePdfModal()" style="width:28px;height:28px;border-radius:50%;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);color:var(--tx2);font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all 0.15s" onmouseenter="this.style.background='rgba(248,113,113,0.15)';this.style.borderColor='rgba(248,113,113,0.3)';this.style.color='#f87171'" onmouseleave="this.style.background='rgba(255,255,255,0.04)';this.style.borderColor='rgba(255,255,255,0.08)';this.style.color='var(--tx2)'">✕</button>
+    </div>
+
+    <!-- Company input -->
+    <div style="margin-bottom:16px">
+      <label style="font-family:var(--mono);font-size:9px;letter-spacing:0.1em;color:var(--tx3);display:block;margin-bottom:6px">COMPANY NAME <span style="color:rgba(52,211,153,0.5)">(how it will be saved in the database)</span></label>
+      <input id="pm-company" type="text" placeholder="Enter company name to save in DB…" style="width:100%;box-sizing:border-box;font-family:var(--mono);font-size:12px;background:rgba(52,211,153,0.04);border:1px solid rgba(52,211,153,0.2);border-radius:8px;color:#e2e8f0;padding:10px 14px;outline:none;transition:border-color 0.2s" onfocus="this.style.borderColor='#34d399'" onblur="this.style.borderColor='rgba(52,211,153,0.2)'" value="">
+    </div>
+
+    <!-- Drop zone -->
+    <div id="pm-dropzone" onclick="pmPickFile()" ondragover="pmDragOver(event)" ondragleave="pmDragLeave()" ondrop="pmDrop(event)"
+      style="border:2px dashed rgba(52,211,153,0.2);border-radius:12px;padding:28px 20px;text-align:center;cursor:pointer;transition:all 0.2s;margin-bottom:16px;background:rgba(52,211,153,0.02)"
+      onmouseenter="this.style.borderColor='rgba(52,211,153,0.5)';this.style.background='rgba(52,211,153,0.05)'"
+      onmouseleave="this.style.borderColor='rgba(52,211,153,0.2)';this.style.background='rgba(52,211,153,0.02)'">
+      <input id="pm-file-inp" type="file" accept=".pdf" style="display:none" onchange="pmFileChosen(this)">
+      <div style="font-size:32px;margin-bottom:10px">📄</div>
+      <div style="font-family:var(--mono);font-size:11px;color:rgba(52,211,153,0.8);margin-bottom:6px">Drop PDF here or click to browse</div>
+      <div style="font-family:var(--mono);font-size:9px;color:var(--tx3)">Annual Report · Quarterly Results · Financial Statements</div>
+      <div id="pm-filename" style="margin-top:12px;font-family:var(--mono);font-size:10px;color:var(--tx3)">No file selected</div>
+    </div>
+
+    <!-- Progress bar -->
+    <div id="pm-progress-wrap" style="display:none;margin-bottom:20px">
+      <!-- Stage labels -->
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <span id="pm-stage-label" style="font-family:var(--mono);font-size:10px;color:#34d399;letter-spacing:0.08em">Reading PDF…</span>
+        <span id="pm-elapsed" style="font-family:var(--mono);font-size:9px;color:var(--tx3)">0s</span>
+      </div>
+      <!-- Bar track -->
+      <div style="width:100%;height:6px;background:rgba(52,211,153,0.08);border-radius:99px;overflow:hidden;border:1px solid rgba(52,211,153,0.12)">
+        <div id="pm-bar" style="height:100%;width:0%;border-radius:99px;background:linear-gradient(90deg,#34d399,#6ee7b7);box-shadow:0 0 10px rgba(52,211,153,0.5);transition:width 0.4s ease;position:relative">
+          <!-- shimmer -->
+          <div style="position:absolute;inset:0;background:linear-gradient(90deg,transparent 0%,rgba(255,255,255,0.3) 50%,transparent 100%);animation:pm-shimmer 1.4s infinite"></div>
+        </div>
+      </div>
+      <!-- Sub-status -->
+      <div id="pm-substatus" style="font-family:var(--mono);font-size:9px;color:var(--tx3);margin-top:6px;letter-spacing:0.05em">Sending file to server…</div>
+    </div>
+    <!-- Static step dots (hidden during upload, shown when idle) -->
+    <div id="pm-steps-idle" style="display:flex;gap:8px;margin-bottom:20px">
+      <div id="pm-s1" class="pm-step"><span class="pm-step-dot"></span><span class="pm-step-lbl">Reading</span></div>
+      <div style="flex:1;height:1px;background:rgba(52,211,153,0.12);align-self:center;margin-top:-12px"></div>
+      <div id="pm-s2" class="pm-step"><span class="pm-step-dot"></span><span class="pm-step-lbl">Extracting</span></div>
+      <div style="flex:1;height:1px;background:rgba(52,211,153,0.12);align-self:center;margin-top:-12px"></div>
+      <div id="pm-s3" class="pm-step"><span class="pm-step-dot"></span><span class="pm-step-lbl">Storing</span></div>
+      <div style="flex:1;height:1px;background:rgba(52,211,153,0.12);align-self:center;margin-top:-12px"></div>
+      <div id="pm-s4" class="pm-step"><span class="pm-step-dot"></span><span class="pm-step-lbl">Done</span></div>
+    </div>
+
+    <!-- Result area -->
+    <div id="pm-result" style="display:none;background:rgba(52,211,153,0.04);border:1px solid rgba(52,211,153,0.15);border-radius:10px;padding:16px;margin-bottom:16px;font-family:var(--mono);font-size:11px"></div>
+    <div id="pm-error" style="display:none;margin-bottom:16px"></div>
+
+    <!-- Action buttons -->
+    <div style="display:flex;gap:10px">
+      <button id="pm-upload-btn" onclick="pmUpload()" style="flex:1;font-family:var(--mono);font-size:11px;font-weight:700;letter-spacing:0.1em;color:#030c06;background:linear-gradient(135deg,#34d399,#6ee7b7);border:none;border-radius:8px;padding:12px;cursor:pointer;transition:all 0.2s" onmouseenter="this.style.opacity='0.9'" onmouseleave="this.style.opacity='1'">⬆ UPLOAD &amp; EXTRACT</button>
+      <button onclick="closePdfModal()" style="font-family:var(--mono);font-size:11px;letter-spacing:0.08em;color:var(--tx2);background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:12px 20px;cursor:pointer;transition:all 0.2s" onmouseenter="this.style.background='rgba(255,255,255,0.08)'" onmouseleave="this.style.background='rgba(255,255,255,0.04)'">CLOSE</button>
+    </div>
+  </div>
+</div>
+
+<style>
+/* PDF upload modal step indicators */
+.pm-step{display:flex;flex-direction:column;align-items:center;gap:4px;min-width:52px;}
+.pm-step-dot{width:10px;height:10px;border-radius:50%;border:1.5px solid rgba(52,211,153,0.2);background:transparent;transition:all 0.3s;}
+.pm-step-lbl{font-family:var(--mono);font-size:8px;color:var(--tx3);letter-spacing:0.06em;transition:color 0.3s;}
+.pm-step.active .pm-step-dot{border-color:#34d399;background:rgba(52,211,153,0.3);box-shadow:0 0 8px rgba(52,211,153,0.5);}
+.pm-step.active .pm-step-lbl{color:#34d399;}
+.pm-step.done .pm-step-dot{border-color:#34d399;background:#34d399;box-shadow:0 0 6px rgba(52,211,153,0.4);}
+.pm-step.done .pm-step-lbl{color:rgba(52,211,153,0.7);}
+/* Result rows */
+.pm-row{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid rgba(52,211,153,0.06);}
+.pm-lbl{font-size:9px;color:var(--tx3);letter-spacing:0.06em;}
+.pm-val{font-size:10px;color:var(--tx1);}
+/* Progress bar shimmer */
+@keyframes pm-shimmer{0%{transform:translateX(-100%)}100%{transform:translateX(200%)}}
+</style>
 </body>
 </html>

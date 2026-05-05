@@ -165,6 +165,7 @@ class RouterDecision:
     supporting_agents: List[AgentRole]
     confidence: float
     reasoning: str
+    tier: int = 3  # 1=tool-only, 2=simple LLM, 3=full pipeline
 
 
 @dataclass

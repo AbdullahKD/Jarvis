@@ -200,7 +200,7 @@ class JarvisOrchestrator:
                 msgs = [{"role": "user", "content": user_content}]
 
                 t0 = time.time()
-                llm_response = await self.llm.chat(msgs, max_tokens=200)
+                llm_response = await self.llm.chat(msgs, max_tokens=512)
                 _t("llm_single_call", t0)
 
                 total_ms = (time.time() - start_time) * 1000
@@ -394,7 +394,7 @@ class JarvisOrchestrator:
 
                 full_text = ""
                 t0 = time.time()
-                async for chunk in self.llm.chat_stream(msgs, model=model, max_tokens=200):
+                async for chunk in self.llm.chat_stream(msgs, model=model, max_tokens=512):
                     full_text += chunk
                     yield {"type": "chunk", "text": chunk}
                 _t("llm_stream", t0)
@@ -1150,19 +1150,22 @@ class JarvisOrchestrator:
             return JarvisResponse(success=True, message=msg, latency_ms=(_tedit.time()-_sedit)*1000)
 
 
+        # ── Multi-query — handle compound requests before the full briefing ─────
+        # e.g. "what's the weather and latest news and premier league scores?"
+        intents = self.briefing.detect_intents(user_request)
+        if len(intents) >= 2 and not self.briefing.is_morning_briefing(user_request):
+            import time as _tmq
+            _smq = _tmq.time()
+            multi_msg = await self._handle_multi_query(user_request, intents)
+            if multi_msg:
+                return JarvisResponse(success=True, message=multi_msg, latency_ms=(_tmq.time()-_smq)*1000)
+
         # ── Morning Briefing ──────────────────────────────────────────────────
         if self.briefing.is_morning_briefing(user_request):
             import time as _tbf
             _sbf = _tbf.time()
             msg = await self._morning_briefing()
             return JarvisResponse(success=True, message=msg, latency_ms=(_tbf.time()-_sbf)*1000)
-            intents = self.briefing.detect_intents(user_request)
-            if len(intents) >= 2:
-                import time as _tmq
-                _smq = _tmq.time()
-                msg = await self._handle_multi_query(user_request, intents)
-                if msg:
-                    return JarvisResponse(success=True, message=msg, latency_ms=(_tmq.time()-_smq)*1000)
 
         # ── File Manager — confirmation flow ──────────────────────────────────
         import time as _tfile
@@ -1654,6 +1657,24 @@ class JarvisOrchestrator:
             msg = f"Notification sent: {message}" if result.get("success") else "Could not send notification."
             return JarvisResponse(success=result.get("success", False), message=msg, latency_ms=(_tn.time()-_sn)*1000)
 
+        # Quit / close app
+        quit_match = _rem.search(r'(?:quit|close|kill|exit)\s+([a-zA-Z][a-zA-Z0-9\s]+)', user_request, _rem.IGNORECASE)
+        if quit_match:
+            import time as _tq
+            _sq = _tq.time()
+            app_aliases_q = {
+                "chrome": "Google Chrome", "safari": "Safari",
+                "spotify": "Spotify", "vscode": "Visual Studio Code",
+                "vs code": "Visual Studio Code", "slack": "Slack",
+                "zoom": "Zoom", "discord": "Discord", "mail": "Mail",
+                "terminal": "Terminal", "finder": "Finder",
+            }
+            raw_app = quit_match.group(1).strip().lower()
+            app_q = app_aliases_q.get(raw_app, quit_match.group(1).strip().title())
+            result = await self.mac.quit_app(app_q)
+            msg = f"Closed {app_q}." if result.get("success") else f"Could not close {app_q}: {result.get('error')}"
+            return JarvisResponse(success=result.get("success", False), message=msg, latency_ms=(_tq.time()-_sq)*1000)
+
         # ── Information tool shortcuts ─────────────────────────────────────
 
         # ── Search / Research — router-driven, no keyword list needed ──────
@@ -1784,18 +1805,6 @@ class JarvisOrchestrator:
 
             asyncio.ensure_future(self.memory.store_task_result(user_request, "web_search", True, msg[:100]))
             return JarvisResponse(success=True, message=msg, latency_ms=(_tws.time()-_sws)*1000)
-            app_aliases_q = {
-                "chrome": "Google Chrome", "safari": "Safari",
-                "spotify": "Spotify", "vscode": "Visual Studio Code",
-                "vs code": "Visual Studio Code", "slack": "Slack",
-                "zoom": "Zoom", "discord": "Discord", "mail": "Mail",
-                "terminal": "Terminal", "finder": "Finder",
-            }
-            raw_app = quit_match.group(1).strip().lower()
-            app_q = app_aliases_q.get(raw_app, quit_match.group(1).strip().title())
-            result = await self.mac.quit_app(app_q)
-            msg = f"Closed {app_q}." if result.get("success") else f"Could not close {app_q}: {result.get('error')}"
-            return JarvisResponse(success=result.get("success", False), message=msg, latency_ms=(_tq.time()-_sq)*1000)
 
         # Volume up/down
         vol_up = any(kw in req_lower for kw in ["volume up", "turn up", "louder", "increase volume", "raise volume"])
@@ -1803,7 +1812,7 @@ class JarvisOrchestrator:
         if vol_up or vol_down:
             import time as _tvd
             _svd = _tvd.time()
-            amount_match = _remac.search(r'(\d+)', req_lower)
+            amount_match = _rem.search(r'(\d+)', req_lower)
             amount = int(amount_match.group(1)) if amount_match else 10
             result = await self.mac.adjust_volume("up" if vol_up else "down", amount)
             direction = "up" if vol_up else "down"
@@ -2052,6 +2061,13 @@ class JarvisOrchestrator:
             for n in noise:
                 title = _ret.sub(r"\b" + n + r"\b", "", title, flags=_ret.IGNORECASE).strip()
             title = title.strip(". ").title() or "Meeting"
+
+            # Extract attendees — "with John and Sarah", "with john@email.com"
+            attendees = []
+            attendee_match = _recal.search(
+                r'\bwith\s+([\w\s,]+?)(?:\s+(?:on|at|for|today|tomorrow|next|about|at\s+\d)|$)',
+                user_request, _recal.IGNORECASE
+            )
             if attendee_match:
                 names = attendee_match.group(1).strip()
                 for name in _recal.split(r'[,\s]+(?:and\s+)?', names):
@@ -2077,7 +2093,6 @@ class JarvisOrchestrator:
 
             start_fmt = start_time[:16].replace("T", " at ")
             attendee_str = f" with {', '.join(attendees)}" if attendees else ""
-            attendee_str = f" with {", ".join(attendees)}" if attendees else ""
             msg = (
                 f"I will schedule {title!r}{attendee_str} on {start_fmt}. "
                 "How long should the meeting be? (e.g. 30 minutes, 1 hour, 45 minutes)"

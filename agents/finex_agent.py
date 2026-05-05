@@ -117,33 +117,66 @@ class FinExAgent:
         _, store_pdf_text, invalidate_cache, _ = _import_engine()
 
         def _run():
-            result = extract_fn(pdf_path)
-            current = result["current"]
-            prior = result["prior"]
-            meta = result["metadata"]
-            raw_text = result["raw_text"]
+            try:
+                result = extract_fn(pdf_path)
+            except Exception as exc:
+                import traceback
+                return {"success": False, "error": f"PDF extraction failed: {exc}", "traceback": traceback.format_exc()}
+
+            current = result.get("current", {})
+            prior = result.get("prior", {})
+            meta = result.get("metadata", {})
+            raw_text = result.get("raw_text", "")
 
             if not current:
-                return {"success": False, "error": "No financial data could be extracted"}
+                return {"success": False, "error": "No financial data could be extracted from this PDF. Ensure it contains a P&L, Balance Sheet, or Cash Flow statement."}
 
             import os as _os
-            store_pdf_text(company, raw_text, filename=_os.path.basename(pdf_path))
-            invalidate_cache(company)
+            try:
+                store_pdf_text(company, raw_text, filename=_os.path.basename(pdf_path))
+                invalidate_cache(company)
+            except Exception as exc:
+                pass  # non-fatal — data still inserted into Postgres
 
             period_str = meta.get("period_current") or "31 December 2025"
             year_match = re.search(r"\d{4}", period_str)
             year = int(year_match.group()) if year_match else 2025
-            period_label = f"H1 FY{year}"
+            period_label = f"FY{year}"
 
-            insert_fn(current, company=company, year=year, period=period_label)
+            # Currency / unit metadata from extractor
+            currency   = meta.get("currency",   "Unknown")
+            unit_label = meta.get("unit_label",  "millions (assumed)")
+
+            try:
+                insert_fn(
+                    current,
+                    company=company,
+                    year=year,
+                    period=period_label,
+                    currency=currency,
+                    unit_label=unit_label,
+                )
+            except Exception as exc:
+                import traceback
+                return {"success": False, "error": f"Database insert failed: {exc}", "traceback": traceback.format_exc()}
 
             prior_inserted = False
             if prior:
-                prior_str = meta.get("period_prior") or str(year - 1)
-                pm = re.search(r"\d{4}", prior_str)
-                prior_year = int(pm.group()) if pm else year - 1
-                insert_fn(prior, company=company, year=prior_year, period=f"H1 FY{prior_year}")
-                prior_inserted = True
+                try:
+                    prior_str = meta.get("period_prior") or str(year - 1)
+                    pm = re.search(r"\d{4}", prior_str)
+                    prior_year = int(pm.group()) if pm else year - 1
+                    insert_fn(
+                        prior,
+                        company=company,
+                        year=prior_year,
+                        period=f"FY{prior_year}",
+                        currency=currency,
+                        unit_label=unit_label,
+                    )
+                    prior_inserted = True
+                except Exception:
+                    pass  # prior year insert failing is non-fatal
 
             validation = meta.get("validation", {})
             return {
@@ -159,7 +192,11 @@ class FinExAgent:
                 },
             }
 
-        return await loop.run_in_executor(_executor, _run)
+        try:
+            return await loop.run_in_executor(_executor, _run)
+        except Exception as exc:
+            import traceback
+            return {"success": False, "error": f"Unexpected error: {exc}", "traceback": traceback.format_exc()}
 
     async def list_companies(self) -> Dict[str, Any]:
         """Return all companies and periods stored in the database."""

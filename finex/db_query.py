@@ -1,6 +1,8 @@
 import psycopg2
 from finex.db_insert import get_connection
 
+# Read-only connection — kept in AUTOCOMMIT so it never holds locks
+# that would block DDL (CREATE TABLE / ALTER TABLE) in db_insert.
 _conn = None
 
 MONETARY_COLS = {
@@ -14,41 +16,69 @@ MONETARY_COLS = {
     "dividend_per_share"
 }
 
+_SKIP_COLS = {"id"}
+
+
 def get_conn():
     global _conn
     if _conn is None or _conn.closed:
         _conn = get_connection()
+        # AUTOCOMMIT: reads never open an implicit transaction, so they
+        # never block DDL locks in the writer connection.
+        _conn.set_session(autocommit=True)
     return _conn
 
 
-def run_query(sql: str):
+def _fresh_conn():
+    """One-shot autocommit connection for queries that don't need the cache."""
+    c = get_connection()
+    c.set_session(autocommit=True)
+    return c
+
+
+def run_query(sql: str, params=None):
+    conn = None
     try:
-        conn = get_conn()
+        conn = _fresh_conn()
         cur = conn.cursor()
-        cur.execute(sql)
+        if params:
+            cur.execute(sql, params)
+        else:
+            cur.execute(sql)
         colnames = [desc[0] for desc in cur.description]
         rows = cur.fetchall()
         cur.close()
         return {"columns": colnames, "rows": rows}
     except Exception as e:
-        try:
-            conn.rollback()
-        except Exception:
-            pass
         return {"error": str(e)}
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def get_all_years(company: str = "Bestway Cement") -> list:
-    result = run_query(f"SELECT DISTINCT year FROM financials WHERE company = '{company}' ORDER BY year DESC")
-    if "rows" in result:
-        return [r[0] for r in result["rows"]]
-    return []
+    try:
+        conn = _fresh_conn()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT DISTINCT year FROM financials WHERE company = %s ORDER BY year DESC",
+            (company,)
+        )
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return [r[0] for r in rows]
+    except Exception:
+        return []
 
 
 def get_financial_context(company: str = "Bestway Cement", years: list = None) -> str:
     """
     Returns structured financial data for LLM prompts.
-    All monetary figures are clearly labelled as PKR thousands.
+    Values are stored as absolute currency amounts (raw PDF number × scale_factor).
     """
     if years is None:
         years = get_all_years(company)
@@ -56,43 +86,66 @@ def get_financial_context(company: str = "Bestway Cement", years: list = None) -
     if not years:
         return "No financial data found in database."
 
-    year_filter = "(" + ", ".join(str(y) for y in years) + ")"
-    result = run_query(f"""
-        SELECT * FROM financials
-        WHERE company = '{company}' AND year IN {year_filter}
-        ORDER BY year DESC, period
-    """)
+    try:
+        conn = _fresh_conn()
+        cur = conn.cursor()
+        placeholders = ", ".join(["%s"] * len(years))
+        cur.execute(
+            f"SELECT * FROM financials WHERE company = %s AND year IN ({placeholders}) ORDER BY year DESC, period",
+            [company] + list(years)
+        )
+        colnames = [desc[0] for desc in cur.description]
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        return f"DB error: {e}"
 
-    if "error" in result:
-        return f"DB error: {result['error']}"
+    if not rows:
+        return f"No financial data found for {company}."
 
-    cols = result["columns"]
-    rows = result["rows"]
+    sym_map = {"GBP": "£", "USD": "$", "EUR": "€", "PKR": "PKR",
+               "AED": "AED", "SAR": "SAR"}
 
-    lines = [f"=== Financial Data: {company} (all monetary figures in PKR thousands) ===\n"]
+    lines = [f"=== Financial Data: {company} ===\n"]
 
     for row in rows:
-        record = dict(zip(cols, row))
+        record = dict(zip(colnames, row))
+        currency   = record.get("currency")  or "Unknown"
+        unit_label = record.get("unit_label") or ""
+        sym = sym_map.get(currency, currency if currency != "Unknown" else "")
+
         lines.append(f"--- Period: {record.get('period', record['year'])} ---")
-        for col in cols:
-            if col in ("id",):
+        lines.append(f"  [Source unit: {unit_label or 'unknown'}  |  Stored as: absolute {currency}]")
+
+        for col in colnames:
+            if col in _SKIP_COLS or col in ("currency", "unit_label"):
                 continue
             val = record.get(col)
-            if val is not None:
-                if isinstance(val, float):
-                    if col in MONETARY_COLS:
-                        lines.append(f"  {col}: PKR {val:,.2f} thousand")
+            if val is None:
+                continue
+            if isinstance(val, float):
+                if col in MONETARY_COLS:
+                    if abs(val) >= 1_000_000_000:
+                        human = f"({sym}{val/1_000_000_000:,.2f}bn)"
+                    elif abs(val) >= 1_000_000:
+                        human = f"({sym}{val/1_000_000:,.2f}m)"
+                    elif abs(val) >= 1_000:
+                        human = f"({sym}{val/1_000:,.2f}k)"
                     else:
-                        lines.append(f"  {col}: {val:,.2f}")
+                        human = ""
+                    lines.append(f"  {col}: {sym}{val:,.2f} {human}")
                 else:
-                    lines.append(f"  {col}: {val}")
+                    lines.append(f"  {col}: {val:,.4f}")
+            else:
+                lines.append(f"  {col}: {val}")
+
         lines.append("")
 
     return "\n".join(lines)
 
 
 def format_result(result: dict) -> str:
-    """Format a query result dict into readable text."""
     if "error" in result:
         return f"Error: {result['error']}"
     cols = result["columns"]

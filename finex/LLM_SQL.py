@@ -43,6 +43,8 @@ def get_cached_context(company: str) -> str:
 def invalidate_cache(company: str):
     if company in _context_cache:
         del _context_cache[company]
+    if company in _hr_context_cache:
+        del _hr_context_cache[company]
 
 
 # ── Ollama wrapper (HTTP, not subprocess — saves 3-5s per call) ───────────────
@@ -69,9 +71,9 @@ def ask_llm(prompt: str, system: str = "") -> str:
                 "model": _FINEX_MODEL,
                 "messages": messages,
                 "stream": False,
-                "options": {"temperature": 0.1, "num_predict": 512},
+                "options": {"temperature": 0.1, "num_predict": 512, "num_ctx": 4096},
             },
-            timeout=60,
+            timeout=300,   # 5 min — large models on CPU can be slow
         )
         resp.raise_for_status()
         return resp.json()["message"]["content"].strip()
@@ -79,6 +81,75 @@ def ask_llm(prompt: str, system: str = "") -> str:
         return "[Ollama is not running. Please start Ollama and try again.]"
     except Exception as e:
         return f"[LLM error: {e}]"
+
+
+# ── Human-readable PKR formatter ──────────────────────────────────────────────
+
+_NO_SCALE_FIELDS = {"eps", "dividend_per_share"}
+
+_SYM_MAP = {"GBP": "£", "USD": "$", "EUR": "€", "PKR": "PKR ",
+            "AED": "AED ", "SAR": "SAR "}
+
+
+def _get_company_meta(company: str) -> tuple:
+    """Return (currency, unit_label, symbol) for a company from the DB."""
+    result = run_query(
+        f"SELECT currency, unit_label FROM financials WHERE company = '{company}' LIMIT 1"
+    )
+    if "error" in result or not result.get("rows"):
+        return "Unknown", "millions (assumed)", ""
+    row = result["rows"][0]
+    currency   = row[0] or "Unknown"
+    unit_label = row[1] or "millions (assumed)"
+    sym = _SYM_MAP.get(currency, currency + " ")
+    return currency, unit_label, sym
+
+
+def _fmt_value(val: float, field: str = "", sym: str = "£") -> str:
+    """
+    Format an ABSOLUTE currency value (stored as raw amount, not thousands).
+    EPS / dividend_per_share are per-share — shown as-is.
+    ≥ 1bn  → £X.XXbn
+    ≥ 1m   → £X.XXm
+    ≥ 1k   → £X.XXk
+    else   → £X.XX
+    """
+    if field in _NO_SCALE_FIELDS:
+        return f"{sym}{val:.2f} per share"
+    abs_val = abs(val)
+    sign = "-" if val < 0 else ""
+    if abs_val >= 1_000_000_000:
+        return f"{sign}{sym}{abs_val / 1_000_000_000:.2f}bn"
+    if abs_val >= 1_000_000:
+        return f"{sign}{sym}{abs_val / 1_000_000:.2f}m"
+    if abs_val >= 1_000:
+        return f"{sign}{sym}{abs_val / 1_000:.2f}k"
+    return f"{sign}{sym}{abs_val:,.2f}"
+
+
+def _fmt_pkr(val_thousands: float, field: str = "") -> str:
+    """Legacy PKR formatter — kept for backward compat. Calls _fmt_value with PKR sym."""
+    return _fmt_value(val_thousands, field, sym="PKR ")
+
+
+def _context_human_readable(company: str) -> str:
+    """
+    Build financial context for LLM prompts with human-readable values.
+    Uses the actual currency stored per record (GBP, USD, PKR, etc.).
+    """
+    # get_financial_context from db_query is already currency-aware and formats
+    # values with the correct symbol and scale. Re-use it directly.
+    from finex.db_query import get_financial_context
+    return get_financial_context(company)
+
+
+# Cache for human-readable context
+_hr_context_cache: dict = {}
+
+def get_cached_hr_context(company: str) -> str:
+    if company not in _hr_context_cache:
+        _hr_context_cache[company] = _context_human_readable(company)
+    return _hr_context_cache[company]
 
 
 # ── Fix 2: Hallucination guard ─────────────────────────────────────────────────
@@ -106,13 +177,16 @@ def get_available_fields(company: str, year: int = None) -> dict:
             if v is not None and isinstance(v, float) and k not in ("id",)}
 
 
-def fields_summary(available: dict) -> str:
-    """Format available fields as a clear list for the LLM."""
+def fields_summary(available: dict, sym: str = "£") -> str:
+    """Format available fields as a clear list for the LLM — human-readable scale."""
     if not available:
         return "No financial data available."
-    lines = ["Available data fields (PKR thousands):"]
+    lines = ["Available data fields:"]
     for k, v in available.items():
-        lines.append(f"  {k.replace('_', ' ').title()}: PKR {v:,.0f}")
+        if isinstance(v, float):
+            lines.append(f"  {k.replace('_', ' ').title()}: {_fmt_value(v, k, sym)}")
+        else:
+            lines.append(f"  {k.replace('_', ' ').title()}: {v}")
     return "\n".join(lines)
 
 
@@ -348,17 +422,30 @@ def clean_sql(sql: str) -> str:
 
 # ── System prompt ──────────────────────────────────────────────────────────────
 
-SYSTEM_ANALYST = """You are a financial analyst. Answer directly and concisely.
+_SYSTEM_ANALYST_BASE = """You are a financial analyst. Answer directly and concisely.
 STRICT FORMATTING RULES:
 - Never introduce yourself or mention your role
 - Never start with phrases like "As a financial analyst" or "I conclude that"
 - Never use * or - as bullet points. Use numbered lists (1. 2. 3.) only when listing multiple items
-- Currency is always PKR, never use dollar signs
 - Only use data explicitly provided to you. NEVER fabricate or estimate figures not in the data
 - If a field is not available in the data provided, say clearly "this data is not available"
 - Keep answers to 3-5 lines unless user asks for more detail
 - Lead directly with the answer, no preamble
-- All monetary figures are in PKR thousands unless stated otherwise"""
+- SCALE: data values are pre-converted to human-readable scale (bn/m/k). Report them EXACTLY as given — e.g. if data says "£29.36bn" say "£29.36bn", not "29,362 million"
+- EPS and dividend per share are per-share values"""
+
+def _system_prompt(currency: str = "Unknown", unit_label: str = "") -> str:
+    """Build a currency-aware system prompt."""
+    sym = _SYM_MAP.get(currency, currency + " " if currency != "Unknown" else "")
+    currency_line = (
+        f"- Currency for this company is {currency} ({sym.strip()}). Use {sym.strip()} symbol in all monetary values."
+        if currency != "Unknown"
+        else "- Use the currency symbol shown in the data."
+    )
+    return _SYSTEM_ANALYST_BASE + "\n" + currency_line
+
+# Keep a default for backward compat
+SYSTEM_ANALYST = _system_prompt()
 
 
 # ── Level handlers ─────────────────────────────────────────────────────────────
@@ -367,6 +454,9 @@ def handle_l1(question: str, company: str, history: str = "") -> str:
     years = get_all_years(company)
     if not years:
         return "No data found for this company."
+
+    currency, unit_label, sym = _get_company_meta(company)
+    sys_prompt = _system_prompt(currency, unit_label)
 
     year_match = re.search(r"\b(20\d{2})\b", question)
     target_year = int(year_match.group(1)) if year_match else years[0]
@@ -385,15 +475,11 @@ def handle_l1(question: str, company: str, history: str = "") -> str:
     row = result["rows"][0]
     record = dict(zip(cols, row))
 
-    # Fix 1: enrich with derived fields
     enriched = enrich_with_derived(record)
-
-    year = enriched.get("year", target_year)
+    year   = enriched.get("year", target_year)
     period = enriched.get("period", f"FY {year}")
 
-    # Fix 2: only show fields that have actual data
     available = get_available_fields(company, target_year)
-    # Add derived fields to available
     for f, formula in DERIVED_FIELDS.items():
         if f not in available:
             derived = formula(record)
@@ -403,9 +489,12 @@ def handle_l1(question: str, company: str, history: str = "") -> str:
     if not available:
         return "No financial data found for this period."
 
-    data_lines = [f"{company} — {period} (PKR thousands):"]
+    data_lines = [f"{company} — {period} [{unit_label}]:"]
     for col, val in available.items():
-        data_lines.append(f"  {col.replace('_', ' ').title()}: PKR {val:,.0f}")
+        if isinstance(val, float):
+            data_lines.append(f"  {col.replace('_', ' ').title()}: {_fmt_value(val, col, sym)}")
+        else:
+            data_lines.append(f"  {col.replace('_', ' ').title()}: {val}")
 
     data_text = "\n".join(data_lines)
 
@@ -414,17 +503,18 @@ def handle_l1(question: str, company: str, history: str = "") -> str:
 Question: {question}
 
 Answer in exactly 1 sentence using only the figures shown above.
-State the value in PKR thousands and specify the period.
+State the value exactly as shown (e.g. "{sym.strip()}29.36bn") and specify the period.
 If the exact figure is not listed above, say it is not available — do not guess."""
 
-    return ask_llm(prompt, system=SYSTEM_ANALYST)
+    return ask_llm(prompt, system=sys_prompt)
 
 
 def handle_l2(question: str, company: str, history: str = "") -> str:
-    # Fix 3: fetch all years directly — no LLM SQL generation
     years = get_all_years(company)
     if not years:
         return "No financial data found."
+    currency, unit_label, sym = _get_company_meta(company)
+    sys_prompt = _system_prompt(currency, unit_label)
 
     year_filter = "(" + ", ".join(str(y) for y in years) + ")"
     result = run_query(f"""
@@ -441,29 +531,52 @@ def handle_l2(question: str, company: str, history: str = "") -> str:
     if "error" in result or not result["rows"]:
         return "No comparative data found."
 
-    data_text = format_result(result)
+    from finex.db_query import MONETARY_COLS
+    cols = result["columns"]
+    rows = result["rows"]
+    data_lines = []
+    for row in rows:
+        rec = dict(zip(cols, row))
+        period_label = f"{rec.get('period', rec.get('year', '?'))} ({rec.get('year', '?')})"
+        data_lines.append(f"--- {period_label} ---")
+        for col in cols:
+            if col in ("id", "company"):
+                continue
+            val = rec.get(col)
+            if val is not None:
+                if isinstance(val, float) and col in MONETARY_COLS:
+                    data_lines.append(f"  {col.replace('_',' ').title()}: {_fmt_value(val, col, sym)}")
+                elif isinstance(val, float):
+                    data_lines.append(f"  {col.replace('_',' ').title()}: {val:,.2f}")
+                else:
+                    data_lines.append(f"  {col.replace('_',' ').title()}: {val}")
+        data_lines.append("")
+    data_text = "\n".join(data_lines)
 
-    prompt = f"""Financial data (PKR thousands):
+    prompt = f"""Financial data for {company} (currency: {currency}, symbol: {sym.strip()}):
 {data_text}
 
 Question: {question}
 
 STRICT RULES:
-- Currency is PKR only
+- Use {sym.strip()} as the currency symbol for all monetary values
+- Report values exactly as shown — do not convert units
 - Only reference years present in the data above — never mention years not shown
-- State values for BOTH periods being compared
-- Always calculate and state the percentage change (e.g. increased by 12.3%)
+- If only one year of data is available, state that prior year data is unavailable
+- State values for BOTH periods when comparing; if only one period exists say so
+- Always calculate and state the percentage change (e.g. increased by 12.3%) when two periods available
 - State clearly whether the change is an increase or decrease
 - Answer in 2-3 sentences maximum
 
 End your response with exactly this line: "Need more detail? Just ask." """
 
-    return ask_llm(prompt, system=SYSTEM_ANALYST)
+    return ask_llm(prompt, system=sys_prompt)
 
 
 def handle_l3(question: str, company: str, history: str = "") -> str:
-    # Fix 2 + 7: use cached context + comprehensive formula library
-    context = get_cached_context(company)
+    currency, unit_label, sym = _get_company_meta(company)
+    sys_prompt = _system_prompt(currency, unit_label)
+    context = get_cached_hr_context(company)
 
     # Get available fields for hallucination guard
     years = get_all_years(company)
@@ -477,7 +590,7 @@ def handle_l3(question: str, company: str, history: str = "") -> str:
         if missing:
             available_note = f"\nNote: These fields are NOT available in the data: {', '.join(missing)}"
 
-    prompt = f"""Financial data (all figures in PKR thousands):
+    prompt = f"""Financial data for {company} (values shown in billions/millions/PKR as labelled):
 {context}{available_note}
 
 Question: {question}
@@ -500,24 +613,24 @@ RATIO FORMULAS — use the correct standard formula:
 
 RULES:
 - If a required value is missing from the data, state it clearly — do not estimate
-- All monetary values are in PKR thousands
+- Report monetary values exactly as shown (e.g. "PKR 55.37 billion") — do not convert units
 
 Respond in this exact format:
 Formula: [standard formula used]
 Values: [exact figures from data with periods]
 Calculation: [step by step working]
-Result: [final answer with correct units — % or ratio or PKR thousands]
+Result: [final answer with correct units — % or ratio or PKR value as shown]
 Interpretation: [1 sentence in context of this company]
 
 End your response with exactly this line: "Need more detail? Just ask." """
 
-    return ask_llm(prompt, system=SYSTEM_ANALYST)
+    return ask_llm(prompt, system=sys_prompt)
 
 
 def handle_l4(question: str, company: str, history: str = "") -> str:
-    context = get_cached_context(company)
-
-    prompt = f"""Financial data (PKR thousands):
+    currency, unit_label, sym = _get_company_meta(company)
+    context = get_cached_hr_context(company)
+    prompt = f"""Financial data for {company} (values in {unit_label}):
 {context}
 
 {f"Previous conversation:{chr(10)}{history}{chr(10)}" if history else ""}
@@ -527,14 +640,13 @@ Answer in 3-4 lines. Lead with the conclusion, support with 1-2 specific figures
 Only reference data explicitly shown above. No numbered lists unless listing multiple causes.
 
 End your response with exactly this line: "Need more detail? Just ask." """
-
-    return ask_llm(prompt, system=SYSTEM_ANALYST)
+    return ask_llm(prompt, system=_system_prompt(currency, unit_label))
 
 
 def handle_l5(question: str, company: str, history: str = "") -> str:
-    context = get_cached_context(company)
-
-    prompt = f"""Financial data (PKR thousands):
+    currency, unit_label, sym = _get_company_meta(company)
+    context = get_cached_hr_context(company)
+    prompt = f"""Financial data for {company} (values in {unit_label}):
 {context}
 
 {f"Previous conversation:{chr(10)}{history}{chr(10)}" if history else ""}
@@ -544,24 +656,18 @@ Answer in 4-5 lines. Lead with a clear verdict supported by the most relevant me
 Only use data explicitly shown above.
 
 End your response with exactly this line: "Need more detail? Just ask." """
-
-    return ask_llm(prompt, system=SYSTEM_ANALYST)
+    return ask_llm(prompt, system=_system_prompt(currency, unit_label))
 
 
 def handle_text(question: str, company: str, history: str = "") -> str:
-    # Fix 6: look up PDF text by exact company name
-    # Use semantic search for relevant chunks if available, else fall back to full text
+    currency, unit_label, sym = _get_company_meta(company)
     chunks = search_pdf_text(company, question, n=5)
-
     if not chunks:
-        # Try full text as last resort
         pdf_text = get_pdf_text(company)
         if not pdf_text:
             return "The PDF text is not available. Please re-upload the report."
         chunks = [pdf_text[:8000]]
-
     context = "\n\n---\n\n".join(chunks)
-
     prompt = f"""Report text from {company}'s financial report:
 
 {context}
@@ -573,17 +679,15 @@ Answer using only information from the report text above.
 Be concise (3-5 lines). If the answer is not in the text, say so clearly.
 
 End your response with exactly this line: "Need more detail? Just ask." """
-
-    return ask_llm(prompt, system=SYSTEM_ANALYST)
+    return ask_llm(prompt, system=_system_prompt(currency, unit_label))
 
 
 def handle_detail(question: str, company: str, history: str = "") -> str:
-    context = get_cached_context(company)
-    # Use semantic search for the most relevant snippet
+    currency, unit_label, sym = _get_company_meta(company)
+    context = get_cached_hr_context(company)
     chunks = search_pdf_text(company, question, n=3)
     text_snippet = "\n\n".join(chunks)[:2000] if chunks else ""
-
-    prompt = f"""Financial data (PKR thousands):
+    prompt = f"""Financial data for {company} (values in {unit_label}):
 {context}
 
 Report text excerpt:
@@ -595,17 +699,15 @@ Previous conversation:
 The user wants more detail on the previous answer.
 Provide a thorough expansion using specific numbers.
 Use numbered points for clarity. Only reference data shown above."""
-
-    return ask_llm(prompt, system=SYSTEM_ANALYST)
+    return ask_llm(prompt, system=_system_prompt(currency, unit_label))
 
 
 def handle_l6(question: str, company: str, history: str = "") -> str:
-    context = get_cached_context(company)
-    # Semantic search for strategic context from PDF
+    currency, unit_label, sym = _get_company_meta(company)
+    context = get_cached_hr_context(company)
     chunks = search_pdf_text(company, question, n=4)
     text_snippet = "\n\n".join(chunks)[:4000] if chunks else ""
-
-    prompt = f"""Financial data (PKR thousands):
+    prompt = f"""Financial data for {company} (values in {unit_label}):
 {context}
 
 Report context:
@@ -619,8 +721,7 @@ Lead with the strategic conclusion. Support with 1-2 specific figures from the d
 Use numbered points only if listing multiple recommendations. Maximum 6 lines.
 
 End your response with exactly this line: "Need more detail? Just ask." """
-
-    return ask_llm(prompt, system=SYSTEM_ANALYST)
+    return ask_llm(prompt, system=_system_prompt(currency, unit_label))
 
 
 def handle_off_topic() -> str:

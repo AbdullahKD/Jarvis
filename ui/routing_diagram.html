@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Jarvis — System Routing Diagram</title>
+<style>
+  :root{
+    --bg:#030a05; --bg2:rgba(255,255,255,0.03); --bg3:rgba(255,255,255,0.06);
+    --bd:rgba(255,255,255,0.08); --tx1:#e2e8f0; --tx2:rgba(226,232,240,0.6);
+    --tx3:rgba(226,232,240,0.35); --gn:#34d399; --gn2:rgba(52,211,153,0.12);
+    --bl:#60a5fa; --bl2:rgba(96,165,250,0.12); --yl:#fbbf24; --yl2:rgba(251,191,36,0.12);
+    --rd:#f87171; --rd2:rgba(248,113,113,0.12); --pu:#a78bfa; --pu2:rgba(167,139,250,0.12);
+    --cyan:#22d3ee; --cyan2:rgba(34,211,238,0.12);
+    --mono:'SF Mono','Fira Code','Consolas',monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{background:var(--bg);color:var(--tx1);font-family:var(--mono);min-height:100vh;padding:40px 32px;}
+  h1{font-size:18px;font-weight:700;letter-spacing:0.15em;color:var(--gn);margin-bottom:4px;}
+  .subtitle{font-size:10px;color:var(--tx3);letter-spacing:0.1em;margin-bottom:40px;}
+  .diagram{display:flex;flex-direction:column;gap:0;max-width:1100px;margin:0 auto;}
+
+  /* ── LAYER ── */
+  .layer{display:flex;align-items:stretch;gap:0;position:relative;margin-bottom:0;}
+  .layer-label{writing-mode:vertical-rl;text-orientation:mixed;transform:rotate(180deg);
+    font-size:8px;letter-spacing:0.15em;color:var(--tx3);padding:8px 10px;
+    border-right:1px solid var(--bd);min-width:32px;display:flex;align-items:center;justify-content:center;}
+  .layer-body{flex:1;display:flex;gap:12px;align-items:center;padding:16px 20px;}
+
+  /* ── NODE ── */
+  .node{border-radius:10px;border:1px solid var(--bd);background:var(--bg2);
+    padding:12px 16px;min-width:120px;position:relative;transition:all 0.2s;cursor:default;}
+  .node:hover{background:var(--bg3);transform:translateY(-1px);box-shadow:0 4px 20px rgba(0,0,0,0.4);}
+  .node-ico{font-size:18px;margin-bottom:6px;}
+  .node-title{font-size:10px;font-weight:700;letter-spacing:0.1em;}
+  .node-sub{font-size:8px;color:var(--tx3);margin-top:3px;line-height:1.5;}
+  .node-tag{display:inline-block;font-size:7px;letter-spacing:0.08em;border-radius:4px;
+    padding:2px 6px;margin-top:6px;border:1px solid;}
+
+  /* colour variants */
+  .gn{border-color:rgba(52,211,153,0.25);}.gn .node-title{color:var(--gn);}
+  .gn .node-tag{color:var(--gn);border-color:rgba(52,211,153,0.3);background:var(--gn2);}
+  .bl{border-color:rgba(96,165,250,0.25);}.bl .node-title{color:var(--bl);}
+  .bl .node-tag{color:var(--bl);border-color:rgba(96,165,250,0.3);background:var(--bl2);}
+  .yl{border-color:rgba(251,191,36,0.25);}.yl .node-title{color:var(--yl);}
+  .yl .node-tag{color:var(--yl);border-color:rgba(251,191,36,0.3);background:var(--yl2);}
+  .rd{border-color:rgba(248,113,113,0.25);}.rd .node-title{color:var(--rd);}
+  .rd .node-tag{color:var(--rd);border-color:rgba(248,113,113,0.3);background:var(--rd2);}
+  .pu{border-color:rgba(167,139,250,0.25);}.pu .node-title{color:var(--pu);}
+  .pu .node-tag{color:var(--pu);border-color:rgba(167,139,250,0.3);background:var(--pu2);}
+  .cy{border-color:rgba(34,211,238,0.25);}.cy .node-title{color:var(--cyan);}
+  .cy .node-tag{color:var(--cyan);border-color:rgba(34,211,238,0.3);background:var(--cyan2);}
+
+  /* ── ARROW ── */
+  .arrow{display:flex;align-items:center;justify-content:center;color:var(--tx3);font-size:16px;padding:0 4px;flex-shrink:0;}
+  .arrow-down{display:flex;justify-content:center;height:28px;color:var(--tx3);font-size:16px;align-items:center;}
+  .arrow-branch{color:rgba(251,191,36,0.5);}
+
+  /* ── TIER BOX ── */
+  .tier-box{border-radius:12px;border:1px solid;padding:16px 20px;flex:1;}
+  .tier-t1{border-color:rgba(52,211,153,0.2);background:rgba(52,211,153,0.03);}
+  .tier-t2{border-color:rgba(96,165,250,0.2);background:rgba(96,165,250,0.03);}
+  .tier-t3{border-color:rgba(167,139,250,0.2);background:rgba(167,139,250,0.03);}
+  .tier-title{font-size:9px;font-weight:700;letter-spacing:0.12em;margin-bottom:12px;}
+  .tier-t1 .tier-title{color:var(--gn);}
+  .tier-t2 .tier-title{color:var(--bl);}
+  .tier-t3 .tier-title{color:var(--pu);}
+  .tier-row{display:flex;align-items:center;gap:10px;margin-bottom:8px;}
+  .mini-node{border-radius:7px;border:1px solid var(--bd);background:var(--bg2);
+    padding:7px 12px;font-size:9px;color:var(--tx2);white-space:nowrap;}
+
+  /* ── SEPARATOR ── */
+  .sep{height:1px;background:linear-gradient(90deg,transparent,rgba(255,255,255,0.07),transparent);margin:12px 0;}
+  .pipe-row{display:flex;align-items:center;gap:0;flex:1;}
+  .pipe-step{border-radius:8px;border:1px solid rgba(167,139,250,0.2);background:rgba(167,139,250,0.04);
+    padding:8px 12px;font-size:9px;color:var(--pu);white-space:nowrap;text-align:center;}
+  .pipe-arrow{font-size:11px;color:rgba(167,139,250,0.35);padding:0 5px;flex-shrink:0;}
+
+  /* ── SPLIT PATH ── */
+  .split{display:flex;gap:12px;flex:1;}
+  .path-box{border-radius:10px;border:1px solid var(--bd);background:var(--bg2);padding:14px 16px;flex:1;}
+
+  /* ── FINEX SECTION ── */
+  .finex-section{border-radius:14px;border:1px solid rgba(52,211,153,0.18);background:rgba(52,211,153,0.02);
+    padding:20px 24px;margin-top:12px;}
+  .finex-title{font-size:11px;font-weight:700;letter-spacing:0.12em;color:var(--gn);margin-bottom:14px;}
+  .finex-paths{display:flex;gap:16px;}
+  .finex-path{flex:1;border-radius:10px;border:1px solid rgba(52,211,153,0.12);background:rgba(52,211,153,0.02);padding:14px 16px;}
+  .finex-path-title{font-size:9px;font-weight:700;letter-spacing:0.1em;color:rgba(52,211,153,0.7);margin-bottom:10px;}
+
+  /* ── LEGEND ── */
+  .legend{display:flex;gap:20px;flex-wrap:wrap;margin-top:40px;padding-top:20px;border-top:1px solid var(--bd);}
+  .legend-item{display:flex;align-items:center;gap:8px;font-size:9px;color:var(--tx3);}
+  .legend-dot{width:10px;height:10px;border-radius:50%;}
+</style>
+</head>
+<body>
+
+<h1>JARVIS — SYSTEM ROUTING DIAGRAM</h1>
+<div class="subtitle">BNU COM6001 · Multi-Agent AI Executive Assistant · Abdullah Khan Durrani</div>
+
+<div class="diagram">
+
+  <!-- ── LAYER 1: USER INPUT ── -->
+  <div class="layer">
+    <div class="layer-label">INPUT</div>
+    <div class="layer-body">
+      <div class="node gn">
+        <div class="node-ico">🎤</div>
+        <div class="node-title">VOICE</div>
+        <div class="node-sub">Whisper ASR<br>Local model</div>
+        <span class="node-tag">AUDIO → TEXT</span>
+      </div>
+      <div class="arrow">→</div>
+      <div class="node gn" style="flex:2">
+        <div class="node-ico">💬</div>
+        <div class="node-title">USER QUERY</div>
+        <div class="node-sub">Text input via browser UI<br>WebSocket (/ws) · REST (/finex/chat)</div>
+        <span class="node-tag">WebSocket · FastAPI</span>
+      </div>
+      <div class="arrow">→</div>
+      <div class="node bl">
+        <div class="node-ico">🖥</div>
+        <div class="node-title">SERVER</div>
+        <div class="node-sub">FastAPI · Uvicorn<br>server.py</div>
+        <span class="node-tag">localhost:8000</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow-down">↓</div>
+
+  <!-- ── LAYER 2: ROUTER ── -->
+  <div class="layer">
+    <div class="layer-label">ROUTE</div>
+    <div class="layer-body">
+      <div class="node yl" style="flex:1">
+        <div class="node-ico">🧭</div>
+        <div class="node-title">ROUTER AGENT</div>
+        <div class="node-sub">Classifies intent from query text<br>Model: llama3.2:1b (fast, ~60ms)<br>Output: JSON {agent, action, tier}</div>
+        <span class="node-tag">agents/router.py</span>
+      </div>
+      <div class="arrow">→</div>
+      <div class="node yl">
+        <div class="node-ico">🗂</div>
+        <div class="node-title">TIER DECISION</div>
+        <div class="node-sub">T1 · tool only<br>T2 · LLM + tool<br>T3 · full pipeline</div>
+        <span class="node-tag">orchestrator.py</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow-down arrow-branch">↙ ↓ ↘</div>
+
+  <!-- ── LAYER 3: TIERS ── -->
+  <div class="layer">
+    <div class="layer-label">TIERS</div>
+    <div class="layer-body" style="align-items:stretch">
+      <div class="split">
+
+        <!-- TIER 1 -->
+        <div class="tier-box tier-t1">
+          <div class="tier-title">TIER 1 — TOOL SHORTCUT</div>
+          <div class="tier-row">
+            <div class="mini-node" style="border-color:rgba(52,211,153,0.2);color:#34d399">🌤 Weather</div>
+            <div class="mini-node" style="border-color:rgba(52,211,153,0.2);color:#34d399">📰 News</div>
+            <div class="mini-node" style="border-color:rgba(52,211,153,0.2);color:#34d399">🖥 Mac</div>
+          </div>
+          <div class="tier-row">
+            <div class="mini-node" style="border-color:rgba(52,211,153,0.2);color:#34d399">🎵 Spotify</div>
+            <div class="mini-node" style="border-color:rgba(52,211,153,0.2);color:#34d399">📈 Markets</div>
+          </div>
+          <div class="sep"></div>
+          <div style="font-size:8px;color:var(--tx3)">Direct tool call, no LLM needed.<br>Instant response via WebSocket stream.</div>
+        </div>
+
+        <!-- TIER 2 -->
+        <div class="tier-box tier-t2">
+          <div class="tier-title">TIER 2 — LLM + OPTIONAL TOOL</div>
+          <div class="tier-row">
+            <div class="mini-node">Tool call (optional)</div>
+            <span style="font-size:11px;color:var(--tx3)">→</span>
+            <div class="mini-node">llama3.2:latest</div>
+            <span style="font-size:11px;color:var(--tx3)">→</span>
+            <div class="mini-node">Stream response</div>
+          </div>
+          <div class="sep"></div>
+          <div style="font-size:8px;color:var(--tx3)">Single LLM call with context.<br>Used for calendar, email reads, general Q&A.</div>
+        </div>
+
+        <!-- TIER 3 -->
+        <div class="tier-box tier-t3">
+          <div class="tier-title">TIER 3 — FULL AGENT PIPELINE</div>
+          <div class="pipe-row" style="flex-wrap:wrap;gap:4px;">
+            <div class="pipe-step">🧠 Memory</div><div class="pipe-arrow">▸</div>
+            <div class="pipe-step">📋 Planner</div><div class="pipe-arrow">▸</div>
+            <div class="pipe-step">⚖ Critic</div><div class="pipe-arrow">▸</div>
+            <div class="pipe-step">⚙ Executor</div><div class="pipe-arrow">▸</div>
+            <div class="pipe-step">📊 Evaluator</div>
+          </div>
+          <div class="sep"></div>
+          <div style="font-size:8px;color:var(--tx3)">Full multi-agent reasoning chain.<br>Research · complex tasks · multi-step plans.</div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow-down">↓</div>
+
+  <!-- ── LAYER 4: TOOLS ── -->
+  <div class="layer">
+    <div class="layer-label">TOOLS</div>
+    <div class="layer-body" style="flex-wrap:wrap;gap:10px;">
+      <div class="node cy" style="min-width:100px">
+        <div class="node-ico">🌤</div>
+        <div class="node-title">WEATHER</div>
+        <div class="node-sub">Open-Meteo API<br>No key needed</div>
+      </div>
+      <div class="node cy" style="min-width:100px">
+        <div class="node-ico">📰</div>
+        <div class="node-title">NEWS</div>
+        <div class="node-sub">RSS scraper<br>BeautifulSoup</div>
+      </div>
+      <div class="node cy" style="min-width:100px">
+        <div class="node-ico">📈</div>
+        <div class="node-title">MARKETS</div>
+        <div class="node-sub">yfinance primary<br>Yahoo v7/v8 fallback</div>
+      </div>
+      <div class="node cy" style="min-width:100px">
+        <div class="node-ico">🎵</div>
+        <div class="node-title">SPOTIFY</div>
+        <div class="node-sub">Spotify Web API<br>OAuth token</div>
+      </div>
+      <div class="node cy" style="min-width:100px">
+        <div class="node-ico">📧</div>
+        <div class="node-title">EMAIL</div>
+        <div class="node-sub">Gmail API<br>Google OAuth</div>
+      </div>
+      <div class="node cy" style="min-width:100px">
+        <div class="node-ico">📅</div>
+        <div class="node-title">CALENDAR</div>
+        <div class="node-sub">Google Calendar API<br>Google OAuth</div>
+      </div>
+      <div class="node cy" style="min-width:100px">
+        <div class="node-ico">🖥</div>
+        <div class="node-title">MAC OS</div>
+        <div class="node-sub">AppleScript<br>osascript</div>
+      </div>
+      <div class="node cy" style="min-width:100px">
+        <div class="node-ico">🔍</div>
+        <div class="node-title">WEB SEARCH</div>
+        <div class="node-sub">HTTP scraper<br>DuckDuckGo</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow-down">↓</div>
+
+  <!-- ── LAYER 5: LLM ── -->
+  <div class="layer">
+    <div class="layer-label">LLM</div>
+    <div class="layer-body">
+      <div class="node pu">
+        <div class="node-ico">🤖</div>
+        <div class="node-title">OLLAMA HTTP</div>
+        <div class="node-sub">localhost:11434<br>/api/chat</div>
+        <span class="node-tag">No subprocess</span>
+      </div>
+      <div class="arrow">→</div>
+      <div class="node pu">
+        <div class="node-ico">⚡</div>
+        <div class="node-title">llama3.2:1b</div>
+        <div class="node-sub">Router only<br>~60ms · intent JSON</div>
+        <span class="node-tag">ROUTER MODEL</span>
+      </div>
+      <div class="arrow">+</div>
+      <div class="node pu">
+        <div class="node-ico">🧠</div>
+        <div class="node-title">llama3.2:latest</div>
+        <div class="node-sub">Main assistant<br>Streaming · context-aware</div>
+        <span class="node-tag">MAIN MODEL</span>
+      </div>
+      <div class="arrow">→</div>
+      <div class="node gn">
+        <div class="node-ico">💬</div>
+        <div class="node-title">STREAM OUT</div>
+        <div class="node-sub">Token-by-token<br>WebSocket → UI</div>
+        <span class="node-tag">Real-time</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── FINEX SECTION ── -->
+  <div class="finex-section">
+    <div class="finex-title">💹 JARVIS FINEX — FINANCIAL ANALYSIS ENGINE (separate REST paths)</div>
+    <div class="finex-paths">
+
+      <!-- CHAT PATH -->
+      <div class="finex-path">
+        <div class="finex-path-title">📊 FINEX CHAT PATH — POST /finex/chat</div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <div class="mini-node" style="border-color:rgba(52,211,153,0.2);color:#34d399">User question</div>
+          <span style="color:var(--tx3)">→</span>
+          <div class="mini-node" style="border-color:rgba(52,211,153,0.2);color:#34d399">LLM_SQL.py<br>Level routing (L1–L6)</div>
+          <span style="color:var(--tx3)">→</span>
+          <div class="mini-node" style="border-color:rgba(52,211,153,0.2);color:#34d399">PostgreSQL<br>financials table</div>
+          <span style="color:var(--tx3)">→</span>
+          <div class="mini-node" style="border-color:rgba(52,211,153,0.2);color:#34d399">ChromaDB<br>semantic search</div>
+          <span style="color:var(--tx3)">→</span>
+          <div class="mini-node" style="border-color:rgba(52,211,153,0.2);color:#34d399">Ollama LLM<br>answer generation</div>
+          <span style="color:var(--tx3)">→</span>
+          <div class="mini-node" style="border-color:rgba(52,211,153,0.2);color:#34d399">JSON response</div>
+        </div>
+        <div style="margin-top:10px;font-size:8px;color:var(--tx3)">
+          L1 Direct lookup · L2 Year comparison · L3 Ratio calc · L4 Deep analysis · L5 Insights · L6 Strategy
+        </div>
+      </div>
+
+      <!-- UPLOAD PATH -->
+      <div class="finex-path">
+        <div class="finex-path-title">📄 FINEX UPLOAD PATH — POST /finex/upload</div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <div class="mini-node" style="border-color:rgba(52,211,153,0.2);color:#34d399">PDF file<br>(modal window)</div>
+          <span style="color:var(--tx3)">→</span>
+          <div class="mini-node" style="border-color:rgba(52,211,153,0.2);color:#34d399">pdfplumber<br>text extraction</div>
+          <span style="color:var(--tx3)">→</span>
+          <div class="mini-node" style="border-color:rgba(52,211,153,0.2);color:#34d399">Page type detect<br>P&amp;L / BS / CF</div>
+          <span style="color:var(--tx3)">→</span>
+          <div class="mini-node" style="border-color:rgba(52,211,153,0.2);color:#34d399">Regex extraction<br>NO LLM needed</div>
+          <span style="color:var(--tx3)">→</span>
+          <div class="mini-node" style="border-color:rgba(52,211,153,0.2);color:#34d399">PostgreSQL insert<br>+ ChromaDB save</div>
+        </div>
+        <div style="margin-top:10px;font-size:8px;color:var(--tx3)">
+          extract_pdf.py (pure regex) · db_insert.py · chroma_store.py · No LLM dependency
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── MEMORY LAYER ── -->
+  <div class="layer" style="margin-top:16px">
+    <div class="layer-label">MEMORY</div>
+    <div class="layer-body" style="flex-wrap:wrap;gap:12px">
+      <div class="node rd">
+        <div class="node-ico">🧬</div>
+        <div class="node-title">VECTOR MEMORY</div>
+        <div class="node-sub">ChromaDB<br>Conversation embeddings<br>Semantic recall</div>
+        <span class="node-tag">data/chroma/</span>
+      </div>
+      <div class="node rd">
+        <div class="node-ico">💾</div>
+        <div class="node-title">PDF STORE</div>
+        <div class="node-sub">SQLite + ChromaDB<br>Full report text<br>Chunk search</div>
+        <span class="node-tag">data/finex_pdfs.db</span>
+      </div>
+      <div class="node rd">
+        <div class="node-ico">🗄</div>
+        <div class="node-title">FINANCIALS DB</div>
+        <div class="node-sub">PostgreSQL<br>Structured KPIs<br>financials table</div>
+        <span class="node-tag">psycopg2</span>
+      </div>
+      <div class="node rd">
+        <div class="node-ico">📊</div>
+        <div class="node-title">EVALUATOR</div>
+        <div class="node-sub">Benchmark logs<br>Latency · quality<br>CSV + JSON export</div>
+        <span class="node-tag">data/benchmarks/</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- LEGEND -->
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot" style="background:#34d399"></div>User / Output</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#60a5fa"></div>Infrastructure</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#fbbf24"></div>Routing / Decision</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#a78bfa"></div>LLM / Inference</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#22d3ee"></div>Tool Integrations</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#f87171"></div>Storage / Memory</div>
+</div>
+
+<div style="margin-top:32px;font-size:8px;color:var(--tx3);text-align:center;letter-spacing:0.08em">
+  JARVIS v2.0 · BNU COM6001 Dissertation · Abdullah Khan Durrani · 2025 ·
+  FastAPI + Ollama + ChromaDB + PostgreSQL + yfinance
+</div>
+
+</body>
+</html>

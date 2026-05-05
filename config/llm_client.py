@@ -126,6 +126,59 @@ class OllamaClient:
 
         return await self._post_with_retry("/api/chat", payload, expect_json)
 
+    async def chat_stream(
+        self,
+        messages: List[Dict[str, str]],
+        model: Optional[str] = None,
+        max_tokens: int = 512,
+    ):
+        """
+        Async generator that yields text chunks as they arrive from Ollama.
+        Use this for real-time streaming to the WebSocket.
+
+        Usage:
+            async for chunk in client.chat_stream(messages):
+                await ws.send_text(json.dumps({"type":"chunk","text":chunk}))
+        """
+        if not any(m.get("role") == "system" for m in messages):
+            messages = [
+                {"role": "system", "content": self.JARVIS_SYSTEM_PROMPT}
+            ] + list(messages)
+
+        payload: Dict[str, Any] = {
+            "model": model or self.model,
+            "messages": messages,
+            "stream": True,
+            "options": {
+                "temperature": self.temperature,
+                "num_predict": max_tokens,
+            },
+        }
+
+        try:
+            async with aiohttp.ClientSession(timeout=self.timeout) as session:
+                async with session.post(
+                    f"{self.base_url}/api/chat", json=payload
+                ) as resp:
+                    if resp.status != 200:
+                        text = await resp.text()
+                        raise OllamaError(f"HTTP {resp.status}: {text[:200]}")
+                    async for raw_line in resp.content:
+                        line = raw_line.strip()
+                        if not line:
+                            continue
+                        try:
+                            chunk = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        content = chunk.get("message", {}).get("content", "")
+                        if content:
+                            yield content
+                        if chunk.get("done"):
+                            break
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            raise OllamaError(f"Stream error: {exc}") from exc
+
     async def chat_json(
         self,
         messages: List[Dict[str, str]],
