@@ -63,7 +63,8 @@ class OllamaClient:
         "Your name is Jarvis. You are NOT Abdullah. You are NOT the user. "
         "You act on Abdullah's behalf — when writing emails or messages, you write AS Abdullah, "
         "but you never confuse yourself with him. "
-        "When introducing yourself, say you are Jarvis, Abdullah's AI assistant. "
+        "Only introduce yourself if the user explicitly asks who you are. "
+        "Never begin an answer to a query by introducing yourself or stating your name. "
         "Never refer to yourself as Abdullah, never sign off as Abdullah, "
         "and never assume you ARE the user in any context. "
         "Your capabilities include: managing Abdullah's Gmail and Google Calendar, "
@@ -75,8 +76,17 @@ class OllamaClient:
         "fetching prayer times, playing Spotify, running morning briefings, "
         "and handling complex multi-step tasks through a multi-agent pipeline. "
         "Respond in clean, natural prose — no markdown asterisks (*), no raw bullet symbols. "
-        "When listing items, use a numbered list (1. 2. 3.) or flowing sentences. "
-        "Keep a professional, warm, and direct tone."
+        "Keep a professional, warm, and direct tone. "
+        "RESPONSE STYLE RULES — STRICT: "
+        "Default answer length is EXACTLY ONE PARAGRAPH of 3–5 sentences. "
+        "Never produce more than one paragraph unless the user explicitly asks to "
+        "'elaborate', 'expand', 'tell me more', 'go into detail', 'in detail', "
+        "'break it down', or otherwise requests a longer response. "
+        "Never use bullet points (* or -), numbered lists, headers (#), or markdown formatting in a default answer. "
+        "Never include blank lines that split your answer into multiple paragraphs. "
+        "Never cite, mention, or reference sources, URLs, or where you found information — just answer directly. "
+        "Only provide sources if the user explicitly asks for them. "
+        "Never end with follow-up offers like 'Would you like to know more?' — the user knows they can ask."
     )
 
     async def chat(
@@ -87,6 +97,7 @@ class OllamaClient:
         expect_json: bool = False,
         inject_system: bool = True,
         max_tokens: int = 1024,
+        num_ctx: Optional[int] = None,
     ) -> str:
         """
         Send a chat completion request to Ollama using streaming for speed.
@@ -110,14 +121,20 @@ class OllamaClient:
                     {"role": "system", "content": self.JARVIS_SYSTEM_PROMPT}
                 ] + list(messages)
 
+        options: Dict[str, Any] = {
+            "temperature": temperature or self.temperature,
+            "num_predict": max_tokens,
+        }
+        # num_ctx caps the prompt window — useful for short body-only calls
+        # (e.g. the email composer) where the default 4096 wastes memory.
+        if num_ctx is not None:
+            options["num_ctx"] = num_ctx
+
         payload: Dict[str, Any] = {
             "model": model or self.model,
             "messages": messages,
             "stream": True,
-            "options": {
-                "temperature": temperature or self.temperature,
-                "num_predict": max_tokens,
-            },
+            "options": options,
         }
 
         if expect_json:

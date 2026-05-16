@@ -44,15 +44,20 @@ class CalendarAgent:
         self.service = None
         self.mock_events: List[Dict] = []
         self._mock_id_counter = 1
+        # Captured so the UI / `/google/status` endpoint can show the user
+        # exactly why auth failed instead of a generic "mock mode" label.
+        self.auth_error: Optional[str] = None
         self._init_service()
 
     def _init_service(self) -> None:
         if not GOOGLE_AVAILABLE:
-            print("📅 CalendarAgent: Google API not installed — mock mode")
+            self.auth_error = "google-api-python-client not installed"
+            print(f"📅 CalendarAgent: {self.auth_error} — mock mode")
             return
 
         if not GOOGLE_CREDENTIALS_PATH.exists():
-            print(f"📅 CalendarAgent: No credentials at {GOOGLE_CREDENTIALS_PATH} — mock mode")
+            self.auth_error = f"credentials.json not found at {GOOGLE_CREDENTIALS_PATH}"
+            print(f"📅 CalendarAgent: {self.auth_error} — mock mode")
             print("   To enable: download OAuth2 credentials.json from Google Cloud Console")
             return
 
@@ -65,19 +70,47 @@ class CalendarAgent:
 
             if not creds or not creds.valid:
                 if creds and creds.expired and creds.refresh_token:
-                    creds.refresh(Request())
+                    # Refresh the expired access token using the stored
+                    # refresh_token. Save the refreshed credentials back
+                    # to disk immediately so the next restart picks up
+                    # the new access token rather than refreshing again.
+                    try:
+                        creds.refresh(Request())
+                        print("📅 CalendarAgent: refreshed expired token")
+                        GOOGLE_TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
+                        GOOGLE_TOKEN_PATH.write_text(creds.to_json())
+                    except Exception as refresh_exc:
+                        # Refresh tokens for Google "Testing" mode apps
+                        # expire after 7 days. Surface this so the user
+                        # knows to run the OAuth flow again.
+                        self.auth_error = (
+                            f"token refresh failed ({type(refresh_exc).__name__}: "
+                            f"{refresh_exc}). Delete token.json and restart to "
+                            f"trigger fresh OAuth — or move the app to 'Production' "
+                            f"in Google Cloud Console to stop refresh tokens "
+                            f"expiring every 7 days."
+                        )
+                        print(f"📅 CalendarAgent: {self.auth_error}")
+                        return
                 else:
+                    # No valid creds at all — interactive OAuth. Only works
+                    # if the user can see a browser open on the host running
+                    # the server.
                     flow = InstalledAppFlow.from_client_secrets_file(
                         str(GOOGLE_CREDENTIALS_PATH), GOOGLE_SCOPES
                     )
                     creds = flow.run_local_server(port=0)
                     GOOGLE_TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
                     GOOGLE_TOKEN_PATH.write_text(creds.to_json())
+                    print("📅 CalendarAgent: completed fresh OAuth flow")
 
             self.service = build("calendar", "v3", credentials=creds)
+            self.auth_error = None
             print("📅 CalendarAgent: Google Calendar connected ✅")
         except Exception as e:
-            print(f"📅 CalendarAgent: Auth failed ({e}) — mock mode")
+            self.auth_error = f"{type(e).__name__}: {e}"
+            print(f"📅 CalendarAgent: Auth failed — {self.auth_error}")
+            print("   Tip: delete token.json and restart to re-auth.")
 
     @property
     def is_mock(self) -> bool:

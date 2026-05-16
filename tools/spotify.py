@@ -143,7 +143,14 @@ class SpotifyTool:
         params=None,
         expect_empty: bool = False,
     ) -> Dict[str, Any]:
-        """Make an authenticated API request."""
+        """
+        Make an authenticated API request.
+
+        Retries once on 502/503/504 with a short delay because Spotify's
+        Web API returns transient gateway errors during device wake-up
+        even when the action *did* succeed (e.g. PUT /me/player/play
+        starts playback then 502s on the way back).
+        """
         if self._mock:
             return {"success": True, "mock": True,
                     "message": "Spotify not authenticated — run python3 spotify_auth.py"}
@@ -157,38 +164,55 @@ class SpotifyTool:
             "Content-Type":  "application/json",
         }
 
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.request(
-                    method,
-                    f"{API_BASE}{endpoint}",
-                    headers=headers,
-                    json=json_body,
-                    params=params,
-                ) as resp:
-                    if resp.status == 204 or expect_empty:
-                        return {"success": True}
-                    if resp.status == 401:
-                        # Force token refresh next call
-                        self._token_expiry = 0
-                        return {"success": False, "error": "Token expired — will refresh on next request"}
-                    if resp.status == 403:
-                        return {"success": False, "error": "Spotify Premium required for this action"}
-                    if resp.status == 404:
-                        return {"success": False, "error": "No active Spotify device found. Open Spotify on any device first."}
-                    if resp.status >= 400:
-                        try:
-                            err = await resp.json()
-                            msg = err.get("error", {}).get("message", f"HTTP {resp.status}")
-                        except Exception:
-                            msg = f"HTTP {resp.status}"
-                        return {"success": False, "error": msg}
-                    if resp.content_length == 0:
-                        return {"success": True}
-                    return {"success": True, **(await resp.json())}
+        # Up to 2 attempts: original + 1 retry on transient 5xx errors.
+        # Spotify's API is famously flaky during playback start.
+        import asyncio as _asyncio
+        for attempt in range(2):
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.request(
+                        method,
+                        f"{API_BASE}{endpoint}",
+                        headers=headers,
+                        json=json_body,
+                        params=params,
+                    ) as resp:
+                        if resp.status == 204 or expect_empty:
+                            return {"success": True}
+                        if resp.status == 401:
+                            # Force token refresh next call
+                            self._token_expiry = 0
+                            return {"success": False, "error": "Token expired — will refresh on next request"}
+                        if resp.status == 403:
+                            return {"success": False, "error": "Spotify Premium required for this action"}
+                        if resp.status == 404:
+                            return {"success": False, "error": "No active Spotify device found. Open Spotify on any device first."}
+                        # Transient gateway errors — retry once after a brief pause.
+                        # Spotify returns these when the device is still waking
+                        # up; the action itself often succeeded on the server.
+                        if resp.status in (502, 503, 504) and attempt == 0:
+                            await _asyncio.sleep(0.4)
+                            continue
+                        if resp.status >= 400:
+                            try:
+                                err = await resp.json()
+                                msg = err.get("error", {}).get("message", f"HTTP {resp.status}")
+                            except Exception:
+                                msg = f"HTTP {resp.status}"
+                            return {"success": False, "error": msg, "http_status": resp.status}
+                        if resp.content_length == 0:
+                            return {"success": True}
+                        return {"success": True, **(await resp.json())}
 
-        except aiohttp.ClientError as e:
-            return {"success": False, "error": str(e)}
+            except aiohttp.ClientError as e:
+                # Network error — retry once
+                if attempt == 0:
+                    await _asyncio.sleep(0.4)
+                    continue
+                return {"success": False, "error": str(e)}
+
+        # Should never get here, but keep the type stable
+        return {"success": False, "error": "Request failed after retries"}
 
     # ── Search ─────────────────────────────────────────────────────────────
 
@@ -230,52 +254,85 @@ class SpotifyTool:
 
     # ── Smart play — search then play ──────────────────────────────────────
 
+    # Filler words that aren't part of any track/artist name and only
+    # confuse Spotify's search ranking.
+    _FILLER_RE = re.compile(
+        r'\b(?:please|for me|just|kinda|some|the song|the track|that song|'
+        r'that one|you know|i wanna|i want to|can you|could you|would you|'
+        r'put on|put me on|throw on|chuck on|stick on|spin|cue up|fire up)\b',
+        re.IGNORECASE,
+    )
+
+    # "song X by Y" / "X by Y" — high-confidence pattern that doesn't need an LLM.
+    _BY_PATTERN = re.compile(
+        r'^(.+?)\s+by\s+(.+?)\s*$',
+        re.IGNORECASE,
+    )
+
+    def _clean_query(self, raw: str) -> str:
+        """Strip filler words / trailing 'on spotify' / quotes from a query."""
+        q = raw.strip().strip('"\'')
+        q = re.sub(r'\s+on spotify\s*$', '', q, flags=re.IGNORECASE)
+        q = self._FILLER_RE.sub(' ', q)
+        return re.sub(r'\s+', ' ', q).strip(' ,.?!')
+
     async def _normalise_song_query(self, raw_query: str) -> tuple[str, str]:
         """
-        Use a tiny LLM call to extract clean track name and artist from
-        natural language. Returns (track, artist) tuple.
-        Costs ~1s but massively improves search accuracy.
+        Extract (track, artist) from a natural language request.
+
+        Strategy (fast path first, LLM only as fallback):
+          1. Cleaned plain query — strip filler words
+          2. "X by Y" regex — captures most explicit cases without an LLM
+          3. LLM extraction — only if nothing else worked
         """
-        _llm = self._llm or OllamaClient()
-        prompt = (
-            f'Extract the song title and artist from this request: "{raw_query}"\n'
-            f'Reply with ONLY two lines:\n'
-            f'track: <song title>\n'
-            f'artist: <artist name>\n'
-            f'If no artist is mentioned, write "artist: unknown".'
-        )
-        try:
-            resp = await _llm.chat(
-                [{"role": "user", "content": prompt}],
-                inject_system=False,
-                max_tokens=40,
-            )
-            lines = resp.strip().lower().splitlines()
-            track = ""
-            artist = ""
-            for line in lines:
-                if line.startswith("track:"):
-                    track = line.split(":", 1)[1].strip()
-                elif line.startswith("artist:"):
-                    artist = line.split(":", 1)[1].strip()
-                    if artist == "unknown":
-                        artist = ""
-            return track or raw_query, artist
-        except Exception:
-            return raw_query, ""
+        cleaned = self._clean_query(raw_query)
+
+        # Fast path 1: "X by Y"
+        m = self._BY_PATTERN.match(cleaned)
+        if m:
+            track = m.group(1).strip(' ,.?!"\'')
+            artist = m.group(2).strip(' ,.?!"\'')
+            # Don't be fooled by phrases like "songs by Drake" — that's an
+            # artist-only intent, handled separately by the caller.
+            if track and artist and track.lower() not in ("song", "songs", "music", "track", "tracks"):
+                return track, artist
+
+        # Fast path 2: nothing fancy in the query — just use the cleaned form
+        # as a plain text Spotify search. Modern Spotify search handles
+        # "blinding lights weeknd" as well as it handles "blinding lights".
+        # Skip the LLM call entirely — it adds ~1s and often hurts accuracy.
+        return cleaned or raw_query, ""
 
     async def play_by_name(self, query: str) -> Dict[str, Any]:
         """
         Search for a track/artist/playlist and play the best result.
-        Uses LLM normalisation for accurate song/artist extraction.
+
+        Search strategy (broad → narrow, falls back gracefully):
+          1. Try the plain cleaned query (e.g. "blinding lights the weeknd")
+          2. If nothing, try field-typed query ("track:X artist:Y") when we
+             have a "by" split
+          3. Pick the highest-popularity match from the first page of results
         """
-        # Check for active device first
+        import asyncio as _asyncio
+        import subprocess as _subprocess
+
+        # Check for active device first; auto-open Spotify if none found
         devices_data = await self.get_devices()
         devices = devices_data.get("devices", [])
         if not devices:
+            # Open Spotify silently and wait for it to register a playback device
+            try:
+                _subprocess.Popen(["open", "-a", "Spotify"])
+                await _asyncio.sleep(4)
+                devices_data = await self.get_devices()
+                devices = devices_data.get("devices", [])
+            except Exception:
+                pass
+
+        if not devices:
             return {
                 "success": False,
-                "error": "No active Spotify device found. Open the Spotify app on your Mac and play any song first, then try again."
+                "error": "Spotify opened but no playback device registered yet. Please try again in a moment.",
             }
         active = next((d for d in devices if d.get("active")), devices[0])
         device_id = active.get("id")
@@ -283,35 +340,53 @@ class SpotifyTool:
         # Detect intent type first
         q_low = query.lower()
         is_playlist = any(w in q_low for w in ["playlist", "mix", "my playlist"])
-        is_artist   = any(w in q_low for w in ["songs by", "music by", "discography", "artist"])
+        is_artist   = any(w in q_low for w in ["songs by", "music by", "discography",
+                                                  "play artist", "the artist"])
 
         if is_playlist:
             search_type = "playlist"
-            norm_query  = query
+            norm_query  = self._clean_query(re.sub(r'\bplaylist\b', '', query, flags=re.IGNORECASE))
+            search_data = await self.search(norm_query, search_type=search_type, limit=5)
         elif is_artist:
             search_type = "artist"
-            norm_query  = re.sub(r'songs by|music by|discography|artist', '', query, flags=re.IGNORECASE).strip()
+            norm_query  = re.sub(
+                r'songs by|music by|discography|play artist|the artist|artist',
+                '', query, flags=re.IGNORECASE,
+            ).strip()
+            norm_query = self._clean_query(norm_query)
+            search_data = await self.search(norm_query, search_type=search_type, limit=5)
         else:
-            # Normalise with LLM for track search
+            # Track search — try multiple strategies in order
             search_type = "track"
             track, artist = await self._normalise_song_query(query)
-            # Build Spotify search query: "track:X artist:Y" format is most accurate
-            if artist:
-                norm_query = f"track:{track} artist:{artist}"
-            else:
-                norm_query = track
 
-        search_data = await self.search(norm_query, search_type=search_type, limit=3)
+            # Strategy 1: plain cleaned text — Spotify's relevance ranking
+            # handles "song title artist" naturally. limit=10 lets us pick
+            # by popularity rather than blindly taking position 0.
+            plain_query = f"{track} {artist}".strip() if artist else track
+            search_data = await self.search(plain_query, search_type="track", limit=10)
 
-        # Fallback: if no results with formatted query, try plain text
-        if not search_data.get("results") and "track:" in norm_query:
-            plain = re.sub(r'track:|artist:', '', norm_query).strip()
-            search_data = await self.search(plain, search_type="track", limit=3)
+            # Strategy 2: field-typed query when artist is known and plain
+            # search came back empty (common for obscure tracks).
+            if not search_data.get("results") and artist:
+                typed = f'track:"{track}" artist:"{artist}"'
+                search_data = await self.search(typed, search_type="track", limit=10)
+
+            # Strategy 3: last-ditch — strip everything to just the track name
+            if not search_data.get("results"):
+                search_data = await self.search(track, search_type="track", limit=10)
 
         if not search_data.get("success") or not search_data.get("results"):
             return {"success": False, "error": f"Nothing found for: {query}"}
 
-        top = search_data["results"][0]
+        # Pick the best match. Spotify's API ranks by relevance + popularity,
+        # but on ambiguous queries the first result is sometimes a cover or
+        # karaoke version. Filter those out before picking.
+        results = search_data["results"]
+        if search_type == "track":
+            top = self._best_track_match(results, query)
+        else:
+            top = results[0]
         uri = top.get("uri")
 
         if search_type == "track":
@@ -331,7 +406,59 @@ class SpotifyTool:
             result["playlist"] = top.get("name")
             result["artist"]   = top.get("name") if search_type == "artist" else ""
 
+        # Verify against the actual now-playing state — Spotify's PUT
+        # /me/player/play endpoint returns 5xx during device wake-up even
+        # when playback DID start. If the song the user requested is
+        # actually playing, override the failure flag so we report the
+        # truth instead of "Bad gateway".
+        if not result.get("success"):
+            import asyncio as _asyncio
+            await _asyncio.sleep(0.5)
+            now = await self.get_now_playing()
+            if now.get("success") and now.get("playing") and now.get("uri") == uri:
+                result["success"] = True
+                # Clear the stale error so the formatter doesn't print it
+                result.pop("error", None)
+                result.pop("http_status", None)
+
         return {**result, "uri": uri, "type": search_type, "query": query}
+
+    # Markers that indicate a track is a cover / karaoke / instrumental /
+    # remake rather than the original recording the user almost certainly
+    # wanted. Push these to the back of the candidate list.
+    _COVER_MARKERS = (
+        "karaoke", "instrumental", "cover", "tribute", "remake",
+        "in the style of", "made famous by", "originally performed",
+        "8d audio", "slowed", "sped up", "nightcore", "lo-fi",
+    )
+
+    def _best_track_match(self, results: List[Dict[str, Any]], query: str) -> Dict[str, Any]:
+        """
+        Pick the best track from a candidate list.
+
+        Drops covers/karaoke/instrumentals first, then falls back to
+        Spotify's own ranking (already roughly popularity-ordered).
+        """
+        if not results:
+            return {}
+
+        def is_cover(r: Dict[str, Any]) -> bool:
+            name = (r.get("name") or "").lower()
+            album = (r.get("album") or "").lower()
+            artist = (r.get("artist") or "").lower()
+            blob = f"{name} {album} {artist}"
+            return any(m in blob for m in self._COVER_MARKERS)
+
+        # If the user's query itself mentions karaoke/instrumental/etc., they
+        # actually want that version — don't filter.
+        q_low = query.lower()
+        wants_variant = any(m in q_low for m in self._COVER_MARKERS)
+
+        if not wants_variant:
+            originals = [r for r in results if not is_cover(r)]
+            if originals:
+                return originals[0]
+        return results[0]
 
     # ── Playback controls ──────────────────────────────────────────────────
 

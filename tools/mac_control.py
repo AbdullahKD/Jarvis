@@ -43,23 +43,58 @@ class MacControlTool:
     # ── Volume ─────────────────────────────────────────────────────────────
 
     async def set_volume(self, level: int) -> Dict[str, Any]:
-        """Set system volume (0–100)."""
+        """
+        Set system volume (0–100).
+
+        AppleScript's `set volume output volume N` is unprivileged and works
+        on every macOS version without permission prompts, but it silently
+        no-ops when output is routed to certain Bluetooth devices. We
+        verify the result by reading the volume back.
+        """
         level = max(0, min(100, level))
         script = f"set volume output volume {level}"
         result = await self._async_script(script)
-        if result["success"]:
+        if not result.get("success"):
+            return result
+        # Verify it actually took effect
+        check = await self.get_volume()
+        actual = check.get("volume")
+        if actual is None:
+            # Couldn't read back — report optimistic success
             result["volume"] = level
-        return result
+            result["message"] = f"Volume set to {level}%."
+            return result
+        if abs(actual - level) <= 2:
+            return {
+                "success": True,
+                "volume": actual,
+                "message": f"Volume set to {actual}%.",
+            }
+        return {
+            "success": False,
+            "volume": actual,
+            "error": (
+                f"Volume change didn't take effect (still {actual}%). "
+                "This sometimes happens with Bluetooth output devices — "
+                "adjust the volume directly on the device."
+            ),
+        }
 
     async def get_volume(self) -> Dict[str, Any]:
+        """Return current system volume (0–100)."""
         result = await self._async_script(
             "output volume of (get volume settings)"
         )
-        if result["success"]:
+        if result.get("success"):
             try:
-                result["volume"] = int(result["output"])
-            except ValueError:
-                pass
+                # AppleScript returns the raw integer as text
+                result["volume"] = int(result["output"].strip())
+                result["message"] = f"Volume is at {result['volume']}%."
+            except (ValueError, AttributeError):
+                # Couldn't parse — surface the problem rather than silently
+                # leaving result["volume"] missing.
+                result["success"] = False
+                result["error"] = f"Unexpected volume reading: {result.get('output')!r}"
         return result
 
     async def mute(self) -> Dict[str, Any]:
@@ -73,57 +108,63 @@ class MacControlTool:
     async def set_brightness(self, level: float) -> Dict[str, Any]:
         """
         Set display brightness (0.0–1.0).
-        Uses keyboard simulation since direct AppleScript brightness
-        control is not supported on modern macOS.
+
+        Apple removed direct AppleScript brightness control years ago. The
+        only reliable way on a stock macOS is the `brightness` Homebrew CLI
+        (https://github.com/nriley/brightness). When it's missing we fall
+        back to nudging the brightness keys, but we cannot read the current
+        level so the result is approximate — the user gets a clear note
+        explaining the limitation rather than a silently-wrong setting.
         """
         import subprocess
         level = max(0.0, min(1.0, float(level)))
 
-        # Try 'brightness' CLI tool (brew install brightness)
+        # Preferred: the `brightness` CLI from Homebrew is the only path that
+        # sets an exact level deterministically.
         try:
             result = subprocess.run(
                 ["brightness", str(level)],
                 capture_output=True, text=True, timeout=5
             )
             if result.returncode == 0:
-                return {"success": True, "level": level}
+                return {
+                    "success": True,
+                    "level": level,
+                    "message": f"Brightness set to {int(level * 100)}%.",
+                }
         except FileNotFoundError:
             pass
 
-        # Fallback: use keyboard F1/F2 simulation to approximate level
-        # Calculate steps needed (16 steps from 0 to 100%)
-        current_steps = 8  # assume middle
-        target_steps = round(level * 16)
-        diff = target_steps - current_steps
-
-        if diff > 0:
-            key = "F2"  # brightness up
-            steps = diff
-        else:
-            key = "F1"  # brightness down
-            steps = abs(diff)
-
-        script = f'tell application "System Events"\n'
-        for _ in range(min(steps, 16)):
-            script += f'    key code {"144" if key == "F2" else "145"}\n'
-        script += 'end tell'
-
-        result = await self._async_script(script)
-        result["note"] = f"Brightness adjusted {'up' if diff > 0 else 'down'} ({steps} steps). For precise control, install: brew install brightness"
-        return result
+        # Fallback: tell the user, don't lie about success. Simulating F1/F2
+        # without knowing the current level results in drift — better to be
+        # honest about the prerequisite.
+        return {
+            "success": False,
+            "error": (
+                "Precise brightness control needs the `brightness` CLI. "
+                "Install it once with: brew install brightness"
+            ),
+        }
 
     # ── Apps ───────────────────────────────────────────────────────────────
 
     async def open_app(self, app_name: str, new_window: bool = False) -> Dict[str, Any]:
         """
-        Open any application using 'open -a' — works universally on macOS
-        for every app without special cases. Always brings window to front.
+        Open any application using `open -a`. The Launch Services database
+        handles aliasing, so case variations and partial names like "chrome"
+        vs "Google Chrome" tend to resolve correctly.
+
+        `open` returns exit code 0 even when the named app doesn't exist on
+        disk — its error goes to stderr. We check stderr for the tell-tale
+        "Unable to find application" string and surface a useful error.
         """
         import asyncio
+        import subprocess as _sp
         loop = asyncio.get_event_loop()
 
         if new_window:
-            # Try AppleScript new window first, fallback to just opening
+            # Try AppleScript new window first (preserves a single instance
+            # making a new window). Fall back to `open -na` (always spawns).
             script = (
                 f'tell application "{app_name}"\n'
                 f'    activate\n'
@@ -132,25 +173,35 @@ class MacControlTool:
             )
             result = await self._async_script(script)
             if result.get("success"):
+                result["message"] = f"Opened a new window in {app_name}."
                 return result
-            # Fallback for apps that don't support make new window
-            cmd = f'open -na "{app_name}"'
+            cmd = ["open", "-na", app_name]
         else:
-            cmd = f'open -a "{app_name}"'
+            cmd = ["open", "-a", app_name]
 
-        # Use subprocess directly — faster and more reliable than osascript for opening apps
-        import subprocess as _sp
         try:
             proc = await loop.run_in_executor(
                 None,
-                lambda: _sp.run(
-                    cmd, shell=True, capture_output=True, text=True, timeout=10
-                )
+                lambda: _sp.run(cmd, capture_output=True, text=True, timeout=10),
             )
+            stderr = (proc.stderr or "").strip()
+            # `open` exits 0 even on "Unable to find application" — check stderr
+            if "Unable to find application" in stderr or "does not exist" in stderr:
+                return {
+                    "success": False,
+                    "error": f"{app_name} isn't installed on this Mac.",
+                }
             if proc.returncode == 0:
-                return {"success": True, "output": f"Opened {app_name}"}
-            else:
-                return {"success": False, "error": proc.stderr.strip() or f"Could not open {app_name}"}
+                return {
+                    "success": True,
+                    "message": f"Opened {app_name}.",
+                }
+            return {
+                "success": False,
+                "error": stderr or f"Could not open {app_name}.",
+            }
+        except _sp.TimeoutExpired:
+            return {"success": False, "error": f"Opening {app_name} timed out."}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
@@ -216,17 +267,66 @@ class MacControlTool:
         return {"success": False, "error": "Could not read battery"}
 
     async def lock_screen(self) -> Dict[str, Any]:
-        return await self._async_script(
+        """
+        Lock the screen.
+
+        Try three approaches in order of reliability:
+          1. `pmset displaysleepnow` — works without any permissions on macOS 11+
+          2. `CGSession -suspend` — works on most macOS versions
+          3. AppleScript ⌃⌘Q keystroke — needs Accessibility permission
+        """
+        import subprocess, asyncio
+        loop = asyncio.get_event_loop()
+
+        async def _run(cmd: list) -> bool:
+            try:
+                proc = await loop.run_in_executor(
+                    None,
+                    lambda: subprocess.run(cmd, capture_output=True, text=True, timeout=5),
+                )
+                return proc.returncode == 0
+            except Exception:
+                return False
+
+        if await _run(["pmset", "displaysleepnow"]):
+            return {"success": True, "message": "Screen locked."}
+        if await _run(["/System/Library/CoreServices/Menu Extras/User.menu/Contents/Resources/CGSession", "-suspend"]):
+            return {"success": True, "message": "Screen locked."}
+
+        # Last resort — keystroke, only works with Accessibility permission
+        result = await self._async_script(
             'tell application "System Events" to keystroke "q" using {control down, command down}'
         )
+        if result.get("success"):
+            result["message"] = "Screen locked."
+        else:
+            result["error"] = (
+                "Could not lock the screen. Grant your terminal Accessibility "
+                "permission in System Settings → Privacy & Security → Accessibility."
+            )
+        return result
 
     async def sleep(self) -> Dict[str, Any]:
-        return await self._async_script('tell application "System Events" to sleep')
+        """Put the Mac to sleep. Uses pmset which needs no permissions."""
+        import subprocess, asyncio
+        loop = asyncio.get_event_loop()
+        try:
+            proc = await loop.run_in_executor(
+                None,
+                lambda: subprocess.run(["pmset", "sleepnow"], capture_output=True, text=True, timeout=5),
+            )
+            if proc.returncode == 0:
+                return {"success": True, "message": "Sleeping the Mac."}
+        except Exception:
+            pass
+        # Fallback to AppleScript (needs Automation permission)
+        result = await self._async_script('tell application "System Events" to sleep')
+        if not result.get("success"):
+            result["error"] = "Could not put the Mac to sleep."
+        return result
 
-    async def quit_app(self, app_name: str) -> Dict[str, Any]:
-        """Quit an application gracefully."""
-        script = f'tell application "{app_name}" to quit'
-        return await self._async_script(script)
+    # (quit_app is defined above in the Apps section — removed the duplicate
+    # that previously lived here, which silently shadowed the original.)
 
     async def hide_app(self, app_name: str) -> Dict[str, Any]:
         """Hide an application."""
@@ -248,8 +348,47 @@ class MacControlTool:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+    async def get_dark_mode(self) -> Dict[str, Any]:
+        """
+        Check if dark mode is enabled.
+
+        Uses `defaults read -g AppleInterfaceStyle`. macOS sets this key to
+        "Dark" when dark mode is on and *deletes* the key entirely when it's
+        off — so a non-zero exit code means "off" rather than "error".
+        """
+        import subprocess
+        try:
+            result = subprocess.run(
+                ["defaults", "read", "-g", "AppleInterfaceStyle"],
+                capture_output=True, text=True, timeout=5,
+            )
+            is_dark = (
+                result.returncode == 0
+                and result.stdout.strip().lower() == "dark"
+            )
+            return {
+                "success": True,
+                "dark_mode": is_dark,
+                "message": f"Dark mode is {'on' if is_dark else 'off'}.",
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
     async def toggle_dark_mode(self) -> Dict[str, Any]:
-        """Toggle between dark and light mode."""
+        """
+        Toggle between dark and light mode.
+
+        Primary path: AppleScript against System Events — instant and clean
+        when the app has Automation permission.
+        Fallback path: the AppleScript silently no-ops without permission, so
+        we double-check the actual state afterwards and report success based
+        on whether the value flipped (rather than the AppleScript exit code,
+        which lies).
+        """
+        # Read current state so we know what "toggled" means
+        before = await self.get_dark_mode()
+        was_dark = before.get("dark_mode", False)
+
         script = (
             'tell application "System Events"\n'
             '    tell appearance preferences\n'
@@ -257,23 +396,28 @@ class MacControlTool:
             '    end tell\n'
             'end tell'
         )
-        return await self._async_script(script)
+        await self._async_script(script)
 
-    async def get_dark_mode(self) -> Dict[str, Any]:
-        """Check if dark mode is enabled."""
-        script = (
-            'tell application "System Events"\n'
-            '    tell appearance preferences\n'
-            '        return dark mode\n'
-            '    end tell\n'
-            'end tell'
-        )
-        result = await self._async_script(script)
-        if result.get("success"):
-            is_dark = result.get("output", "").strip().lower() == "true"
-            result["dark_mode"] = is_dark
-            result["message"] = f"Dark mode is {'on' if is_dark else 'off'}."
-        return result
+        # Verify it actually flipped (AppleScript returns 0 even when blocked
+        # by missing Automation permission, so we trust the state read).
+        after = await self.get_dark_mode()
+        now_dark = after.get("dark_mode", was_dark)
+
+        if now_dark != was_dark:
+            return {
+                "success": True,
+                "dark_mode": now_dark,
+                "message": f"Dark mode toggled {'on' if now_dark else 'off'}.",
+            }
+        return {
+            "success": False,
+            "dark_mode": now_dark,
+            "error": (
+                "Could not toggle dark mode. Grant Automation permission to "
+                "your terminal in System Settings → Privacy & Security → "
+                "Automation → (your terminal) → System Events."
+            ),
+        }
 
     async def get_system_info(self) -> Dict[str, Any]:
         """Get CPU, RAM, disk usage."""

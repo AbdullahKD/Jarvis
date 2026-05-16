@@ -1,0 +1,1275 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Jarvis FinEx</title>
+<style>
+  /* ── tokens (refined emerald theme) ── */
+  :root {
+    --bg-0:#070809; --bg-1:#09100b; --bg-2:#0d160f;
+    --glass:rgba(14,20,16,.65); --glass-2:rgba(16,26,19,.50); --glass-3:rgba(20,32,23,.38);
+    --stroke:rgba(100,200,130,.09); --stroke-strong:rgba(120,220,150,.18);
+    --text-0:#f0f5f2; --text-1:#c4d8ca; --text-2:#7a9282; --text-3:#495e51;
+    --accent:#34d399; --accent-2:#10b981; --accent-3:#059669;
+    --cyan:#7fe7ff; --green:#34d399; --red:#ff7a8a; --yellow:#ffd166;
+    --r-lg:22px; --r-md:16px; --r-sm:12px;
+    --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display","Inter",system-ui,sans-serif;
+    --font-mono:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,monospace;
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;margin:0;}
+  body{
+    color:var(--text-0);font-family:var(--font);font-size:14px;letter-spacing:.01em;
+    background:
+      radial-gradient(1100px 700px at 78% -10%,rgba(52,211,153,.08),transparent 60%),
+      radial-gradient(900px 600px at 5% 110%,rgba(16,185,129,.06),transparent 60%),
+      radial-gradient(700px 500px at 50% 50%,rgba(127,231,255,.03),transparent 70%),
+      linear-gradient(180deg,#070809 0%,#050607 100%);
+    overflow:hidden;
+  }
+  body::before{
+    content:"";position:fixed;inset:0;pointer-events:none;
+    background-image:
+      linear-gradient(rgba(255,255,255,.015) 1px,transparent 1px),
+      linear-gradient(90deg,rgba(255,255,255,.015) 1px,transparent 1px);
+    background-size:56px 56px;
+    mask-image:radial-gradient(ellipse at center,rgba(0,0,0,.5),transparent 70%);
+    z-index:0;
+  }
+
+  /* ── chrome ── */
+  .chrome{position:relative;z-index:5;height:38px;display:flex;align-items:center;gap:10px;padding:0 14px;}
+  .chrome .title{color:var(--text-2);font-size:12px;letter-spacing:.06em;text-transform:uppercase;}
+  .chrome .badge{padding:2px 9px;border-radius:999px;background:rgba(52,211,153,.10);color:var(--accent);border:1px solid rgba(52,211,153,.22);font-size:10px;letter-spacing:.08em;text-transform:uppercase;}
+  .chrome .right{margin-left:auto;display:flex;align-items:center;gap:10px;color:var(--text-2);font-size:12px;}
+  .chrome-back{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;background:var(--glass-3);border:1px solid var(--stroke);color:var(--text-2);font-size:11px;text-decoration:none;transition:all .15s;}
+  .chrome-back:hover{color:var(--text-0);border-color:var(--stroke-strong);}
+
+  /* ── layout ── */
+  .stage{position:relative;z-index:1;display:grid;grid-template-columns:190px 1fr 190px 190px;gap:12px;height:calc(100vh - 38px);padding:0 14px 14px;overflow:hidden;}
+
+  /* ── glass card ── */
+  .glass{
+    position:relative;
+    background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,.00)) padding-box,var(--glass) padding-box;
+    border:1px solid var(--stroke);border-radius:var(--r-lg);
+    backdrop-filter:blur(28px) saturate(140%);-webkit-backdrop-filter:blur(28px) saturate(140%);
+    box-shadow:
+      0 1px 0 rgba(255,255,255,.04) inset,
+      0 0 0 1px rgba(255,255,255,.015),
+      0 8px 32px rgba(0,0,0,.60),
+      0 0 18px -6px rgba(52,211,153,.12),
+      0 0 48px -18px rgba(52,211,153,.09),
+      0 0 90px -36px rgba(16,185,129,.07);
+    overflow:hidden;
+    animation:glassGlow 7s ease-in-out infinite;
+    transition:box-shadow .4s ease,border-color .4s ease;
+  }
+  .glass::after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;background:radial-gradient(120% 60% at 50% -10%,rgba(52,211,153,.04),transparent 60%);}
+  .glass:hover{border-color:var(--stroke-strong);box-shadow:0 1px 0 rgba(255,255,255,.06) inset,0 0 0 1px rgba(255,255,255,.025),0 8px 32px rgba(0,0,0,.60),0 0 26px -6px rgba(52,211,153,.22),0 0 62px -18px rgba(52,211,153,.16),0 0 110px -36px rgba(16,185,129,.13);animation:none;}
+  @keyframes glassGlow{
+    0%,100%{box-shadow:0 1px 0 rgba(255,255,255,.04) inset,0 0 0 1px rgba(255,255,255,.015),0 8px 32px rgba(0,0,0,.60),0 0 18px -6px rgba(52,211,153,.12),0 0 48px -18px rgba(52,211,153,.09),0 0 90px -36px rgba(16,185,129,.07);}
+    50%{box-shadow:0 1px 0 rgba(255,255,255,.055) inset,0 0 0 1px rgba(255,255,255,.022),0 8px 32px rgba(0,0,0,.60),0 0 26px -6px rgba(52,211,153,.20),0 0 62px -18px rgba(52,211,153,.15),0 0 110px -36px rgba(16,185,129,.12);}
+  }
+
+  /* ── card inner ── */
+  .card{padding:12px 14px;}
+  .card .h{
+    display:flex;align-items:center;justify-content:space-between;
+    margin-bottom:10px;padding-bottom:8px;
+    border-bottom:1px solid var(--stroke);
+    position:relative;
+  }
+  /* Soft accent underline below each header — fades from green to transparent */
+  .card .h::after{
+    content:"";position:absolute;left:0;bottom:-1px;height:1px;
+    width:42%;
+    background:linear-gradient(90deg,rgba(52,211,153,.55),rgba(52,211,153,0));
+  }
+  .card .h .t{
+    font-size:11px;letter-spacing:.16em;text-transform:uppercase;
+    display:flex;align-items:center;gap:8px;font-weight:600;
+    background:linear-gradient(90deg,#e6f9ee 0%,#a7f3c8 55%,#34d399 100%);
+    -webkit-background-clip:text;background-clip:text;
+    -webkit-text-fill-color:transparent;color:transparent;
+  }
+  .card .h .t-icon{
+    width:14px;height:14px;flex-shrink:0;color:var(--accent);
+    filter:drop-shadow(0 0 4px rgba(52,211,153,.45));
+  }
+  .card .h .t .tag{
+    padding:2px 7px;border-radius:999px;
+    background:rgba(52,211,153,.10);
+    color:var(--accent);border:1px solid rgba(52,211,153,.22);
+    font-size:10px;letter-spacing:.08em;
+    -webkit-text-fill-color:var(--accent);
+  }
+  .card .h .t .live-dot{
+    width:6px;height:6px;border-radius:50%;background:var(--accent);
+    box-shadow:0 0 0 0 rgba(52,211,153,.6);
+    animation:liveBlink 1.6s ease-in-out infinite;flex-shrink:0;
+  }
+  @keyframes liveBlink{
+    0%,100%{box-shadow:0 0 0 0 rgba(52,211,153,.65);opacity:1;}
+    50%{box-shadow:0 0 0 6px rgba(52,211,153,0);opacity:.55;}
+  }
+  .card .h .meta{
+    color:var(--text-3);font-size:10px;font-family:var(--font-mono);
+    padding:2px 7px;border-radius:999px;
+    background:rgba(255,255,255,.025);border:1px solid var(--stroke);
+  }
+
+  /* ── LEFT rail ── */
+  .rail-left{display:flex;flex-direction:column;gap:10px;overflow:hidden;padding-top:2px;}
+
+  /* ── RIGHT rail: fixed-height panels so Companies DB is always visible ── */
+  .rail-right{display:flex;flex-direction:column;gap:10px;overflow:hidden;padding-top:2px;}
+  .rail-right .glass.stock-panel{height:148px;flex-shrink:0;overflow:hidden;}
+  .rail-right .glass.stock-panel .stock-scroll{overflow-y:auto;max-height:88px;scrollbar-width:none;}
+  .rail-right .glass.stock-panel .stock-scroll::-webkit-scrollbar{display:none;}
+  .rail-right .glass.co-panel{flex:1;overflow:hidden;min-height:80px;}
+
+  /* Left rail animation stagger */
+  .rail-left .glass:nth-child(2){animation-delay:-2s;}
+  .rail-left .glass:nth-child(3){animation-delay:-4s;}
+  .rail-right .glass:nth-child(2){animation-delay:-1.5s;}
+  .rail-right .glass:nth-child(3){animation-delay:-3s;}
+  .rail-right .glass:nth-child(4){animation-delay:-4.5s;}
+
+  /* ── ticker rows ── */
+  .ticker-row{display:flex;align-items:center;justify-content:space-between;padding:5px 6px;border-radius:8px;transition:background .15s;}
+  .ticker-row:hover{background:var(--glass-3);}
+  .t-sym{font-size:11px;font-weight:700;color:var(--text-1);letter-spacing:.03em;}
+  .t-name{font-size:10px;color:var(--text-3);margin-top:1px;max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .t-price{font-size:11px;font-weight:600;font-family:var(--font-mono);}
+  .t-chg{font-size:10px;font-family:var(--font-mono);text-align:right;}
+  .up{color:var(--green);}.dn{color:var(--red);}.nt{color:var(--text-2);}
+
+  /* ── stock rows ── */
+  .stock-row{display:flex;align-items:center;gap:0;padding:5px 6px;border-radius:8px;transition:background .15s;}
+  .stock-row:hover{background:var(--glass-3);}
+  .s-sym{font-size:11px;font-weight:700;color:var(--text-1);}
+  .s-name{font-size:9px;color:var(--text-3);margin-top:1px;}
+
+  /* ── news items ── */
+  .fin-news-item{padding:8px 0;border-bottom:1px solid var(--stroke);}
+  .fin-news-item:last-child{border-bottom:none;}
+  .fin-news-item a{color:var(--text-1);text-decoration:none;font-size:12px;line-height:1.45;display:block;transition:color .15s;}
+  .fin-news-item a:hover{color:var(--accent);}
+  .fin-news-src{font-size:10px;color:var(--text-3);margin-top:2px;}
+
+  /* ── companies ── */
+  .co-row{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:10px;background:var(--glass-3);border:1px solid var(--stroke);margin-bottom:5px;cursor:pointer;transition:border-color .15s;}
+  .co-row:hover{border-color:var(--stroke-strong);}
+  .co-row.active{background:rgba(52,211,153,.08);border-color:rgba(52,211,153,.26);}
+  .co-dot{width:6px;height:6px;border-radius:50%;background:var(--accent);box-shadow:0 0 5px rgba(52,211,153,.50);flex-shrink:0;}
+  .co-name{font-size:12px;font-weight:500;color:var(--text-1);}
+  .co-periods{font-size:10px;color:var(--text-3);}
+
+  /* ── center column ── */
+  .center-col{display:flex;flex-direction:column;gap:10px;min-width:0;overflow:hidden;}
+
+  /* ── control bar ── */
+  .ctrl-bar{
+    background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,.00)) padding-box,var(--glass) padding-box;
+    border:1px solid var(--stroke);border-radius:var(--r-lg);
+    backdrop-filter:blur(28px) saturate(140%);
+    padding:10px 14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;flex-shrink:0;
+    animation:glassGlow 7s ease-in-out infinite;
+    box-shadow:0 1px 0 rgba(255,255,255,.04) inset,0 0 0 1px rgba(255,255,255,.015),0 8px 32px rgba(0,0,0,.60),0 0 18px -6px rgba(52,211,153,.12),0 0 48px -18px rgba(52,211,153,.09),0 0 90px -36px rgba(16,185,129,.07);
+  }
+  .ctrl-label{font-size:11px;color:var(--text-2);text-transform:uppercase;letter-spacing:.1em;flex-shrink:0;}
+  .select-glass{background:var(--glass-3);border:1px solid var(--stroke);border-radius:8px;color:var(--text-0);font-size:12px;padding:5px 10px;cursor:pointer;outline:none;font-family:var(--font);transition:border-color .2s;}
+  .select-glass:hover,.select-glass:focus{border-color:var(--stroke-strong);}
+
+  /* level tabs */
+  .levels{display:flex;gap:3px;align-items:center;}
+  .lvl-btn{
+    padding:5px 11px;border-radius:999px;font-size:11px;font-weight:500;
+    border:1px solid var(--stroke);background:var(--glass-3);color:var(--text-2);
+    cursor:pointer;transition:all .15s;letter-spacing:.04em;position:relative;
+  }
+  .lvl-btn:hover{color:var(--text-1);border-color:var(--stroke-strong);}
+  .lvl-btn.active{
+    background:rgba(52,211,153,.13);border-color:rgba(52,211,153,.40);
+    color:var(--text-0);
+    box-shadow:0 0 14px -4px rgba(52,211,153,.45),inset 0 0 0 1px rgba(255,255,255,.04);
+  }
+  .lvl-btn.active::after{
+    content:"";position:absolute;left:50%;bottom:-7px;
+    transform:translateX(-50%);width:6px;height:6px;
+    background:var(--accent);border-radius:50%;
+    box-shadow:0 0 8px rgba(52,211,153,.65);
+  }
+  .lvl-toggle{
+    display:flex;align-items:center;gap:4px;
+    padding:5px 9px;border-radius:999px;
+    border:1px solid var(--stroke);background:var(--glass-3);
+    color:var(--text-3);font-size:10px;letter-spacing:.06em;
+    cursor:pointer;transition:all .15s;text-transform:uppercase;
+    margin-left:6px;
+  }
+  .lvl-toggle:hover{color:var(--text-1);border-color:var(--stroke-strong);}
+  .lvl-toggle .chev{
+    width:9px;height:9px;transition:transform .25s ease;
+  }
+  .lvl-toggle.open .chev{transform:rotate(180deg);}
+
+  /* per-level suggested questions — collapsable panel below the level row */
+  .lvl-suggest{
+    overflow:hidden;
+    max-height:0;
+    transition:max-height .28s ease,opacity .2s ease,margin-top .2s ease;
+    opacity:0;margin-top:0;
+  }
+  .lvl-suggest.open{
+    max-height:200px;opacity:1;margin-top:10px;
+  }
+  .lvl-suggest-head{
+    display:flex;align-items:center;gap:8px;
+    font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--text-3);margin-bottom:6px;
+  }
+  .lvl-suggest-head .lvl-tag{
+    padding:1px 7px;border-radius:999px;
+    background:rgba(52,211,153,.12);color:var(--accent);
+    border:1px solid rgba(52,211,153,.28);font-size:9px;letter-spacing:.10em;font-weight:600;
+  }
+  .lvl-suggest-head .lvl-label{color:var(--text-2);font-weight:500;}
+
+  /* quick action chips */
+  .q-chips{display:flex;gap:6px;flex-wrap:wrap;}
+  .q-chip{
+    padding:5px 12px;border-radius:999px;
+    background:var(--glass-3);border:1px solid var(--stroke);
+    color:var(--text-1);font-size:11px;cursor:pointer;
+    transition:all .15s ease;white-space:nowrap;
+  }
+  .q-chip:hover{
+    border-color:rgba(52,211,153,.38);color:var(--text-0);
+    transform:translateY(-1px);background:rgba(52,211,153,.06);
+    box-shadow:0 6px 18px -10px rgba(52,211,153,.55);
+  }
+  .q-chip:active{transform:translateY(0);}
+
+  /* upload strip */
+  .upload-strip{
+    background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,.00)) padding-box,var(--glass) padding-box;
+    border:1px solid var(--stroke);border-radius:var(--r-md);
+    backdrop-filter:blur(28px) saturate(140%);
+    padding:8px 14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;flex-shrink:0;
+    animation:glassGlow 7s ease-in-out infinite;animation-delay:-3s;
+    box-shadow:0 1px 0 rgba(255,255,255,.04) inset,0 0 0 1px rgba(255,255,255,.015),0 8px 32px rgba(0,0,0,.60),0 0 18px -6px rgba(52,211,153,.12),0 0 48px -18px rgba(52,211,153,.09),0 0 90px -36px rgba(16,185,129,.07);
+  }
+  .up-btn{padding:5px 12px;border-radius:999px;background:rgba(52,211,153,.11);border:1px solid rgba(52,211,153,.24);color:var(--accent);font-size:11px;font-weight:500;cursor:pointer;font-family:var(--font);transition:all .15s;}
+  .up-btn:hover{background:rgba(52,211,153,.20);border-color:rgba(52,211,153,.40);}
+  .up-btn:disabled{opacity:.45;cursor:not-allowed;}
+  .up-file-label{font-size:11px;color:var(--text-3);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .up-status{font-size:11px;color:var(--green);}
+  .up-name-input{
+    background:rgba(255,255,255,.04);border:1px solid var(--stroke);border-radius:999px;
+    padding:5px 12px;font-size:11px;color:var(--text-0);font-family:var(--font);
+    outline:none;min-width:170px;max-width:220px;transition:border-color .15s,background .15s;
+  }
+  .up-name-input::placeholder{color:var(--text-3);}
+  .up-name-input:focus{border-color:rgba(52,211,153,.45);background:rgba(52,211,153,.06);}
+  #pdfInput{display:none;}
+  .cap-pills{display:flex;gap:5px;flex-wrap:wrap;}
+  .cap-pill{padding:2px 8px;border-radius:999px;font-size:10px;background:rgba(52,211,153,.06);border:1px solid rgba(52,211,153,.14);color:var(--text-2);letter-spacing:.04em;}
+
+  /* ── chat panel ── */
+  .chat-panel{
+    flex:1;display:flex;flex-direction:column;overflow:hidden;
+    background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,.00)) padding-box,var(--glass) padding-box;
+    border:1px solid var(--stroke);border-radius:var(--r-lg);
+    backdrop-filter:blur(28px) saturate(140%);
+    animation:glassGlowCenter 7s ease-in-out infinite;
+    box-shadow:0 1px 0 rgba(255,255,255,.05) inset,0 0 0 1px rgba(255,255,255,.02),0 8px 40px rgba(0,0,0,.65),0 0 28px -8px rgba(52,211,153,.16),0 0 70px -22px rgba(52,211,153,.12),0 0 130px -45px rgba(16,185,129,.10);
+  }
+  @keyframes glassGlowCenter{
+    0%,100%{box-shadow:0 1px 0 rgba(255,255,255,.05) inset,0 0 0 1px rgba(255,255,255,.02),0 8px 40px rgba(0,0,0,.65),0 0 28px -8px rgba(52,211,153,.16),0 0 70px -22px rgba(52,211,153,.12),0 0 130px -45px rgba(16,185,129,.10);}
+    50%{box-shadow:0 1px 0 rgba(255,255,255,.065) inset,0 0 0 1px rgba(255,255,255,.028),0 8px 40px rgba(0,0,0,.65),0 0 40px -8px rgba(52,211,153,.26),0 0 90px -22px rgba(52,211,153,.20),0 0 160px -45px rgba(16,185,129,.17);}
+  }
+  .chat-hd{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--stroke);flex-shrink:0;}
+  .chat-hd-title{font-size:11px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--text-2);}
+  .level-badge{margin-left:auto;padding:2px 8px;border-radius:999px;background:rgba(52,211,153,.10);border:1px solid rgba(52,211,153,.22);color:var(--accent);font-size:10px;font-weight:600;letter-spacing:.08em;}
+  .clear-btn{padding:4px 10px;border-radius:999px;background:var(--glass-3);border:1px solid var(--stroke);color:var(--text-2);font-size:11px;cursor:pointer;font-family:var(--font);transition:all .15s;}
+  .clear-btn:hover{color:var(--text-0);border-color:var(--stroke-strong);}
+
+  /* chat thread */
+  .chat-thread{flex:1;overflow-y:auto;padding:12px 14px;display:flex;flex-direction:column;gap:10px;scrollbar-width:thin;scrollbar-color:rgba(52,211,153,.15) transparent;}
+  .chat-thread::-webkit-scrollbar{width:6px;}
+  .chat-thread::-webkit-scrollbar-thumb{background:rgba(52,211,153,.15);border-radius:3px;}
+  .msg{max-width:85%;padding:10px 14px;border-radius:16px;line-height:1.5;font-size:13px;white-space:pre-wrap;word-wrap:break-word;}
+  .msg.user{align-self:flex-end;background:linear-gradient(135deg,rgba(52,211,153,.20),rgba(16,185,129,.14));border:1px solid rgba(52,211,153,.26);}
+  .msg.bot{align-self:flex-start;background:var(--glass-3);border:1px solid var(--stroke);color:var(--text-0);}
+  .msg.bot.typing{color:var(--text-2);font-style:italic;}
+  .msg strong{color:var(--accent);}
+  .msg em{color:var(--cyan);}
+  .msg code{font-family:var(--font-mono);font-size:11px;background:rgba(52,211,153,.08);padding:1px 5px;border-radius:4px;color:var(--yellow);}
+  .msg table{width:100%;border-collapse:collapse;margin:8px 0;font-size:12px;}
+  .msg th{padding:5px 8px;text-align:left;border-bottom:1px solid rgba(52,211,153,.22);color:var(--accent);font-size:10px;text-transform:uppercase;letter-spacing:.06em;}
+  .msg td{padding:5px 8px;border-bottom:1px solid var(--stroke);color:var(--text-1);}
+  .msg-meta{color:var(--text-3);font-size:10px;margin-top:4px;}
+
+  /* typing indicator */
+  .typing-dots{display:flex;gap:4px;padding:4px 0;}
+  .typing-dots span{width:6px;height:6px;border-radius:50%;background:var(--accent);animation:typDot 1.2s ease-in-out infinite;}
+  .typing-dots span:nth-child(2){animation-delay:.2s;}
+  .typing-dots span:nth-child(3){animation-delay:.4s;}
+  @keyframes typDot{0%,60%,100%{transform:translateY(0);opacity:.4}30%{transform:translateY(-6px);opacity:1}}
+
+  /* dock */
+  .dock{
+    padding:10px 12px;border-radius:18px;flex-shrink:0;margin:0 10px 10px;
+    background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.00)) padding-box,var(--glass) padding-box;
+    border:1px solid var(--stroke-strong);backdrop-filter:blur(28px) saturate(140%);
+    box-shadow:0 20px 55px -32px rgba(52,211,153,.32),0 0 22px -8px rgba(52,211,153,.15),0 0 70px -24px rgba(16,185,129,.15);
+    animation:glassGlow 7s ease-in-out infinite;animation-delay:-1s;
+  }
+  .dock:focus-within{box-shadow:0 20px 55px -28px rgba(52,211,153,.48),0 0 30px -8px rgba(52,211,153,.26),0 0 95px -24px rgba(16,185,129,.24);animation:none;}
+  .dock-row1{display:flex;align-items:center;gap:10px;}
+  .dock textarea{flex:1;background:transparent;border:0;outline:0;color:var(--text-0);font-size:14px;font-family:var(--font);resize:none;min-height:22px;max-height:120px;line-height:1.5;}
+  .dock textarea::placeholder{color:var(--text-3);}
+  .send-btn{width:34px;height:34px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent-3));color:#041a0d;display:grid;place-items:center;cursor:pointer;border:none;font-size:14px;box-shadow:0 8px 20px -8px rgba(52,211,153,.45);flex-shrink:0;transition:transform .15s;}
+  .send-btn:hover{transform:scale(1.05);}
+  .send-btn:disabled{opacity:.4;cursor:not-allowed;transform:none;}
+
+  /* welcome splash */
+  .welcome{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:14px;text-align:center;padding:20px;}
+  .welcome-glow{width:72px;height:72px;border-radius:50%;background:linear-gradient(135deg,rgba(52,211,153,.16),rgba(16,185,129,.24));border:1px solid rgba(52,211,153,.22);display:flex;align-items:center;justify-content:center;box-shadow:0 0 35px rgba(52,211,153,.16);animation:wGlow 4s ease-in-out infinite;}
+  @keyframes wGlow{0%,100%{box-shadow:0 0 35px rgba(52,211,153,.16)}50%{box-shadow:0 0 55px rgba(52,211,153,.30)}}
+  .welcome h2{margin:0;font-size:20px;font-weight:300;letter-spacing:-.02em;background:linear-gradient(180deg,#fff,#a7f3c8 80%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;}
+  .welcome p{margin:0;font-size:12px;color:var(--text-2);max-width:300px;line-height:1.6;}
+
+  /* shimmer */
+  .shimmer{height:12px;border-radius:6px;background:linear-gradient(90deg,var(--glass-3) 25%,rgba(52,211,153,.05) 50%,var(--glass-3) 75%);background-size:200% 100%;animation:shim 1.8s infinite;margin:4px 0;}
+  @keyframes shim{0%{background-position:200% 0}100%{background-position:-200% 0}}
+  .err-text{color:var(--red);font-size:11px;padding:4px 0;}
+
+  /* news column */
+  .news-col{display:flex;flex-direction:column;gap:10px;overflow:hidden;padding-top:2px;}
+
+  /* ── upload progress modal ── */
+  .upl-backdrop{
+    position:fixed;inset:0;z-index:9999;background:rgba(2,10,8,.62);
+    backdrop-filter:blur(8px) saturate(120%);
+    display:none;align-items:center;justify-content:center;
+    opacity:0;transition:opacity .18s ease;
+  }
+  .upl-backdrop.show{display:flex;opacity:1;}
+  .upl-card{
+    width:min(560px,92vw);
+    background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.01)) padding-box,var(--glass) padding-box;
+    border:1px solid var(--stroke-strong);border-radius:18px;
+    backdrop-filter:blur(28px) saturate(140%);
+    box-shadow:0 30px 80px -20px rgba(0,0,0,.75),0 0 0 1px rgba(255,255,255,.04),0 0 40px -8px rgba(52,211,153,.28),0 0 120px -28px rgba(16,185,129,.20);
+    padding:22px 24px 20px;color:var(--text-0);font-family:var(--font);
+    transform:scale(.96);opacity:0;transition:transform .22s ease,opacity .22s ease;
+  }
+  .upl-backdrop.show .upl-card{transform:scale(1);opacity:1;}
+  .upl-card-head{display:flex;align-items:center;gap:10px;margin-bottom:14px;}
+  .upl-card-title{font-size:13px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);}
+  .upl-card-time{margin-left:auto;font-family:var(--font-mono);font-size:11px;color:var(--text-2);background:rgba(52,211,153,.08);border:1px solid rgba(52,211,153,.22);padding:3px 10px;border-radius:999px;}
+  .upl-meta{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin-bottom:14px;font-size:12px;}
+  .upl-meta dt{color:var(--text-3);text-transform:uppercase;letter-spacing:.06em;font-size:10px;align-self:center;}
+  .upl-meta dd{margin:0;color:var(--text-0);font-family:var(--font-mono);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .upl-bar{
+    position:relative;height:6px;border-radius:3px;background:rgba(255,255,255,.05);
+    border:1px solid var(--stroke);overflow:hidden;margin:6px 0 12px;
+  }
+  .upl-bar-fill{
+    position:absolute;top:0;bottom:0;width:35%;
+    background:linear-gradient(90deg,transparent,rgba(52,211,153,.55) 50%,transparent);
+    box-shadow:0 0 10px rgba(52,211,153,.35);
+    animation:uplSlide 1.5s ease-in-out infinite;
+  }
+  @keyframes uplSlide{
+    0%{left:-35%;}100%{left:100%;}
+  }
+  .upl-bar.done .upl-bar-fill{
+    animation:none;left:0;width:100%;
+    background:linear-gradient(90deg,rgba(52,211,153,.65),rgba(16,185,129,.85));
+  }
+  .upl-bar.err .upl-bar-fill{
+    animation:none;left:0;width:100%;
+    background:linear-gradient(90deg,rgba(248,113,113,.55),rgba(220,38,38,.85));
+  }
+  .upl-phases{display:flex;flex-direction:column;gap:6px;margin-bottom:14px;font-size:12px;}
+  .upl-phase{display:flex;align-items:center;gap:9px;color:var(--text-3);transition:color .18s;}
+  .upl-phase.active{color:var(--text-0);font-weight:500;}
+  .upl-phase.done{color:var(--accent);}
+  .upl-phase .dot{
+    width:8px;height:8px;border-radius:50%;background:var(--stroke);
+    border:1px solid var(--stroke-strong);flex-shrink:0;transition:all .18s;
+  }
+  .upl-phase.active .dot{
+    background:var(--accent);border-color:var(--accent);
+    box-shadow:0 0 0 0 rgba(52,211,153,.65);animation:uplPulse 1.4s ease-in-out infinite;
+  }
+  .upl-phase.done .dot{background:var(--accent);border-color:var(--accent);box-shadow:0 0 6px rgba(52,211,153,.5);}
+  @keyframes uplPulse{
+    0%,100%{box-shadow:0 0 0 0 rgba(52,211,153,.55);}
+    50%{box-shadow:0 0 0 6px rgba(52,211,153,0);}
+  }
+  .upl-msg{font-size:12px;color:var(--text-2);min-height:34px;padding:8px 10px;border-radius:8px;background:rgba(255,255,255,.02);border:1px solid var(--stroke);margin-bottom:14px;line-height:1.45;}
+  .upl-msg.ok{color:var(--accent);background:rgba(52,211,153,.06);border-color:rgba(52,211,153,.28);}
+  .upl-msg.err{color:#fda4af;background:rgba(220,38,38,.07);border-color:rgba(220,38,38,.30);}
+  .upl-summary{font-size:11px;color:var(--text-2);font-family:var(--font-mono);margin-top:4px;line-height:1.55;}
+  .upl-summary b{color:var(--text-0);font-weight:500;}
+  .upl-actions{display:flex;gap:8px;justify-content:flex-end;}
+  .upl-btn-close{
+    padding:6px 16px;border-radius:999px;background:var(--glass-3);border:1px solid var(--stroke-strong);
+    color:var(--text-1);font-size:11px;font-family:var(--font);cursor:pointer;transition:all .15s;
+  }
+  .upl-btn-close:hover{color:var(--text-0);border-color:var(--accent);background:rgba(52,211,153,.08);}
+  .upl-btn-close.primary{background:rgba(52,211,153,.14);border-color:rgba(52,211,153,.40);color:var(--accent);}
+
+  @keyframes blink{50%{opacity:.35;}}
+  *{scrollbar-width:thin;scrollbar-color:rgba(52,211,153,.10) transparent;}
+</style>
+</head>
+<body>
+
+<!-- chrome -->
+<div class="chrome">
+  <span class="title">Jarvis</span>
+  <span class="badge">FinEx</span>
+  <div class="right">
+    <span id="mktTime" style="font-family:var(--font-mono);font-size:11px;"></span>
+    <a href="/" class="chrome-back">← Back to Jarvis</a>
+  </div>
+</div>
+
+<!-- stage -->
+<div class="stage">
+
+  <!-- LEFT RAIL: Indices / Crypto / Commodities -->
+  <div class="rail-left">
+    <div class="glass">
+      <div class="card">
+        <div class="h"><div class="t">
+          <svg class="t-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l5-5 4 4 7-9"/><path d="M14 7h6v6"/></svg>
+          <span class="live-dot"></span>
+          Indices <span class="tag" id="idxCount"></span>
+        </div></div>
+        <div id="railIndices"><div class="shimmer" style="width:90%"></div><div class="shimmer" style="width:70%"></div><div class="shimmer" style="width:80%"></div></div>
+      </div>
+    </div>
+    <div class="glass">
+      <div class="card">
+        <div class="h"><div class="t">
+          <svg class="t-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9 8h4.5a2.5 2.5 0 0 1 0 5H9V8z"/><path d="M9 13h5a2.5 2.5 0 0 1 0 5H9v-5z"/><path d="M11 6v2M11 18v2"/></svg>
+          <span class="live-dot"></span>
+          Crypto
+        </div></div>
+        <div id="railCrypto"><div class="shimmer" style="width:80%"></div><div class="shimmer" style="width:65%"></div></div>
+      </div>
+    </div>
+    <div class="glass" style="flex:1;overflow:hidden;">
+      <div class="card" style="height:100%;display:flex;flex-direction:column;">
+        <div class="h"><div class="t">
+          <svg class="t-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V5"/><path d="M4 5l8 5 8-5"/><path d="M4 12l8 5 8-5"/><path d="M20 19V5"/></svg>
+          <span class="live-dot"></span>
+          Commodities &amp; FX
+        </div></div>
+        <div id="railComm" style="overflow-y:auto;flex:1;"><div class="shimmer" style="width:75%"></div><div class="shimmer" style="width:60%"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CENTER: controls + chat -->
+  <div class="center-col">
+
+    <!-- company + level + collapsable suggested questions -->
+    <div class="ctrl-bar" style="flex-direction:column;align-items:stretch;gap:8px;">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <span class="ctrl-label">Company</span>
+        <select class="select-glass" id="coSelect"><option>Loading…</option></select>
+        <span class="ctrl-label">Level</span>
+        <div class="levels" id="levelsRow">
+          <button class="lvl-btn" data-lvl="1">L1</button>
+          <button class="lvl-btn" data-lvl="2">L2</button>
+          <button class="lvl-btn active" data-lvl="3">L3</button>
+          <button class="lvl-btn" data-lvl="4">L4</button>
+          <button class="lvl-btn" data-lvl="5">L5</button>
+          <button class="lvl-btn" data-lvl="6">L6</button>
+        </div>
+        <button class="lvl-toggle open" id="lvlToggle" type="button" aria-expanded="true" aria-controls="lvlSuggest" title="Show / hide suggested questions">
+          <span>Suggestions</span>
+          <svg class="chev" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5l3 3 3-3"/></svg>
+        </button>
+      </div>
+      <div class="lvl-suggest open" id="lvlSuggest" aria-live="polite">
+        <div class="lvl-suggest-head">
+          <span class="lvl-tag" id="lvlSuggestTag">L3</span>
+          <span class="lvl-label" id="lvlSuggestLabel">Ratio Analysis · click a question to ask</span>
+        </div>
+        <div class="q-chips" id="lvlSuggestChips"></div>
+      </div>
+    </div>
+
+    <!-- PDF upload -->
+    <div class="upload-strip">
+      <span class="ctrl-label">Upload Statement</span>
+      <button class="up-btn" onclick="document.getElementById('pdfInput').click()">Choose PDF</button>
+      <input type="file" id="pdfInput" accept=".pdf" />
+      <span class="up-file-label" id="uploadFileName">No file chosen</span>
+      <input
+        type="text"
+        id="uploadCompanyName"
+        class="up-name-input"
+        placeholder="Company / label (e.g. Tesco FY25)"
+        autocomplete="off"
+        spellcheck="false"
+        maxlength="80"
+      />
+      <button class="up-btn" id="uploadSubmitBtn" disabled onclick="submitUpload()">Upload</button>
+      <span class="up-status" id="uploadStatus"></span>
+      <div class="cap-pills">
+        <span class="cap-pill">DCF Modeling</span>
+        <span class="cap-pill">Ratio Analysis</span>
+        <span class="cap-pill">Trend Detection</span>
+        <span class="cap-pill">Risk Scoring</span>
+        <span class="cap-pill">Peer Benchmarks</span>
+      </div>
+    </div>
+
+    <!-- chat -->
+    <div class="chat-panel">
+      <div class="chat-hd">
+        <span class="chat-hd-title">Financial Intelligence Engine</span>
+        <span class="level-badge" id="levelBadge">L3 · Balanced</span>
+        <button class="clear-btn" onclick="clearChat()">Clear</button>
+      </div>
+      <div class="chat-thread" id="chatThread">
+        <div class="welcome">
+          <div class="welcome-glow">
+            <svg viewBox="0 0 64 64" width="40" height="40" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <circle cx="32" cy="32" r="5" fill="#34d399"/>
+              <ellipse cx="32" cy="32" rx="28" ry="10" stroke="#34d399" stroke-width="1.6" opacity="0.9"/>
+              <ellipse cx="32" cy="32" rx="28" ry="10" stroke="#34d399" stroke-width="1.6" opacity="0.65" transform="rotate(60 32 32)"/>
+              <ellipse cx="32" cy="32" rx="28" ry="10" stroke="#34d399" stroke-width="1.6" opacity="0.4" transform="rotate(120 32 32)"/>
+              <circle cx="60" cy="32" r="3" fill="#34d399"/>
+              <circle cx="18" cy="9.6" r="3" fill="#34d399" opacity="0.8"/>
+              <circle cx="18" cy="54.4" r="3" fill="#34d399" opacity="0.55"/>
+            </svg>
+          </div>
+          <h2>Jarvis FinEx</h2>
+          <p>Upload a financial statement PDF and ask questions about revenue, margins, investor outlook, risks, and more.</p>
+        </div>
+      </div>
+      <div class="dock">
+        <div class="dock-row1">
+          <textarea id="chatInput" rows="1" placeholder="Ask about financials… e.g. 'What drove revenue growth?'" onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
+          <button class="send-btn" id="sendBtn" onclick="sendMsg()">➤</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- RIGHT RAIL: Tech / Financials / Energy + Companies DB (always visible) -->
+  <div class="rail-right">
+    <div class="glass stock-panel">
+      <div class="card" style="padding-bottom:8px;">
+        <div class="h" style="margin-bottom:6px;padding-bottom:6px;"><div class="t">
+          <svg class="t-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="12" rx="2"/><path d="M2 20h20"/><path d="M9 8h6M9 12h6"/></svg>
+          Technology
+        </div></div>
+        <div id="railTech" class="stock-scroll"><div class="shimmer" style="width:90%"></div><div class="shimmer" style="width:70%"></div></div>
+      </div>
+    </div>
+    <div class="glass stock-panel">
+      <div class="card" style="padding-bottom:8px;">
+        <div class="h" style="margin-bottom:6px;padding-bottom:6px;"><div class="t">
+          <svg class="t-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M5 21V9l7-4 7 4v12"/><path d="M9 21v-6h6v6"/></svg>
+          Financials
+        </div></div>
+        <div id="railFin" class="stock-scroll"><div class="shimmer" style="width:85%"></div><div class="shimmer" style="width:65%"></div></div>
+      </div>
+    </div>
+    <div class="glass stock-panel">
+      <div class="card" style="padding-bottom:8px;">
+        <div class="h" style="margin-bottom:6px;padding-bottom:6px;"><div class="t">
+          <svg class="t-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z"/></svg>
+          Energy &amp; Health
+        </div></div>
+        <div id="railEH" class="stock-scroll"><div class="shimmer" style="width:80%"></div><div class="shimmer" style="width:60%"></div></div>
+      </div>
+    </div>
+    <div class="glass co-panel">
+      <div class="card" style="height:100%;display:flex;flex-direction:column;">
+        <div class="h"><div class="t">
+          <svg class="t-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg>
+          Companies DB
+        </div><span class="meta" id="coCount">0</span></div>
+        <div id="railCompanies" style="overflow-y:auto;flex:1;scrollbar-width:none;"><div class="shimmer" style="width:70%"></div><div class="shimmer" style="width:60%"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- NEWS COLUMN: full height -->
+  <div class="news-col">
+    <div class="glass" style="flex:1;overflow:hidden;animation-delay:-2s;">
+      <div class="card" style="height:100%;display:flex;flex-direction:column;">
+        <div class="h"><div class="t">
+          <svg class="t-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h12v14H4z"/><path d="M16 9h4v9a2 2 0 0 1-4 0V9z"/><path d="M7 10h6M7 13h6M7 16h4"/></svg>
+          <span class="live-dot"></span>
+          Financial News
+        </div><span class="meta" id="newsCount"></span></div>
+        <div id="railNews" style="overflow-y:auto;flex:1;">
+          <div class="shimmer" style="width:90%"></div><div class="shimmer" style="width:75%"></div>
+          <div class="shimmer" style="width:85%"></div><div class="shimmer" style="width:70%"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+/* ── state ── */
+const state = { level:3, company:'Bestway Cement', history:[], busy:false };
+const LEVEL_LABELS = {1:'Quick',2:'Standard',3:'Balanced',4:'Deep',5:'Expert',6:'Maximum'};
+const $  = s => document.querySelector(s);
+const $$ = s => document.querySelectorAll(s);
+function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
+
+/* ── clock ── */
+function tickClock(){
+  const el=$('#mktTime');if(!el)return;
+  const ny=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit',timeZone:'America/New_York'});
+  el.textContent=`NY ${ny}`;
+}
+tickClock();setInterval(tickClock,1000);
+
+/* ── price formatters ── */
+function fmtPrice(p){
+  if(p==null||p===''||p==='N/A')return'<span class="nt">—</span>';
+  const n=parseFloat(p);if(isNaN(n))return`<span class="nt">${esc(String(p))}</span>`;
+  if(n>=1000)return n.toLocaleString('en-US',{maximumFractionDigits:2});
+  if(n>=1)return n.toFixed(2);
+  return n.toFixed(4);
+}
+function fmtChg(c,pct){
+  if(c==null&&pct==null)return'';
+  const v=parseFloat(c)||0,cls=v>=0?'up':'dn',sign=v>=0?'+':'';
+  const pctStr=pct!=null?` (${parseFloat(pct)>=0?'+':''}${parseFloat(pct).toFixed(2)}%)`:'';
+  return`<span class="${cls}">${sign}${v.toFixed(2)}${pctStr}</span>`;
+}
+
+/* ── render helpers ── */
+function tickerHTML(item){
+  const{symbol,name,price,change,change_percent}=item;
+  return`<div class="ticker-row">
+    <div><div class="t-sym">${esc(symbol||'')}</div><div class="t-name">${esc(name||symbol||'')}</div></div>
+    <div style="text-align:right"><div class="t-price">${fmtPrice(price)}</div><div class="t-chg">${fmtChg(change,change_percent)}</div></div>
+  </div>`;
+}
+function stockHTML(item){
+  const{symbol,name,price,change,change_percent}=item;
+  const cls=(parseFloat(change)||0)>=0?'up':'dn',sign=(parseFloat(change)||0)>=0?'+':'';
+  return`<div class="stock-row">
+    <div style="flex:1"><div class="s-sym">${esc(symbol||'')}</div><div class="s-name">${esc((name||'').slice(0,20))}</div></div>
+    <div style="text-align:right">
+      <div class="t-price">${fmtPrice(price)}</div>
+      <div class="t-chg ${cls}">${sign}${(parseFloat(change_percent)||0).toFixed(2)}%</div>
+    </div>
+  </div>`;
+}
+function renderSection(id,items,fn){
+  const el=document.getElementById(id);if(!el)return;
+  if(!items||!items.length){el.innerHTML='<span class="err-text">No data</span>';return;}
+  el.innerHTML=items.map(fn).join('');
+}
+
+/* ── market widget rendering (shared by full sidebar load + live tick) ──
+ *
+ * Markets re-render every 20 seconds via the lightweight /finex/markets-tick
+ * endpoint. News + companies stay on the 60 s full /finex/sidebar cycle
+ * because they don't change every minute and the news fetch is the slowest
+ * part of the full payload. */
+function renderMarketsFromPayload(d){
+  // Indices
+  const idxPrices=(d.indices&&d.indices.prices)||[];
+  renderSection('railIndices',idxPrices,tickerHTML);
+  const idxEl=$('#idxCount');if(idxEl)idxEl.textContent=idxPrices.length?`${idxPrices.length} live`:'';
+
+  // Crypto / commodities tickers
+  renderSection('railCrypto',(d.crypto&&d.crypto.prices)||[],tickerHTML);
+  renderSection('railComm',(d.commodities&&d.commodities.prices)||[],tickerHTML);
+
+  // Stocks
+  renderSection('railTech',(d.tech&&d.tech.prices)||[],stockHTML);
+  renderSection('railFin',(d.fin_stocks&&d.fin_stocks.prices)||[],stockHTML);
+  renderSection('railEH',(d.energy_health&&d.energy_health.prices)||[],stockHTML);
+}
+
+/* ── full sidebar loader (page load + 60 s cycle) ── */
+async function loadSidebar(){
+  try{
+    const r=await fetch('/finex/sidebar');
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const d=await r.json();
+
+    renderMarketsFromPayload(d);
+
+    // News — response shape: {success, stories:[]}
+    const newsRaw=d.fin_news||{};
+    const news=Array.isArray(newsRaw)?newsRaw:(newsRaw.stories||[]);
+    const ncEl=$('#newsCount');if(ncEl)ncEl.textContent=news.length?`${news.length} stories`:'';
+    renderSection('railNews',news,n=>`
+      <div class="fin-news-item">
+        <a href="${esc(n.url||'#')}" target="_blank" rel="noopener">${esc(n.title||'')}</a>
+        <div class="fin-news-src">${esc(n.source||'')}${n.published?' · '+new Date(n.published).toLocaleDateString([],{month:'short',day:'numeric'}):''}</div>
+      </div>`);
+
+    // Companies
+    let cos=[];
+    const raw=d.companies;
+    if(Array.isArray(raw))cos=raw;
+    else if(raw&&Array.isArray(raw.companies))cos=raw.companies;
+    else if(raw&&Array.isArray(raw.data))cos=raw.data;
+    populateCompanies(cos);
+
+  }catch(e){console.error('FinEx sidebar:',e);}
+}
+
+/* ── live market tick — every 20 s ──
+ * Hits the lightweight /finex/markets-tick endpoint that returns only the
+ * six price baskets. No news, no company list, no extra round-trips. */
+async function refreshMarketsTick(){
+  try{
+    const r=await fetch('/finex/markets-tick');
+    if(!r.ok)return;
+    const d=await r.json();
+    renderMarketsFromPayload(d);
+  }catch(e){
+    /* network blip — silent, the next tick will recover */
+  }
+}
+
+/* The /finex/companies endpoint returns one row per (company, year, period).
+ * A single PDF that contains both current and prior year creates two rows
+ * with the same company name. Dedup them here into one entry per company
+ * with the year range surfaced for context. */
+function _dedupCompanies(list){
+  const byName = new Map();
+  for(const c of list){
+    const nm = typeof c==='string' ? c : (c.company||c.name||'Unknown');
+    const yr = (typeof c==='object' && c.year!=null) ? Number(c.year) : null;
+    const pd = (typeof c==='object' && c.period) ? String(c.period) : null;
+    if(!byName.has(nm)) byName.set(nm, {company:nm, years:new Set(), periods:new Set()});
+    const e = byName.get(nm);
+    if(yr!=null) e.years.add(yr);
+    if(pd) e.periods.add(pd);
+  }
+  // Stable, alphabetised, with years sorted descending
+  return Array.from(byName.values())
+    .map(e=>({
+      company: e.company,
+      years:   Array.from(e.years).sort((a,b)=>b-a),
+      periods: Array.from(e.periods),
+    }))
+    .sort((a,b)=>a.company.localeCompare(b.company));
+}
+
+function _yearLabel(years){
+  if(!years || !years.length) return '';
+  if(years.length===1) return `FY${years[0]}`;
+  // Contiguous range → "FY2023 → FY2025"; otherwise comma list
+  const sorted = [...years].sort((a,b)=>a-b);
+  const contiguous = sorted.every((y,i)=> i===0 || y===sorted[i-1]+1);
+  if(contiguous) return `FY${sorted[0]} → FY${sorted[sorted.length-1]}`;
+  return sorted.map(y=>`FY${y}`).join(', ');
+}
+
+function populateCompanies(list){
+  const rail=$('#railCompanies'),sel=$('#coSelect'),cnt=$('#coCount');
+  const grouped = _dedupCompanies(list || []);
+  if(cnt)cnt.textContent=grouped.length;
+  if(!grouped.length){
+    if(sel)sel.innerHTML='<option>No companies uploaded</option>';
+    if(rail)rail.innerHTML='<span class="err-text" style="font-size:11px;padding:8px 6px;display:block;">Upload a PDF to add companies</span>';
+    return;
+  }
+  if(sel)sel.innerHTML=grouped.map(c=>{
+    const nm=c.company;
+    return`<option value="${esc(nm)}"${nm===state.company?' selected':''}>${esc(nm)}</option>`;
+  }).join('');
+  if(rail)rail.innerHTML=grouped.map(c=>{
+    const nm=c.company;
+    const yrs=_yearLabel(c.years);
+    const sub=yrs || (c.periods.length? `${c.periods.length} period${c.periods.length!==1?'s':''}` : '');
+    return`<div class="co-row${nm===state.company?' active':''}" onclick="selectCompany(${JSON.stringify(nm)})" title="${esc(nm)}${yrs?' — '+esc(yrs):''}">
+      <div class="co-dot"></div>
+      <div style="min-width:0;flex:1;">
+        <div class="co-name">${esc(nm)}</div>
+        ${sub?`<div class="co-periods">${esc(sub)}</div>`:''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function selectCompany(name){
+  state.company=name;
+  const sel=$('#coSelect');if(sel)sel.value=name;
+  $$('.co-row').forEach(r=>r.classList.toggle('active',r.querySelector('.co-name')?.textContent===name));
+}
+
+/* ── controls ── */
+
+/* Per-level suggested questions. Each level reveals a tailored set of chips
+ * the user can click to ask immediately. Keeping these on the client avoids
+ * a round-trip and makes the level taxonomy discoverable. */
+const LEVEL_SUGGESTIONS = {
+  1: [
+    {label:'Revenue',           prompt:'What was the revenue in the latest period?'},
+    {label:'Net profit',        prompt:'How much was net profit?'},
+    {label:'Total assets',      prompt:'What were total assets at the latest period?'},
+    {label:'EPS',               prompt:'What is the EPS?'},
+    {label:'Cash balance',      prompt:'How much cash is on the balance sheet?'},
+    {label:'Operating profit',  prompt:'What is the operating profit?'},
+    {label:'Dividend / share',  prompt:'What is the dividend per share?'},
+  ],
+  2: [
+    {label:'Revenue YoY',        prompt:'How did revenue change year-over-year?'},
+    {label:'Profit YoY',         prompt:'Compare net profit for the latest two years.'},
+    {label:'Biggest mover',      prompt:'Which line item grew the most year-over-year?'},
+    {label:'EPS change',         prompt:'How did EPS change versus last year?'},
+    {label:'Assets vs last year',prompt:'How did total assets change compared to last year?'},
+    {label:'Cash flow trend',    prompt:'Compare operating cash flow across periods.'},
+  ],
+  3: [
+    {label:'Gross margin',       prompt:'What is the gross profit margin?'},
+    {label:'Operating margin',   prompt:'What is the operating margin?'},
+    {label:'Net margin',         prompt:'What is the net profit margin?'},
+    {label:'ROE',                prompt:'Calculate ROE for the latest period.'},
+    {label:'ROA',                prompt:'Calculate ROA for the latest period.'},
+    {label:'Current ratio',      prompt:'What is the current ratio?'},
+    {label:'Debt-to-equity',     prompt:'What is the debt-to-equity ratio?'},
+    {label:'Interest coverage',  prompt:'What is the interest coverage ratio?'},
+  ],
+  4: [
+    {label:'Why margins moved', prompt:'What is driving the change in gross margin?'},
+    {label:'Revenue drivers',   prompt:'Why did revenue change this year?'},
+    {label:'More leveraged?',   prompt:'Is the company becoming more leveraged?'},
+    {label:'Liquidity',         prompt:'Is liquidity improving or worsening?'},
+    {label:'Cost pressure',     prompt:'Where is the biggest cost pressure?'},
+    {label:'Earnings quality',  prompt:'How sustainable are current earnings?'},
+    {label:'Risks',             prompt:'Identify the key financial risks from the statements.'},
+  ],
+  5: [
+    {label:'Healthy?',           prompt:'Is this company financially healthy overall?'},
+    {label:'Worth investing?',   prompt:'Would you invest in this company based on the data?'},
+    {label:'Strengths/weaknesses',prompt:'What are the strengths and weaknesses visible in the data?'},
+    {label:'Valuation',          prompt:'Is the valuation attractive given these fundamentals?'},
+    {label:'Dividend signal',    prompt:'What does the dividend tell us about management confidence?'},
+    {label:'Stakeholder concerns',prompt:'Should stakeholders be concerned about any metric?'},
+  ],
+  6: [
+    {label:'Growth strategy',     prompt:'What should the long-term growth strategy be?'},
+    {label:'Capital allocation',  prompt:'How well is the company allocating capital?'},
+    {label:'Next-year forecast',  prompt:'Forecast next year revenue and net profit at a high level.'},
+    {label:'Dividend policy',     prompt:'Should management increase or hold the dividend?'},
+    {label:'Industry position',   prompt:'How does this company compare to typical industry peers?'},
+    {label:'Executive briefing',  prompt:'Give an executive briefing summarising the company for the board.'},
+  ],
+};
+
+function _renderLvlSuggest(){
+  const lvl   = state.level;
+  const lbl   = LEVEL_LABELS[lvl] || '';
+  const items = LEVEL_SUGGESTIONS[lvl] || [];
+  const tag   = document.getElementById('lvlSuggestTag');
+  const head  = document.getElementById('lvlSuggestLabel');
+  const wrap  = document.getElementById('lvlSuggestChips');
+  if(tag)  tag.textContent  = `L${lvl}`;
+  if(head) head.textContent = `${lbl} · click a question to ask`;
+  if(wrap){
+    wrap.innerHTML = items.map(it=>
+      `<button class="q-chip" data-prompt="${esc(it.prompt)}" title="${esc(it.prompt)}">${esc(it.label)}</button>`
+    ).join('');
+    // Re-bind chip handlers (the buttons are rebuilt each level switch)
+    wrap.querySelectorAll('.q-chip').forEach(btn=>{
+      btn.addEventListener('click',()=>{ if(!state.busy) sendPrompt(btn.dataset.prompt); });
+    });
+  }
+}
+
+$$('.lvl-btn').forEach(btn=>btn.addEventListener('click',()=>{
+  $$('.lvl-btn').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  state.level=parseInt(btn.dataset.lvl);
+  const lb=$('#levelBadge');if(lb)lb.textContent=`L${state.level} · ${LEVEL_LABELS[state.level]||''}`;
+  _renderLvlSuggest();
+  // Auto-open the panel when the user picks a level (it stays open after)
+  const panel = $('#lvlSuggest'), tog = $('#lvlToggle');
+  if(panel && !panel.classList.contains('open')){
+    panel.classList.add('open'); if(tog){tog.classList.add('open'); tog.setAttribute('aria-expanded','true');}
+  }
+}));
+// Suggestions toggle
+$('#lvlToggle')?.addEventListener('click',()=>{
+  const panel = $('#lvlSuggest'), tog = $('#lvlToggle');
+  const open = panel.classList.toggle('open');
+  tog.classList.toggle('open', open);
+  tog.setAttribute('aria-expanded', String(open));
+});
+// Render once on boot for the default active level (L3)
+_renderLvlSuggest();
+
+$('#coSelect').addEventListener('change',e=>{state.company=e.target.value;});
+
+/* ── PDF upload ── */
+function _refreshUploadButton(){
+  const f=$('#pdfInput').files[0];
+  const name=($('#uploadCompanyName').value||'').trim();
+  $('#uploadSubmitBtn').disabled=!(f && name.length>0);
+}
+$('#pdfInput').addEventListener('change',e=>{
+  const f=e.target.files[0];
+  if(f){
+    $('#uploadFileName').textContent=f.name;
+    $('#uploadStatus').textContent='';
+    // Pre-fill the label with a sensible default derived from the filename
+    const nameInput=$('#uploadCompanyName');
+    if(!nameInput.value.trim()){
+      nameInput.value=f.name.replace(/\.pdf$/i,'').replace(/[_-]+/g,' ').trim().slice(0,80);
+    }
+  }
+  _refreshUploadButton();
+});
+$('#uploadCompanyName').addEventListener('input',_refreshUploadButton);
+$('#uploadCompanyName').addEventListener('keydown',e=>{
+  if(e.key==='Enter' && !$('#uploadSubmitBtn').disabled){submitUpload();}
+});
+
+async function submitUpload(){
+  const f=$('#pdfInput').files[0];if(!f)return;
+  const company=($('#uploadCompanyName').value||'').trim();
+  if(!company){
+    const st=$('#uploadStatus');
+    st.textContent='Please enter a label/company name';st.style.color='var(--red)';
+    $('#uploadCompanyName').focus();
+    return;
+  }
+  const btn=$('#uploadSubmitBtn'),st=$('#uploadStatus');
+  btn.disabled=true;st.textContent='Processing…';st.style.color='var(--yellow)';
+
+  // Pop the progress modal so the user gets live feedback while the server
+  // extracts + parses the PDF (this can take 30–60s for complex statements).
+  openUploadModal(f.name, company);
+
+  try{
+    const fd=new FormData();fd.append('file',f);fd.append('company',company);
+    setUploadMsg('Uploading and parsing — typically 1–3 minutes; large or scanned annual reports may take 5–10 minutes. You can leave this open.');
+    const r=await fetch('/finex/upload',{method:'POST',body:fd});
+    const d=await r.json();
+    if(d.success){
+      st.textContent='Uploaded';st.style.color='var(--green)';
+      $('#uploadFileName').textContent='No file chosen';
+      $('#pdfInput').value='';
+      $('#uploadCompanyName').value='';
+      btn.disabled=true;
+      state.company=company;          // auto-select the new company in the picker
+      finishUploadModal(true, d);
+      setTimeout(loadSidebar,800);
+    } else {
+      st.textContent='Failed';st.style.color='var(--red)';
+      btn.disabled=false;
+      finishUploadModal(false, d);
+    }
+  }catch(e){
+    st.textContent='Error';st.style.color='var(--red)';
+    btn.disabled=false;
+    finishUploadModal(false, {error: e.message || 'Network error'});
+  }
+}
+
+/* ── chat ── */
+const ATOM_SVG=`<svg viewBox="0 0 64 64" width="40" height="40" fill="none"><circle cx="32" cy="32" r="5" fill="#34d399"/><ellipse cx="32" cy="32" rx="28" ry="10" stroke="#34d399" stroke-width="1.6" opacity="0.9"/><ellipse cx="32" cy="32" rx="28" ry="10" stroke="#34d399" stroke-width="1.6" opacity="0.65" transform="rotate(60 32 32)"/><ellipse cx="32" cy="32" rx="28" ry="10" stroke="#34d399" stroke-width="1.6" opacity="0.4" transform="rotate(120 32 32)"/><circle cx="60" cy="32" r="3" fill="#34d399"/><circle cx="18" cy="9.6" r="3" fill="#34d399" opacity="0.8"/><circle cx="18" cy="54.4" r="3" fill="#34d399" opacity="0.55"/></svg>`;
+
+function clearChat(){
+  state.history=[];
+  const t=$('#chatThread');
+  t.innerHTML=`<div class="welcome"><div class="welcome-glow">${ATOM_SVG}</div><h2>Jarvis FinEx</h2><p>Upload a financial statement PDF and ask questions about revenue, margins, investor outlook, risks, and more.</p></div>`;
+}
+
+function addMsg(role,text,meta=''){
+  const t=$('#chatThread');
+  const w=t.querySelector('.welcome');if(w)w.remove();
+  const div=document.createElement('div');
+  div.className=`msg ${role==='user'?'user':'bot'}`;
+  div.innerHTML=(role==='assistant'?renderMd(text):esc(text))+(meta?`<div class="msg-meta">${esc(meta)}</div>`:'');
+  t.appendChild(div);t.scrollTop=t.scrollHeight;return div;
+}
+function addTyping(){
+  const t=$('#chatThread');
+  const div=document.createElement('div');
+  div.className='msg bot typing';div.id='typingInd';
+  div.innerHTML='<div class="typing-dots"><span></span><span></span><span></span></div>';
+  t.appendChild(div);t.scrollTop=t.scrollHeight;
+}
+function removeTyping(){const el=$('#typingInd');if(el)el.remove();}
+
+function renderMd(text){
+  return text
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g,'<em>$1</em>')
+    .replace(/`(.+?)`/g,'<code>$1</code>')
+    .replace(/### (.+)/g,'<strong>$1</strong>')
+    .replace(/\n\n/g,'<br><br>').replace(/\n/g,'<br>');
+}
+
+async function sendPrompt(prompt){
+  if(state.busy)return;
+  const company=$('#coSelect').value||state.company;
+  state.busy=true;$('#sendBtn').disabled=true;
+  addMsg('user',prompt);addTyping();
+  try{
+    const r=await fetch('/finex/chat',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({question:prompt,company,history:state.history,level:state.level})});
+    const d=await r.json();
+    removeTyping();
+    if(d.answer){
+      addMsg('assistant',d.answer,d.level_label?`L${d.level} · ${d.level_label}`:'');
+      state.history.push({role:'user',content:prompt},{role:'assistant',content:d.answer});
+      if(state.history.length>20)state.history=state.history.slice(-20);
+    }else{addMsg('assistant',d.error||'Something went wrong.');}
+  }catch(e){removeTyping();addMsg('assistant','Connection error: '+e.message);}
+  state.busy=false;$('#sendBtn').disabled=false;
+}
+
+function sendMsg(){
+  const inp=$('#chatInput'),text=inp.value.trim();
+  if(!text||state.busy)return;
+  inp.value='';inp.style.height='';
+  sendPrompt(text);
+}
+function handleKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMsg();}}
+function autoResize(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,120)+'px';}
+
+/* ── init ── */
+loadSidebar();
+fetch('/finex/companies').then(r=>r.ok?r.json():null).then(d=>{
+  if(!d)return;
+  let list=[];
+  if(Array.isArray(d))list=d;
+  else if(d.companies&&Array.isArray(d.companies))list=d.companies;
+  else if(d.data&&Array.isArray(d.data))list=d.data;
+  if(list.length)populateCompanies(list);
+}).catch(()=>{});
+// Full sidebar (markets + news + companies) every 60 s.
+setInterval(loadSidebar,60_000);
+// Markets-only tick every 20 s — keeps indices, crypto, commodities, tech,
+// finance, and energy/health stocks fresh without re-fetching the slow
+// news RSS feeds.
+setInterval(refreshMarketsTick,20_000);
+</script>
+
+<!-- ── Upload progress modal ───────────────────────────────────────── -->
+<div class="upl-backdrop" id="uplModal" role="dialog" aria-modal="true" aria-labelledby="uplTitle">
+  <div class="upl-card">
+    <div class="upl-card-head">
+      <div class="upl-card-title" id="uplTitle">Processing Statement</div>
+      <div class="upl-card-time" id="uplElapsed">00:00</div>
+    </div>
+    <dl class="upl-meta">
+      <dt>File</dt><dd id="uplFile">—</dd>
+      <dt>Label</dt><dd id="uplLabel">—</dd>
+    </dl>
+    <div class="upl-bar" id="uplBar"><div class="upl-bar-fill"></div></div>
+    <div class="upl-phases" id="uplPhases">
+      <div class="upl-phase" data-phase="upload"><span class="dot"></span><span>Uploading PDF to server</span></div>
+      <div class="upl-phase" data-phase="extract"><span class="dot"></span><span>Extracting tables &amp; text</span></div>
+      <div class="upl-phase" data-phase="classify"><span class="dot"></span><span>Classifying financial fields</span></div>
+      <div class="upl-phase" data-phase="identity"><span class="dot"></span><span>Applying accounting identity rules</span></div>
+      <div class="upl-phase" data-phase="gapfill"><span class="dot"></span><span>LLM gap-fill for missing fields</span></div>
+      <div class="upl-phase" data-phase="store"><span class="dot"></span><span>Saving to database</span></div>
+    </div>
+    <div class="upl-msg" id="uplMsg">Starting upload…</div>
+    <div class="upl-actions">
+      <button class="upl-btn-close" id="uplCloseBtn" onclick="closeUploadModal()" disabled>Close</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ── Upload modal controller ─────────────────────────────────────── */
+(function(){
+  const PHASE_ORDER = ['upload','extract','classify','identity','gapfill','store'];
+  // Rough timing budgets per phase, in ms. Real-world annual reports take
+  // 1–10 minutes end-to-end depending on PDF size, scanned vs. text, and
+  // how many LLM gap-fills the extractor needs. The dominant cost is the
+  // batched LLM classification + per-field gap-fill, so we give those the
+  // largest budgets. Once the final phase ("store") budget elapses we keep
+  // the last dot pulsing forever and switch to a "still working" message —
+  // far better than lying about the timeline.
+  const PHASE_BUDGET_MS = {
+    upload:    3000,   // network transfer
+    extract:  25000,   // pdfplumber: tables + text across all pages
+    classify: 60000,   // dictionary first, then 1 batched LLM call per page
+    identity: 15000,   // accounting-identity rules, two passes
+    gapfill: 120000,   // targeted LLM extraction for missing critical fields
+    store:    10000,   // schema check + 1–2 INSERTs
+  };
+  // After the last phase budget elapses, cycle a "still working" message
+  // every this many ms so the user knows the process is alive.
+  const STALL_NUDGE_MS = 25000;
+
+  let _startMs = 0, _tickTimer = null, _activeIdx = -1;
+  let _phaseBudget = 0, _phaseStartMs = 0;
+  let _stalled = false, _lastNudgeMs = 0, _nudgeIdx = 0;
+  const STALL_NUDGES = [
+    'Still working — large or scanned PDFs can take several minutes.',
+    'The extractor is running LLM gap-fill for missing fields.',
+    'Almost there — verifying accounting identities and writing to the database.',
+    'Hang tight — annual reports with many notes pages take 5–10 minutes.',
+  ];
+
+  const fmtTime = ms => {
+    const s = Math.floor(ms/1000);
+    return `${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
+  };
+
+  function _setPhase(idx){
+    const phases = document.querySelectorAll('#uplPhases .upl-phase');
+    phases.forEach((el,i)=>{
+      el.classList.remove('active','done');
+      if(i < idx) el.classList.add('done');
+      else if(i === idx) el.classList.add('active');
+    });
+    _activeIdx = idx;
+    _phaseStartMs = performance.now();
+    _phaseBudget = PHASE_BUDGET_MS[PHASE_ORDER[idx]] || 5000;
+  }
+
+  function _advancePhaseIfDue(){
+    if(_activeIdx < 0) return;
+    const elapsedPhase = performance.now() - _phaseStartMs;
+    // Advance through the linear pipeline until the last phase
+    if(_activeIdx < PHASE_ORDER.length - 1 && elapsedPhase >= _phaseBudget){
+      _setPhase(_activeIdx + 1);
+      return;
+    }
+    // Already on the last phase — once its budget elapses, switch to
+    // "stalled" mode: keep the last dot pulsing and rotate a nudge message.
+    if(_activeIdx === PHASE_ORDER.length - 1 && elapsedPhase >= _phaseBudget){
+      if(!_stalled){
+        _stalled = true;
+        _lastNudgeMs = performance.now();
+        window.setUploadMsg(STALL_NUDGES[0]);
+      }
+      if(performance.now() - _lastNudgeMs >= STALL_NUDGE_MS){
+        _nudgeIdx = (_nudgeIdx + 1) % STALL_NUDGES.length;
+        _lastNudgeMs = performance.now();
+        // Only rotate the nudge text if the user is still in the default
+        // (non-ok / non-err) state — don't overwrite final state messages.
+        const msgEl = document.getElementById('uplMsg');
+        if(msgEl && !msgEl.classList.contains('ok') && !msgEl.classList.contains('err')){
+          window.setUploadMsg(STALL_NUDGES[_nudgeIdx]);
+        }
+      }
+    }
+  }
+
+  function _tick(){
+    const el = document.getElementById('uplElapsed');
+    if(el) el.textContent = fmtTime(performance.now() - _startMs);
+    _advancePhaseIfDue();
+  }
+
+  window.openUploadModal = function(fileName, label){
+    document.getElementById('uplFile').textContent  = fileName || '—';
+    document.getElementById('uplLabel').textContent = label || '—';
+    document.getElementById('uplMsg').textContent   = 'Starting upload…';
+    document.getElementById('uplMsg').className     = 'upl-msg';
+    document.getElementById('uplBar').className     = 'upl-bar';
+    document.getElementById('uplCloseBtn').disabled = true;
+    document.getElementById('uplCloseBtn').textContent = 'Close';
+    document.getElementById('uplCloseBtn').classList.remove('primary');
+    document.getElementById('uplModal').classList.add('show');
+
+    _stalled = false; _nudgeIdx = 0; _lastNudgeMs = 0;
+    _startMs = performance.now();
+    _tick();
+    _tickTimer = setInterval(_tick, 250);
+    _setPhase(0);
+  };
+
+  window.setUploadMsg = function(text, kind){
+    const el = document.getElementById('uplMsg');
+    if(!el) return;
+    el.textContent = text;
+    el.className = 'upl-msg' + (kind === 'ok' ? ' ok' : kind === 'err' ? ' err' : '');
+  };
+
+  window.finishUploadModal = function(success, payload){
+    if(_tickTimer){clearInterval(_tickTimer); _tickTimer = null;}
+    _phaseTimer = null;
+    const elapsedMs = performance.now() - _startMs;
+    const bar = document.getElementById('uplBar');
+    const closeBtn = document.getElementById('uplCloseBtn');
+
+    // mark all phases done (or stop at the active one on error)
+    const phases = document.querySelectorAll('#uplPhases .upl-phase');
+    if(success){
+      phases.forEach(el=>{el.classList.remove('active');el.classList.add('done');});
+      bar.classList.add('done');
+      const fields = (payload && payload.fields_extracted) || 0;
+      const v = (payload && payload.validation) || {};
+      const passes = v.checks_passed || 0;
+      const fails  = v.checks_failed || 0;
+      const warns  = (v.warnings && v.warnings.length) || 0;
+      const prior  = (payload && payload.prior_year_extracted) ? 'yes' : 'no';
+      const summary = `<div class="upl-summary">
+        <b>${fields}</b> fields extracted ·
+        prior year: <b>${prior}</b> ·
+        validation: <b>${passes}</b> passed / <b>${fails}</b> failed${warns? ` · <b>${warns}</b> warnings`:''} ·
+        elapsed <b>${fmtTime(elapsedMs)}</b>
+      </div>`;
+      window.setUploadMsg('Done — financial data stored.', 'ok');
+      document.getElementById('uplMsg').insertAdjacentHTML('beforeend', summary);
+      closeBtn.disabled = false;
+      closeBtn.textContent = 'Done';
+      closeBtn.classList.add('primary');
+      // auto-dismiss after a beat so it feels responsive
+      setTimeout(()=>{
+        if(document.getElementById('uplModal').classList.contains('show')){
+          closeUploadModal();
+        }
+      }, 4500);
+    } else {
+      // halt at the active phase, mark it as not-done
+      bar.classList.add('err');
+      const msg = (payload && payload.error) ? payload.error : 'Upload failed';
+      window.setUploadMsg(msg, 'err');
+      closeBtn.disabled = false;
+      closeBtn.textContent = 'Close';
+      closeBtn.classList.remove('primary');
+    }
+  };
+
+  window.closeUploadModal = function(){
+    const m = document.getElementById('uplModal');
+    if(!m) return;
+    m.classList.remove('show');
+    if(_tickTimer){clearInterval(_tickTimer); _tickTimer = null;}
+  };
+
+  // Close on Esc once the operation has finished
+  document.addEventListener('keydown', e=>{
+    if(e.key==='Escape'){
+      const btn = document.getElementById('uplCloseBtn');
+      if(btn && !btn.disabled) closeUploadModal();
+    }
+  });
+})();
+</script>
+
+</body>
+</html>

@@ -40,6 +40,11 @@ class ReminderStore:
 
     def _init_db(self):
         with sqlite3.connect(SQLITE_PATH) as conn:
+            # WAL allows concurrent readers + a writer without blocking the
+            # async event loop. The scheduler polls this table once a minute
+            # while user requests can also hit it.
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS reminders (
                     id                TEXT PRIMARY KEY,

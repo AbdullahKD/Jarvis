@@ -16,3 +16,7 @@ logs/
 
 # VS Code
 .vscode/
+
+# Secrets
+credentials.json
+token.json

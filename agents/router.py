@@ -6,7 +6,8 @@ agents should handle it. This is the entry point of every interaction.
 
 from __future__ import annotations
 
-from typing import List
+import re
+from typing import List, Optional
 
 from config.llm_client import OllamaClient
 from config.models import AgentRole, RouterDecision
@@ -101,6 +102,105 @@ class RouterAgent:
         self.llm = llm_client or OllamaClient()
         print("🔀 RouterAgent ready")
 
+    # ── Deterministic pre-routing (0ms, no LLM) ───────────────────────────
+
+    def _deterministic_route(self, req: str) -> Optional[RouterDecision]:
+        """
+        Fast rule-based routing for common unambiguous patterns.
+        Returns a RouterDecision if confident, None to fall through to LLM.
+        """
+        r = req.lower().strip()
+
+        def _decision(agent: AgentRole, tier: int = 1) -> RouterDecision:
+            return RouterDecision(
+                primary_agent=agent,
+                supporting_agents=[AgentRole.MEMORY],
+                confidence=0.99,
+                reasoning="deterministic rule",
+                tier=tier,
+            )
+
+        # ── Email patterns ────────────────────────────────────────────────
+        _email_send = re.compile(
+            r'\b(send|write|draft|compose|email|message)\b.*\b(email|message|mail)\b|'
+            r'\bemail\s+to\b|\btell\s+\w+\s+that\b|\bsend\s+\w+\s+an?\s+email\b',
+            re.I,
+        )
+        _email_inbox = re.compile(
+            r'\b(inbox|my emails?|show emails?|check emails?|unread|new emails?)\b', re.I
+        )
+        _email_action = re.compile(
+            r'\b(read|reply|archive|mark)\s+(email|mail)\s*\d*\b|'
+            r'\breply\s+to\s+(email|mail|that|it|this)\b|'
+            r'\bmark\s+all\s+as\s+read\b|'
+            r'\b(read|reply|archive)\s+email\s+\d+\b',
+            re.I,
+        )
+
+        if _email_inbox.search(r):
+            return _decision(AgentRole.EMAIL, tier=1)
+        if _email_action.search(r):
+            return _decision(AgentRole.EMAIL, tier=1)
+        if _email_send.search(r):
+            # Tier 1 so the orchestrator's _try_shortcut runs the
+            # EmailComposer + GmailAgent flow (draft, preview, confirm, send)
+            # instead of streaming a free-form LLM draft that never gets sent.
+            return _decision(AgentRole.EMAIL, tier=1)
+
+        # ── Calendar patterns ──────────────────────────────────────────────
+        _cal_create = re.compile(
+            r'\b(schedule|book|create|add|set|make|put)\b.{0,30}'
+            r'\b(meeting|appointment|event|call|session)\b|'
+            r'\b(meeting|appointment|event)\b.{0,20}\b(at|on|for|tomorrow|tonight)\b',
+            re.I,
+        )
+        _cal_check = re.compile(
+            r'\b(what.s on|whats on|my calendar|my schedule|my day|do i have|'
+            r'any meetings?|any events?|check calendar)\b',
+            re.I,
+        )
+        _reminder = re.compile(
+            r'\b(remind me|set a reminder|reminder|alert me)\b', re.I
+        )
+
+        if _cal_check.search(r):
+            return _decision(AgentRole.CALENDAR, tier=1)
+        if _cal_create.search(r):
+            # MUST be tier=1 — the real calendar-booking flow lives in
+            # _try_shortcut, which only runs at tier 1 (or tier 3, never
+            # tier 2). Previously this was tier=2 which skipped the
+            # shortcut and let the LLM hallucinate fake "I've scheduled
+            # it" responses without ever touching Google Calendar.
+            return _decision(AgentRole.CALENDAR, tier=1)
+        if _reminder.search(r):
+            # Same reasoning — reminders have a shortcut handler that
+            # needs tier=1 to fire. The shortcut falls back to tier=2
+            # automatically if it doesn't match.
+            return _decision(AgentRole.REMINDER, tier=1)
+
+        # ── Factual-question patterns (who/what/when/etc.) ────────────────
+        # These short-circuit the router LLM call (saves ~1–3s) and route
+        # straight to the websearch agent. Excludes patterns owned by other
+        # tier 1 agents (weather/calendar/email already handled above).
+        _factual_q = re.compile(
+            r'^\s*(who|what|when|where|why|how|which)\b.*\b(is|are|was|were|did|does|do|will)\b',
+            re.I,
+        )
+        _tell_about = re.compile(
+            r'^\s*(tell me|explain|describe|define)\b', re.I,
+        )
+        if _factual_q.search(r) or _tell_about.search(r):
+            # Tier 2 = single LLM call after a websearch lookup
+            return RouterDecision(
+                primary_agent=AgentRole.WEBSEARCH,
+                supporting_agents=[AgentRole.MEMORY],
+                confidence=0.95,
+                reasoning="deterministic factual-question rule",
+                tier=2,
+            )
+
+        return None
+
     async def route(self, user_request: str) -> RouterDecision:
         """
         Classify a user request and return routing decision.
@@ -111,6 +211,15 @@ class RouterAgent:
         Returns:
             RouterDecision with primary agent, supporting agents, confidence
         """
+        # Fast deterministic pass first — no LLM needed
+        fast = self._deterministic_route(user_request)
+        if fast is not None:
+            print(
+                f"🔀 Routed (deterministic) → {fast.primary_agent.value} "
+                f"(tier: {fast.tier})"
+            )
+            return fast
+
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": f'Classify this request: "{user_request}"'},

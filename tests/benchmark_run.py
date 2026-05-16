@@ -1,7 +1,7 @@
 """
 Jarvis Benchmark Suite
 Runs 10 representative queries through the orchestrator across two models,
-collects EvaluationResult data, and exports JSON + CSV for dissertation evidence.
+collects EvaluationResult data, and exports JSON + CSV for benchmark evidence.
 
 Usage:
     cd /Users/akd/Desktop/Jarvis
@@ -25,16 +25,16 @@ from agents.evaluator import EvaluatorAgent
 # 10 queries spanning all major intents
 TEST_QUERIES = [
     # (intent_label, query)
-    ("weather",       "What's the weather like in High Wycombe right now?"),
-    ("web_search",    "Who is the current Prime Minister of the UK?"),
-    ("news",          "Give me the top 3 BBC headlines today"),
-    ("sports",        "What are the latest Premier League results?"),
-    ("markets",       "What is Bitcoin trading at right now?"),
-    ("spotify",       "What's currently playing on Spotify?"),
-    ("calendar",      "What do I have on my calendar this week?"),
-    ("mac_control",   "What is my Mac's battery level?"),
-    ("reminders",     "List all my pending reminders"),
-    ("general_chat",  "Summarise what a multi-agent AI system is in 2 sentences"),
+    ("weather", "What's the weather like in High Wycombe right now?"),
+    ("web_search", "Who is the current Prime Minister of the UK?"),
+    ("news", "Give me the top 3 BBC headlines today"),
+    ("sports", "What are the latest Premier League results?"),
+    ("markets", "What is Bitcoin trading at right now?"),
+    ("spotify", "What's currently playing on Spotify?"),
+    ("calendar", "What do I have on my calendar this week?"),
+    ("mac_control", "What is my Mac's battery level?"),
+    ("reminders", "List all my pending reminders"),
+    ("general_chat", "Summarise what a multi-agent AI system is in 2 sentences"),
 ]
 
 # Models to benchmark — add/remove as needed
@@ -43,8 +43,8 @@ MODELS = ["llama3.2:latest", "mistral:7b"]
 
 async def run_benchmark():
     print("\n" + "=" * 70)
-    print("  J.A.R.V.I.S BENCHMARK SUITE")
-    print("  Dissertation evaluation data collection")
+    print(" J.A.R.V.I.S BENCHMARK SUITE")
+    print(" benchmark evaluation data collection")
     print("=" * 70 + "\n")
 
     evaluator = EvaluatorAgent()
@@ -52,20 +52,20 @@ async def run_benchmark():
 
     for model in MODELS:
         print(f"\n{'─'*60}")
-        print(f"  Model: {model}")
+        print(f" Model: {model}")
         print(f"{'─'*60}")
 
         # Fresh orchestrator for each model
         try:
             jarvis = JarvisOrchestrator(model=model)
         except Exception as e:
-            print(f"  ⚠  Could not initialise with {model}: {e}")
+            print(f" ⚠ Could not initialise with {model}: {e}")
             continue
 
         model_results = []
 
         for intent_label, query in TEST_QUERIES:
-            print(f"\n  [{intent_label}] {query[:60]}...")
+            print(f"\n [{intent_label}] {query[:60]}...")
             try:
                 start = time.time()
                 response = await asyncio.wait_for(
@@ -74,7 +74,7 @@ async def run_benchmark():
                 )
                 elapsed = (time.time() - start) * 1000
                 icon = "✅" if response.success else "❌"
-                print(f"  {icon}  {elapsed:.0f}ms | score={response.evaluation.get('score', 0):.3f}")
+                print(f" {icon} {elapsed:.0f}ms | score={response.evaluation.get('score', 0):.3f}")
                 model_results.append({
                     "intent": intent_label,
                     "query": query,
@@ -83,7 +83,7 @@ async def run_benchmark():
                     "score": response.evaluation.get("score", 0),
                 })
             except asyncio.TimeoutError:
-                print(f"  ⏱  TIMEOUT after 90s")
+                print(f" ⏱ TIMEOUT after 90s")
                 model_results.append({
                     "intent": intent_label,
                     "query": query,
@@ -92,7 +92,7 @@ async def run_benchmark():
                     "score": 0,
                 })
             except Exception as e:
-                print(f"  💥  ERROR: {e}")
+                print(f" 💥 ERROR: {e}")
                 model_results.append({
                     "intent": intent_label,
                     "query": query,
@@ -105,7 +105,7 @@ async def run_benchmark():
 
     # ── Print summary table ───────────────────────────────────────────────
     print("\n\n" + "=" * 70)
-    print("  RESULTS SUMMARY")
+    print(" RESULTS SUMMARY")
     print("=" * 70)
     print(f"\n{'Model':<22} {'Tasks':>5} {'Success':>8} {'Avg Score':>10} {'Avg Latency':>13}")
     print("─" * 65)
@@ -123,11 +123,11 @@ async def run_benchmark():
 
     # ── Export ───────────────────────────────────────────────────────────
     json_path = evaluator.export_json()
-    csv_path  = evaluator.export_csv()
+    csv_path = evaluator.export_csv()
 
     print(f"\n📊 JSON exported → {json_path}")
-    print(f"📊 CSV  exported → {csv_path}")
-    print("\nDone. Drop data/benchmark_results.csv into Excel for dissertation charts.\n")
+    print(f"📊 CSV exported → {csv_path}")
+    print("\nDone. Drop data/benchmark_results.csv into Excel for benchmark charts.\n")
 
     return results_by_model
 

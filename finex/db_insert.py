@@ -82,19 +82,33 @@ _DATA_FIELDS = [
 ]
 
 
-def create_schema(conn=None):
+_SCHEMA_READY = False
+
+
+def create_schema(conn=None, force: bool = False):
     """
     Create/migrate the financials table.
     Runs on its OWN autocommit connection so DDL never deadlocks
     with any open read transactions on other connections.
+
+    Idempotent: subsequent calls in the same process are no-ops unless
+    force=True. This avoids 2 DDL probes per insert.
     """
+    global _SCHEMA_READY
+    if _SCHEMA_READY and not force:
+        return
     ac = get_connection()
     ac.set_session(autocommit=True)   # DDL outside any transaction block
-    cur = ac.cursor()
-    cur.execute(SCHEMA_SQL)
-    cur.execute(_MIGRATE_SQL)
-    cur.close()
-    ac.close()
+    try:
+        cur = ac.cursor()
+        try:
+            cur.execute(SCHEMA_SQL)
+            cur.execute(_MIGRATE_SQL)
+        finally:
+            cur.close()
+    finally:
+        ac.close()
+    _SCHEMA_READY = True
 
 
 def get_connection():

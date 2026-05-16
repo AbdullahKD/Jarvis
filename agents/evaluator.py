@@ -1,7 +1,7 @@
 """
 Evaluator Agent
 Scores every task execution. Generates real benchmark data across
-multiple models — this is the primary source of dissertation evidence
+multiple models — this is the primary source of benchmark evidence
 answering "by which metrics will the MAS be measured?"
 """
 
@@ -23,15 +23,15 @@ class EvaluatorAgent:
     Scores every task on multiple dimensions and persists results.
 
     Metrics (all answering the lecturer's question directly):
-      - planning_score:   quality of the generated plan (0–1)
-      - execution_score:  % of subtasks that succeeded (0–1)
-      - latency_ms:       total wall-clock time
-      - replan_count:     how many times critic triggered replanning
-      - overall_score:    weighted combination
+      - planning_score: quality of the generated plan (0–1)
+      - execution_score: % of subtasks that succeeded (0–1)
+      - latency_ms: total wall-clock time
+      - replan_count: how many times critic triggered replanning
+      - overall_score: weighted combination
 
     All results are stored in SQLite so you can:
       1. Run the benchmark suite → get a CSV/JSON
-      2. Drop it into your dissertation's Results section
+      2. Drop it into your benchmark Results section
       3. Plot model comparisons (llama3 vs mistral vs gpt-4o)
     """
 
@@ -46,15 +46,15 @@ class EvaluatorAgent:
         plan: TaskPlan,
         results: Dict[str, Any],
         start_time: float,
-        planning_score: float = 1.0,  # from CriticAgent
+        planning_score: float = 1.0, # from CriticAgent
     ) -> EvaluationResult:
         """
         Score a completed task execution.
 
         Args:
-            plan:           The executed TaskPlan
-            results:        Dict of subtask_id → result
-            start_time:     time.time() when execution began
+            plan: The executed TaskPlan
+            results: Dict of subtask_id → result
+            start_time: time.time() when execution began
             planning_score: Score from CriticAgent (0–1)
 
         Returns:
@@ -71,7 +71,7 @@ class EvaluatorAgent:
         overall = (
             0.4 * planning_score +
             0.4 * execution_score +
-            0.2 * (1.0 if execution_score > 0 else 0.0)  # any success bonus
+            0.2 * (1.0 if execution_score > 0 else 0.0) # any success bonus
         )
 
         success = overall >= EVALUATOR_MIN_SCORE
@@ -113,7 +113,7 @@ class EvaluatorAgent:
     def get_model_summary(self) -> Dict[str, Dict[str, float]]:
         """
         Return per-model aggregate stats.
-        Perfect for a dissertation comparison table.
+        Perfect for a benchmark comparison table.
         """
         with sqlite3.connect(SQLITE_PATH) as conn:
             conn.row_factory = sqlite3.Row
@@ -133,7 +133,7 @@ class EvaluatorAgent:
             return {row["model"]: dict(row) for row in rows}
 
     def export_json(self, path: Optional[Path] = None) -> Path:
-        """Export all results to JSON for dissertation appendix."""
+        """Export all results to JSON for benchmark appendix."""
         out = path or (SQLITE_PATH.parent / "benchmark_results.json")
         data = {
             "exported_at": datetime.now().isoformat(),
@@ -145,12 +145,12 @@ class EvaluatorAgent:
         return out
 
     def export_csv(self, path: Optional[Path] = None) -> Path:
-        """Export all results to CSV for dissertation charts."""
+        """Export all results to CSV for benchmark charts."""
         import csv
         out = path or (SQLITE_PATH.parent / "benchmark_results.csv")
         rows = self.get_all_results()
         if not rows:
-            print("⚠️  No results to export")
+            print("⚠️ No results to export")
             return out
         with open(out, "w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=rows[0].keys())
@@ -165,18 +165,18 @@ class EvaluatorAgent:
         with sqlite3.connect(SQLITE_PATH) as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS evaluations (
-                    task_id         TEXT PRIMARY KEY,
-                    model           TEXT,
-                    intent          TEXT,
-                    success         INTEGER,
-                    score           REAL,
-                    planning_score  REAL,
+                    task_id TEXT PRIMARY KEY,
+                    model TEXT,
+                    intent TEXT,
+                    success INTEGER,
+                    score REAL,
+                    planning_score REAL,
                     execution_score REAL,
-                    latency_ms      REAL,
-                    subtask_count   INTEGER,
-                    replan_count    INTEGER,
-                    feedback        TEXT,
-                    timestamp       TEXT
+                    latency_ms REAL,
+                    subtask_count INTEGER,
+                    replan_count INTEGER,
+                    feedback TEXT,
+                    timestamp TEXT
                 )
             """)
 

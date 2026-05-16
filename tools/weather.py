@@ -70,6 +70,7 @@ class WeatherTool:
                 "temperature_2m", "relative_humidity_2m",
                 "apparent_temperature", "weather_code",
                 "wind_speed_10m", "precipitation",
+                "is_day",
             ],
             "timezone": "auto",
         }
@@ -90,6 +91,7 @@ class WeatherTool:
                 "humidity_pct": current.get("relative_humidity_2m"),
                 "wind_kph": current.get("wind_speed_10m"),
                 "precipitation_mm": current.get("precipitation"),
+                "is_day": bool(current.get("is_day", 1)),
             }
         except Exception as exc:
             return {"success": False, "error": str(exc), "location": location_name}

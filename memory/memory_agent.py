@@ -5,6 +5,7 @@ Persistent semantic memory using ChromaDB + Ollama embeddings.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -20,6 +21,11 @@ from config.settings import (
     MEMORY_SIMILARITY_THRESHOLD,
     MEMORY_TOP_K,
 )
+
+# Embeddings should never block the request path. If Ollama is slow, fall
+# back to the deterministic hash embedding rather than waiting on the full
+# LLM_TIMEOUT (60s) — which would itself blow the WS budget.
+_EMBED_TIMEOUT = 8.0
 
 
 class MemoryAgent:
@@ -37,10 +43,13 @@ class MemoryAgent:
 
     async def _get_embedding(self, text: str) -> List[float]:
         try:
-            emb = await self.llm.embed(text)
+            emb = await asyncio.wait_for(self.llm.embed(text), timeout=_EMBED_TIMEOUT)
             if hasattr(emb, 'tolist'):
                 emb = emb.tolist()
             return [float(x) for x in emb]
+        except asyncio.TimeoutError:
+            print(f"⚠️  Embedding timed out after {_EMBED_TIMEOUT}s — using hash fallback")
+            return self.llm._hash_embed(text)
         except Exception as e:
             print(f"⚠️  Embedding failed: {e} — using hash fallback")
             return self.llm._hash_embed(text)

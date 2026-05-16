@@ -34,9 +34,11 @@ BENCHMARK_MODELS = os.getenv(
 
 # ── LLM generation settings ────────────────────────────────────────────────
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.1"))
-LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "120"))
-MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
-RETRY_BASE_DELAY = float(os.getenv("RETRY_BASE_DELAY", "1.0"))
+# WS layer caps total work at 120s — keep per-call budget well under that
+# so retries can produce a real error rather than a misleading "timed out".
+LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "60"))
+MAX_RETRIES = int(os.getenv("MAX_RETRIES", "1"))
+RETRY_BASE_DELAY = float(os.getenv("RETRY_BASE_DELAY", "0.5"))
 RETRY_BACKOFF = float(os.getenv("RETRY_BACKOFF", "2.0"))
 
 # ── Memory ─────────────────────────────────────────────────────────────────

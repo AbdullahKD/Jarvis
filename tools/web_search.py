@@ -29,7 +29,7 @@ BROWSER_HEADERS = {
 
 # Wikipedia requires descriptive User-Agent
 WIKI_HEADERS = {
-    "User-Agent": "Jarvis/1.0 (BNU Computer Science Dissertation) Python/aiohttp"
+    "User-Agent": "Jarvis/1.0 Python/aiohttp"
 }
 
 DDG_API_URL  = "https://api.duckduckgo.com/"
@@ -49,6 +49,8 @@ NOISE_PHRASES = [
     "i want to know about", "i need information on",
     "tell me more about", "tell me about",
 ]
+# Pre-sort once at import so parse_query doesn't re-sort on every call
+_NOISE_SORTED = sorted(NOISE_PHRASES, key=len, reverse=True)
 
 
 class WebSearchTool:
@@ -68,7 +70,7 @@ class WebSearchTool:
 
         # Strip noise phrases from the start
         q_lower = q.lower()
-        for phrase in sorted(NOISE_PHRASES, key=len, reverse=True):
+        for phrase in _NOISE_SORTED:
             if q_lower.startswith(phrase):
                 q = q[len(phrase):].strip()
                 q_lower = q.lower()
@@ -118,26 +120,36 @@ class WebSearchTool:
         """
         Search the web with automatic source selection and fallbacks.
 
-        Pipeline:
-        1. Parse and clean the query
-        2. Try DuckDuckGo Instant Answer API
-        3. Try DuckDuckGo HTML scraping (with relevance check)
-        4. Try Wikipedia
-        5. Return best results
+        Pipeline (smart routing by query type):
+        - Factual/person/technical → Wikipedia first (fast, reliable), then DDG API
+        - News/general → DDG API first, then Wikipedia
+        - HTML scraper used as last resort (slow, unreliable)
         """
         query = self.parse_query(raw_query)
         query_type = self.detect_query_type(query)
 
-        # Try DuckDuckGo API first
-        ddg_api = await self._ddg_api(query, max_results)
-        if ddg_api.get("success") and ddg_api.get("results"):
-            return ddg_api
+        # For factual, person, or technical queries — Wikipedia is faster and more reliable
+        if query_type in ("factual", "person", "technical"):
+            wiki = await self._wiki(query, max_results)
+            if wiki.get("success") and wiki.get("results"):
+                return wiki
+            # Wikipedia missed — try DDG API
+            ddg_api = await self._ddg_api(query, max_results)
+            if ddg_api.get("success") and ddg_api.get("results"):
+                return ddg_api
+        else:
+            # News/general queries — DDG API first
+            ddg_api = await self._ddg_api(query, max_results)
+            if ddg_api.get("success") and ddg_api.get("results"):
+                return ddg_api
+            # DDG missed — try Wikipedia
+            wiki = await self._wiki(query, max_results)
+            if wiki.get("success") and wiki.get("results"):
+                return wiki
 
-        # Try DuckDuckGo HTML scraping with relevance check
+        # Last resort: DDG HTML scraper (slow but catches more)
         ddg_html = await self._ddg_html(query, max_results)
         if ddg_html.get("success") and ddg_html.get("results"):
-            # Relevance check — trust DDG HTML results, they are generally accurate
-            # Only filter if we have a clear mismatch (e.g. ads that slipped through)
             query_words = set(w.lower() for w in query.split() if len(w) > 3)
             if query_words:
                 relevant = [
@@ -145,17 +157,10 @@ class WebSearchTool:
                     if any(w in r["title"].lower() or w in r["snippet"].lower()[:300]
                            for w in query_words)
                 ]
-                # Only apply filter if it keeps at least 1 result
-                # Otherwise trust DDG's ranking
                 if relevant:
                     ddg_html["results"] = relevant
             if ddg_html["results"]:
                 return ddg_html
-
-        # Try Wikipedia
-        wiki = await self._wiki(query, max_results)
-        if wiki.get("success") and wiki.get("results"):
-            return wiki
 
         # Last resort: try core topic only
         words = [w for w in query.split() if len(w) > 3]

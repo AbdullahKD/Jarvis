@@ -41,23 +41,33 @@ def get_cached_context(company: str) -> str:
     return _context_cache[company]
 
 def invalidate_cache(company: str):
-    if company in _context_cache:
-        del _context_cache[company]
-    if company in _hr_context_cache:
-        del _hr_context_cache[company]
+    _context_cache.pop(company, None)
+    _hr_context_cache.pop(company, None)
+    _META_CACHE.pop(company, None)
+    _AVAILABLE_CACHE.pop((company,), None)
+    # Also drop any (company, year) entries from the available-fields cache
+    for k in list(_AVAILABLE_CACHE):
+        if k[0] == company:
+            _AVAILABLE_CACHE.pop(k, None)
 
 
 # ── Ollama wrapper (HTTP, not subprocess — saves 3-5s per call) ───────────────
 
-_OLLAMA_URL = "http://localhost:11434/api/chat"
-_FINEX_MODEL = "llama3.2:latest"
+import os as _os_llm
+
+_OLLAMA_URL   = _os_llm.environ.get("OLLAMA_URL", "http://localhost:11434/api/chat")
+_FINEX_MODEL  = _os_llm.environ.get("FINEX_MODEL", "llama3.2:latest")
+_OLLAMA_TIMEO = float(_os_llm.environ.get("FINEX_OLLAMA_TIMEOUT_S", "90"))
+
+# Persistent connection-keeping session — avoids TCP handshake on every call.
+_session = requests.Session()
 
 
-def ask_llm(prompt: str, system: str = "") -> str:
+def ask_llm(prompt: str, system: str = "", num_ctx: int = 4096) -> str:
     """
     Send a prompt to the local Ollama server via HTTP POST.
-    Uses the REST API directly — no subprocess overhead.
-    Falls back gracefully if Ollama is unreachable.
+    Uses a persistent requests.Session and tells Ollama to keep the model
+    loaded for 10 minutes between calls (eliminates cold-start on idle).
     """
     messages = []
     if system:
@@ -65,22 +75,49 @@ def ask_llm(prompt: str, system: str = "") -> str:
     messages.append({"role": "user", "content": prompt})
 
     try:
-        resp = requests.post(
+        resp = _session.post(
             _OLLAMA_URL,
             json={
                 "model": _FINEX_MODEL,
                 "messages": messages,
                 "stream": False,
-                "options": {"temperature": 0.1, "num_predict": 512, "num_ctx": 4096},
+                "keep_alive": "10m",
+                "options": {
+                    "temperature": 0.1,
+                    "num_predict": 512,
+                    "num_ctx": num_ctx,
+                },
             },
-            timeout=300,   # 5 min — large models on CPU can be slow
+            timeout=_OLLAMA_TIMEO,
         )
         resp.raise_for_status()
         return resp.json()["message"]["content"].strip()
     except requests.exceptions.ConnectionError:
         return "[Ollama is not running. Please start Ollama and try again.]"
+    except requests.exceptions.Timeout:
+        return f"[LLM timeout after {_OLLAMA_TIMEO:.0f}s — model may be loading. Try again.]"
     except Exception as e:
         return f"[LLM error: {e}]"
+
+
+def warm_model() -> bool:
+    """Pre-load the model so the first user question doesn't pay cold-start.
+    Called from FinExAgent.__init__. Best-effort; never raises."""
+    try:
+        _session.post(
+            _OLLAMA_URL,
+            json={
+                "model": _FINEX_MODEL,
+                "messages": [{"role": "user", "content": "warm"}],
+                "stream": False,
+                "keep_alive": "10m",
+                "options": {"num_predict": 1, "num_ctx": 256},
+            },
+            timeout=5,
+        )
+        return True
+    except Exception:
+        return False
 
 
 # ── Human-readable PKR formatter ──────────────────────────────────────────────
@@ -91,18 +128,27 @@ _SYM_MAP = {"GBP": "£", "USD": "$", "EUR": "€", "PKR": "PKR ",
             "AED": "AED ", "SAR": "SAR "}
 
 
+_META_CACHE: dict = {}  # company → (currency, unit_label, sym)
+
+
 def _get_company_meta(company: str) -> tuple:
-    """Return (currency, unit_label, symbol) for a company from the DB."""
+    """Return (currency, unit_label, symbol) for a company from the DB.
+    Cached per process — invalidated by invalidate_cache()."""
+    if company in _META_CACHE:
+        return _META_CACHE[company]
     result = run_query(
-        f"SELECT currency, unit_label FROM financials WHERE company = '{company}' LIMIT 1"
+        "SELECT currency, unit_label FROM financials WHERE company = %s LIMIT 1",
+        (company,),
     )
     if "error" in result or not result.get("rows"):
         return "Unknown", "millions (assumed)", ""
     row = result["rows"][0]
     currency   = row[0] or "Unknown"
     unit_label = row[1] or "millions (assumed)"
-    sym = _SYM_MAP.get(currency, currency + " ")
-    return currency, unit_label, sym
+    sym = _SYM_MAP.get(currency, currency + " " if currency != "Unknown" else "")
+    out = (currency, unit_label, sym)
+    _META_CACHE[company] = out
+    return out
 
 
 def _fmt_value(val: float, field: str = "", sym: str = "£") -> str:
@@ -154,17 +200,28 @@ def get_cached_hr_context(company: str) -> str:
 
 # ── Fix 2: Hallucination guard ─────────────────────────────────────────────────
 
+_AVAILABLE_CACHE: dict = {}   # (company, year) → dict
+
+
 def get_available_fields(company: str, year: int = None) -> dict:
     """
     Returns dict of {field_name: value} for fields that actually have data.
     Used to prevent LLM from referencing fields that are NULL.
+    Cached per (company, year).
     """
     years = get_all_years(company)
     if not years:
         return {}
     target_year = year or years[0]
 
-    result = run_query(f"SELECT * FROM financials WHERE company = '{company}' AND year = {target_year} LIMIT 1")
+    cache_key = (company, target_year)
+    if cache_key in _AVAILABLE_CACHE:
+        return dict(_AVAILABLE_CACHE[cache_key])  # return a copy
+
+    result = run_query(
+        "SELECT * FROM financials WHERE company = %s AND year = %s LIMIT 1",
+        (company, target_year),
+    )
     if "error" in result or not result["rows"]:
         return {}
 
@@ -173,8 +230,10 @@ def get_available_fields(company: str, year: int = None) -> dict:
     record = dict(zip(cols, row))
 
     # Only return non-null numeric fields
-    return {k: v for k, v in record.items()
-            if v is not None and isinstance(v, float) and k not in ("id",)}
+    out = {k: v for k, v in record.items()
+           if v is not None and isinstance(v, float) and k not in ("id",)}
+    _AVAILABLE_CACHE[cache_key] = out
+    return dict(out)
 
 
 def fields_summary(available: dict, sym: str = "£") -> str:
@@ -192,26 +251,38 @@ def fields_summary(available: dict, sym: str = "£") -> str:
 
 # ── Fix 1: Derived field calculator ───────────────────────────────────────────
 
+# NOTE: use `is not None` (not truthiness) so legitimate zero values
+# (e.g. tax_expense = 0 in a tax holiday, revenue = 0 in wind-down)
+# still trigger the derivation.
+def _has(d, *keys):
+    return all(d.get(k) is not None for k in keys)
+
+
 DERIVED_FIELDS = {
     "total_assets": lambda d: (
-        (d.get("current_assets", 0) or 0) + (d.get("non_current_assets", 0) or 0)
-        if d.get("current_assets") and d.get("non_current_assets") else None
+        d["current_assets"] + d["non_current_assets"]
+        if _has(d, "current_assets", "non_current_assets") else None
     ),
     "total_liabilities": lambda d: (
-        (d.get("current_liabilities", 0) or 0) + (d.get("non_current_liabilities", 0) or 0)
-        if d.get("current_liabilities") and d.get("non_current_liabilities") else None
+        d["current_liabilities"] + d["non_current_liabilities"]
+        if _has(d, "current_liabilities", "non_current_liabilities") else None
     ),
     "gross_profit": lambda d: (
-        (d.get("revenue", 0) or 0) - (d.get("cost_of_goods_sold", 0) or 0)
-        if d.get("revenue") and d.get("cost_of_goods_sold") else None
+        d["revenue"] - d["cost_of_goods_sold"]
+        if _has(d, "revenue", "cost_of_goods_sold") else None
     ),
     "operating_profit": lambda d: (
-        (d.get("gross_profit", 0) or 0) - (d.get("operating_expenses", 0) or 0)
-        if d.get("gross_profit") and d.get("operating_expenses") else None
+        d["gross_profit"] - d["operating_expenses"]
+        if _has(d, "gross_profit", "operating_expenses") else None
     ),
     "net_profit": lambda d: (
-        (d.get("profit_before_tax", 0) or 0) - (d.get("tax_expense", 0) or 0)
-        if d.get("profit_before_tax") and d.get("tax_expense") else None
+        d["profit_before_tax"] - d["tax_expense"]
+        if _has(d, "profit_before_tax", "tax_expense") else None
+    ),
+    # New: derive equity when assets and liabilities are present.
+    "total_equity": lambda d: (
+        d["total_assets"] - d["total_liabilities"]
+        if _has(d, "total_assets", "total_liabilities") else None
     ),
 }
 
@@ -236,9 +307,12 @@ DETAIL_PHRASES = [
 ]
 
 OFF_TOPIC_WORDS = [
-    "weather", "recipe", "cook", "sport", "football", "cricket", "movie",
-    "song", "music", "celebrity", "politics", "war", "travel", "holiday",
-    "joke", "story", "poem", "code", "programming", "python", "javascript"
+    "weather", "recipe", "cook", "football", "cricket", "movie",
+    "song", "celebrity", "travel", "holiday",
+    "joke", "poem",
+    # NOTE: removed "code", "programming", "python", "javascript", "sport",
+    # "music", "politics", "war", "story" — they were false-positive blockers
+    # ("show me the python formula for ROE", "war chest", "growth story" etc.).
 ]
 
 TEXT_PHRASES = [
@@ -260,7 +334,11 @@ L6_PHRASES = [
     "compare to industry", "compare to typical", "prioritise", "prioritize",
     "12 months", "going forward", "summarise overall", "summarize overall",
     "what should management", "how does this company compare",
-    "is the company's capital", "what would a"
+    "is the company's capital", "what would a",
+    # New: less restrictive forms
+    "should management", "should the company", "should they",
+    "strategic recommendation", "board recommendation", "advise the board",
+    "longer term", "looking ahead", "future outlook",
 ]
 
 L5_PHRASES = [
@@ -269,9 +347,13 @@ L5_PHRASES = [
     "strengths and weakness", "strengths based", "weaknesses visible",
     "stakeholders be concerned", "dividend reflect", "overvalued",
     "undervalued", "growth-oriented", "deploying capital efficiently",
-    "key metrics would", "should i invest", "investment decision"
+    "key metrics would", "should i invest", "investment decision",
+    # New
+    "is this a healthy", "is this company healthy", "is the company healthy",
+    "should i buy", "is it a good investment", "buy or sell",
+    "valuation attractive", "investment thesis",
 ]
-L5_WORDS = ["attractive", "overvalued", "undervalued", "stakeholder"]
+L5_WORDS = ["attractive", "overvalued", "undervalued", "stakeholder", "healthy"]
 
 L4_PHRASES = [
     "why did", "why has", "why might", "why is", "why are",
@@ -280,18 +362,29 @@ L4_PHRASES = [
     "liquidity worsening", "efficiently managing", "gross margin trend",
     "how sustainable", "dependent on debt", "financial risk",
     "identify risk", "what are the risk", "cost pressure",
-    "operating expense", "what does the trend"
+    "operating expense", "what does the trend",
+    # New
+    "explain ", "interpret ", "justify ", "what is driving",
+    "what's driving", "what is behind", "what's behind",
+    "what factors", "what reasons",
 ]
 L4_WORDS = ["why", "despite", "leveraged", "liquidity", "sustainable", "risks", "efficiency"]
 
 L3_PHRASES = [
     "gross profit margin", "net profit margin", "profit margin",
-    "return on asset", "return on equity", "roa", "roe",
+    "return on asset", "return on equity", "roa", "roe", "roce", "roic",
     "debt-to-equity", "debt to equity", "current ratio", "quick ratio",
     "asset turnover", "operating margin", "eps growth", "percentage of revenue",
-    "calculate", "what is the ratio", "what is the margin"
+    "calculate", "what is the ratio", "what is the margin",
+    # New
+    "return on capital", "return on invested capital",
+    "interest coverage", "interest cover", "times interest earned",
+    "working capital", "days sales outstanding", "days payable", "days inventory",
+    "earnings yield", "dividend yield", "payout ratio", "retention ratio",
+    "asset turnover ratio", "debt ratio", "equity ratio",
+    "cash conversion", "cash flow margin",
 ]
-L3_WORDS = ["margin", "ratio", "roa", "roe", "turnover ratio"]
+L3_WORDS = ["margin", "ratio", "roa", "roe", "roce", "roic", "turnover ratio"]
 
 L2_PHRASES = [
     "compare", "compared to", "last year", "prior year", "previous year",
@@ -317,6 +410,9 @@ L1_WORDS = [
 ]
 
 
+_INTERROGATIVE_RX = re.compile(r"\b(why|how|what causes|what drove|what is driving|what's driving)\b")
+
+
 def route_question(question: str, history: str = "") -> str:
     q = question.lower().strip()
 
@@ -325,16 +421,21 @@ def route_question(question: str, history: str = "") -> str:
 
     if any(w in q for w in OFF_TOPIC_WORDS):
         financial_words = ["revenue", "profit", "asset", "liability", "cash", "cement",
-                           "company", "financial", "report", "turnover", "margin"]
+                           "company", "financial", "report", "turnover", "margin",
+                           "equity", "debt", "income", "expense", "earnings", "ratio"]
         if not any(fw in q for fw in financial_words):
             return "OFF_TOPIC"
+
+    # Disambiguator: "compare ROE 2024 vs 2025" — has L2 + L3 cues; ratio wins.
+    has_l3 = any(p in q for p in L3_PHRASES) or any(w in q for w in L3_WORDS)
+    has_l2 = any(p in q for p in L2_PHRASES) or any(w in q for w in L2_WORDS)
 
     if any(p in q for p in L6_PHRASES):
         return "L6"
 
     if any(p in q for p in L5_PHRASES):
         return "L5"
-    if any(w in q for w in L5_WORDS) and any(w in q for w in ["investor", "invest", "attractive", "health"]):
+    if any(w in q for w in L5_WORDS) and any(w in q for w in ["investor", "invest", "attractive", "health", "healthy"]):
         return "L5"
 
     if any(p in q for p in L4_PHRASES):
@@ -342,12 +443,11 @@ def route_question(question: str, history: str = "") -> str:
     if any(w in q for w in L4_WORDS):
         return "L4"
 
-    if any(p in q for p in L3_PHRASES):
-        return "L3"
-    if any(w in q for w in L3_WORDS):
+    # L3 wins over L2 when both fire
+    if has_l3:
         return "L3"
 
-    if any(p in q for p in L2_PHRASES):
+    if has_l2:
         return "L2"
     year_matches = re.findall(r"\b(20\d{2})\b", q)
     if len(year_matches) >= 2:
@@ -363,6 +463,12 @@ def route_question(question: str, history: str = "") -> str:
 
     if re.search(r"\b20\d{2}\b", q):
         return "L1"
+
+    # Fallback: interrogative without explicit data fields → analytical L4,
+    # not L1. L1 is the catch-all for "value retrieval"; reasoning prompts
+    # need an analytical handler.
+    if _INTERROGATIVE_RX.search(q):
+        return "L4"
 
     return "L1"
 
@@ -436,12 +542,19 @@ STRICT FORMATTING RULES:
 
 def _system_prompt(currency: str = "Unknown", unit_label: str = "") -> str:
     """Build a currency-aware system prompt."""
-    sym = _SYM_MAP.get(currency, currency + " " if currency != "Unknown" else "")
-    currency_line = (
-        f"- Currency for this company is {currency} ({sym.strip()}). Use {sym.strip()} symbol in all monetary values."
-        if currency != "Unknown"
-        else "- Use the currency symbol shown in the data."
-    )
+    if currency and currency != "Unknown":
+        sym = _SYM_MAP.get(currency, currency + " ")
+        sym_clean = sym.strip()
+        currency_line = (
+            f"- Currency for this company is {currency} ({sym_clean}). "
+            f"Use {sym_clean} as the currency symbol in every monetary value. "
+            f"Do not convert to any other currency."
+        )
+    else:
+        currency_line = (
+            "- Use the same currency symbol that appears in the data shown to you. "
+            "Do not invent a symbol or convert to another currency."
+        )
     return _SYSTEM_ANALYST_BASE + "\n" + currency_line
 
 # Keep a default for backward compat
@@ -461,11 +574,10 @@ def handle_l1(question: str, company: str, history: str = "") -> str:
     year_match = re.search(r"\b(20\d{2})\b", question)
     target_year = int(year_match.group(1)) if year_match else years[0]
 
-    result = run_query(f"""
-        SELECT * FROM financials
-        WHERE company = '{company}' AND year = {target_year}
-        LIMIT 1
-    """)
+    result = run_query(
+        "SELECT * FROM financials WHERE company = %s AND year = %s LIMIT 1",
+        (company, target_year),
+    )
 
     if "error" in result or not result["rows"]:
         available = ", ".join(str(y) for y in years)
@@ -506,7 +618,7 @@ Answer in exactly 1 sentence using only the figures shown above.
 State the value exactly as shown (e.g. "{sym.strip()}29.36bn") and specify the period.
 If the exact figure is not listed above, say it is not available — do not guess."""
 
-    return ask_llm(prompt, system=sys_prompt)
+    return ask_llm(prompt, system=sys_prompt, num_ctx=2048)
 
 
 def handle_l2(question: str, company: str, history: str = "") -> str:
@@ -516,17 +628,21 @@ def handle_l2(question: str, company: str, history: str = "") -> str:
     currency, unit_label, sym = _get_company_meta(company)
     sys_prompt = _system_prompt(currency, unit_label)
 
-    year_filter = "(" + ", ".join(str(y) for y in years) + ")"
-    result = run_query(f"""
+    placeholders = ", ".join(["%s"] * len(years))
+    params = [company] + list(years)
+    result = run_query(
+        f"""
         SELECT year, period, revenue, gross_profit, operating_profit,
                profit_before_tax, net_profit, eps, finance_cost,
                depreciation, total_assets, total_liabilities,
                total_equity, cash_balance, current_assets, non_current_assets,
                current_liabilities, non_current_liabilities
         FROM financials
-        WHERE company = '{company}' AND year IN {year_filter}
+        WHERE company = %s AND year IN ({placeholders})
         ORDER BY year DESC
-    """)
+        """,
+        tuple(params),
+    )
 
     if "error" in result or not result["rows"]:
         return "No comparative data found."
@@ -590,7 +706,9 @@ def handle_l3(question: str, company: str, history: str = "") -> str:
         if missing:
             available_note = f"\nNote: These fields are NOT available in the data: {', '.join(missing)}"
 
-    prompt = f"""Financial data for {company} (values shown in billions/millions/PKR as labelled):
+    _scale_hint = unit_label or "as labelled"
+    _ccy_hint = currency if currency and currency != "Unknown" else "the labelled currency"
+    prompt = f"""Financial data for {company} (values shown in {_scale_hint}, currency: {_ccy_hint}):
 {context}{available_note}
 
 Question: {question}
@@ -613,13 +731,14 @@ RATIO FORMULAS — use the correct standard formula:
 
 RULES:
 - If a required value is missing from the data, state it clearly — do not estimate
-- Report monetary values exactly as shown (e.g. "PKR 55.37 billion") — do not convert units
+- Report monetary values exactly as shown in the data above — do not convert units or currencies
+- Use the company's actual currency ({_ccy_hint}); never substitute a different currency
 
 Respond in this exact format:
 Formula: [standard formula used]
 Values: [exact figures from data with periods]
 Calculation: [step by step working]
-Result: [final answer with correct units — % or ratio or PKR value as shown]
+Result: [final answer with correct units — % or ratio or the currency value as shown]
 Interpretation: [1 sentence in context of this company]
 
 End your response with exactly this line: "Need more detail? Just ask." """
@@ -682,11 +801,27 @@ End your response with exactly this line: "Need more detail? Just ask." """
     return ask_llm(prompt, system=_system_prompt(currency, unit_label))
 
 
+def _last_user_question(history: str) -> str:
+    """Pull the most recent 'User:' line from a history string. Used by DETAIL
+    so chroma retrieval is seeded by the substantive question, not the meta
+    request ("tell me more")."""
+    last = ""
+    for line in (history or "").splitlines():
+        s = line.strip()
+        if s.lower().startswith("user:"):
+            last = s.split(":", 1)[1].strip()
+    return last
+
+
 def handle_detail(question: str, company: str, history: str = "") -> str:
     currency, unit_label, sym = _get_company_meta(company)
     context = get_cached_hr_context(company)
-    chunks = search_pdf_text(company, question, n=3)
+
+    # Use the previous user question for retrieval; fall back to current text.
+    retrieval_query = _last_user_question(history) or question
+    chunks = search_pdf_text(company, retrieval_query, n=3)
     text_snippet = "\n\n".join(chunks)[:2000] if chunks else ""
+
     prompt = f"""Financial data for {company} (values in {unit_label}):
 {context}
 
@@ -697,8 +832,8 @@ Previous conversation:
 {history}
 
 The user wants more detail on the previous answer.
-Provide a thorough expansion using specific numbers.
-Use numbered points for clarity. Only reference data shown above."""
+Provide a thorough expansion using specific numbers from the data above.
+Use numbered points for clarity. Only reference data shown above. Do not invent figures."""
     return ask_llm(prompt, system=_system_prompt(currency, unit_label))
 
 

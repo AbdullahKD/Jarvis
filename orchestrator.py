@@ -50,6 +50,50 @@ from tools.reminders import ReminderStore
 MAX_REPLAN_ATTEMPTS = 2
 
 
+# ── One-paragraph enforcement ──────────────────────────────────────────────────
+# The system prompt asks for a single paragraph, but small models like
+# llama3.2:latest will sometimes ignore it and emit multi-paragraph or
+# bulleted responses anyway. This post-processor enforces the rule
+# deterministically before we ever ship the response to the UI.
+
+_BULLET_LINE_RE = re.compile(r'^\s*(?:[\*\-•]|\d+\.)\s+', re.M)
+
+
+def _enforce_single_paragraph(text: str) -> str:
+    """
+    Collapse a model response to exactly one paragraph of plain prose.
+
+    - Strips markdown bold/italic markers (**, *, _) used as emphasis.
+    - Removes bullet markers (*, -, •, 1.) at the start of lines.
+    - Drops level-1/2/3 markdown headers (lines starting with #).
+    - Joins multiple paragraphs into one with single spaces.
+    - Trims trailing follow-up offers ("Would you like to know more?" etc).
+    """
+    if not text:
+        return text
+    cleaned = text.strip()
+    # Strip markdown headers
+    cleaned = re.sub(r'^#{1,6}\s+', '', cleaned, flags=re.M)
+    # Remove bullet/numbered prefixes from line starts
+    cleaned = _BULLET_LINE_RE.sub('', cleaned)
+    # Strip bold/italic emphasis markers but keep the words
+    cleaned = re.sub(r'\*\*([^*]+)\*\*', r'\1', cleaned)
+    cleaned = re.sub(r'(?<!\w)_([^_]+)_(?!\w)', r'\1', cleaned)
+    cleaned = cleaned.replace('*', '')
+    # Collapse any sequence of whitespace (including newlines) to single space
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+    # Strip common follow-up offers at the end
+    cleaned = re.sub(
+        r'\s*(?:Would you like (?:to know |me to )?[^.?!]*[\.\?!]|'
+        r'Let me know if you[^.?!]*[\.\?!]|'
+        r'Feel free to ask[^.?!]*[\.\?!])\s*$',
+        '',
+        cleaned,
+        flags=re.I,
+    ).strip()
+    return cleaned
+
+
 class JarvisOrchestrator:
     """
     Coordinates all Jarvis agents to execute user requests.
@@ -105,6 +149,254 @@ class JarvisOrchestrator:
         print(f"   Agents: Router, Memory, Planner, Critic, Evaluator, Summariser, Calendar, Gmail")
         print(f"   Tools:  Weather, WebSearch, News, Mac, Spotify, Document, FileManager\n")
 
+    # ── Shared pending-state intercept ─────────────────────────────────────
+    #
+    # When the orchestrator is in the middle of a multi-turn flow (waiting
+    # for an email address, a meeting duration, a file-op confirmation,
+    # etc.) the user's next message MUST be interpreted as a continuation
+    # of that flow — not routed through the LLM router, which will
+    # confidently misclassify bare email addresses as "news", short
+    # numeric strings as "weather", and so on.
+    #
+    # This helper catches those continuations and short-circuits the
+    # router. Returns a JarvisResponse if handled, None if not.
+
+    async def _try_pending_state_intercept(self, user_request: str):
+        import re as _repe
+        req = user_request.strip()
+        req_lower = req.lower()
+
+        # ── Pending email: user is replying with the missing email ────────
+        if self._pending_email and getattr(self._pending_email, "needs_email", False):
+            # Strip a markdown-link wrapper Slack/Outlook sometimes leave
+            # behind (e.g. "[mail@x.com](mailto:mail@x.com)").
+            cleaned = _repe.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", req)
+            email_match = _repe.search(r"[\w._%+\-]+@[\w.\-]+\.[a-zA-Z]{2,}", cleaned)
+            if email_match:
+                self._pending_email.recipient_email = email_match.group(0).strip()
+                self._pending_email.needs_email = False
+                # Auto-save the contact so we remember them next time
+                if (self._pending_email.recipient_name
+                        and self._pending_email.recipient_email):
+                    self.contacts.add(
+                        self._pending_email.recipient_name,
+                        self._pending_email.recipient_email,
+                    )
+                msg = self.composer.format_draft_for_confirmation(self._pending_email)
+                return JarvisResponse(success=True, message=msg, latency_ms=0.0)
+
+            # User said "add NAME EMAIL" inline
+            add_m = _repe.search(
+                r"add\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)\s+([\w._%+\-]+@[\w.\-]+\.[a-zA-Z]{2,})",
+                req, _repe.IGNORECASE,
+            )
+            if add_m:
+                name = add_m.group(1).strip().title()
+                email = add_m.group(2).strip()
+                self.contacts.add(name, email)
+                self._pending_email.recipient_email = email
+                self._pending_email.recipient_name = name
+                self._pending_email.needs_email = False
+                msg = (
+                    f"Contact saved: {name} → {email}\n\n"
+                    + self.composer.format_draft_for_confirmation(self._pending_email)
+                )
+                return JarvisResponse(success=True, message=msg, latency_ms=0.0)
+
+            # Anything else while waiting for an email — gently re-prompt
+            # rather than letting the router run wild.
+            if req_lower in ("cancel", "no", "abort", "never mind", "nevermind"):
+                name = self._pending_email.recipient_name or "the recipient"
+                self._pending_email = None
+                return JarvisResponse(
+                    success=True,
+                    message=f"Email to {name} cancelled.",
+                    latency_ms=0.0,
+                )
+            return JarvisResponse(
+                success=True,
+                message=(
+                    f"I still need an email address for "
+                    f"'{self._pending_email.recipient_name or 'the recipient'}'. "
+                    "Reply with just the address (e.g. name@example.com), or "
+                    "say 'cancel' to drop the email."
+                ),
+                latency_ms=0.0,
+            )
+
+        # ── Pending email draft: user is confirming / cancelling / editing ─
+        # Catches just the unambiguous responses; richer phrasing like
+        # "make it shorter" still falls through to the existing
+        # _try_shortcut edit handler.
+        if self._pending_email and not getattr(self._pending_email, "needs_email", False):
+            confirm_words = ("yes", "yes send it", "send it", "send", "confirm",
+                             "go ahead", "yeah", "yep", "yup", "ok", "okay")
+            cancel_words = ("no", "cancel", "don't send", "do not send",
+                            "abort", "scrap it", "delete it")
+            if req_lower in confirm_words:
+                # CRITICAL: actually send the email here. Earlier versions
+                # cleared _pending_email and returned None hoping the
+                # downstream _try_shortcut confirm handler would catch
+                # "yes" — but the router was classifying "yes" as Tier 2
+                # general chat, which skips _try_shortcut entirely. The
+                # LLM would then hallucinate a fake "I'll draft and send
+                # the email..." response without anything ever being sent.
+                draft = self._pending_email
+                self._pending_email = None
+                result = await self.gmail.send_email(
+                    to=draft.recipient_email,
+                    subject=draft.subject,
+                    body=draft.body,
+                )
+                msg = result.get(
+                    "message",
+                    f"Email sent to {draft.recipient_email}." if result.get("success")
+                    else f"Could not send: {result.get('error', 'unknown error')}",
+                )
+                # Auto-save the contact on successful send
+                if result.get("success") and draft.recipient_email and draft.recipient_name:
+                    self.contacts.add(draft.recipient_name, draft.recipient_email)
+                return JarvisResponse(
+                    success=result.get("success", False),
+                    message=msg,
+                    latency_ms=0.0,
+                )
+            if req_lower in cancel_words:
+                self._pending_email = None
+                return JarvisResponse(
+                    success=True,
+                    message="Email cancelled. No email was sent.",
+                    latency_ms=0.0,
+                )
+
+        # ── Pending meeting waiting for duration ──────────────────────────
+        if self._pending_meeting and not self._pending_meeting.get("needs_new_time"):
+            # Catch bare numeric durations and worded ones — the existing
+            # _try_shortcut handler already does this parsing; we just
+            # need to make sure these strings don't get routed.
+            if (_repe.search(r"\b\d+\s*(?:m|min|mins|minute|minutes|hour|hours|hr|hrs|h)\b", req_lower)
+                    or req_lower in ("half hour", "quarter hour", "an hour",
+                                        "one hour", "two hours", "yes", "confirm",
+                                        "book it")):
+                return None  # let _try_shortcut handle parsing
+            if req_lower in ("cancel", "no", "abort", "never mind"):
+                title = self._pending_meeting.get("title", "Meeting")
+                self._pending_meeting = None
+                return JarvisResponse(
+                    success=True,
+                    message=f"'{title}' booking cancelled.",
+                    latency_ms=0.0,
+                )
+
+        # ── Pending file op waiting for confirm/cancel ────────────────────
+        if self._pending_file_op:
+            if req_lower in ("confirm", "yes", "do it", "go ahead",
+                             "proceed", "ok", "okay"):
+                return None  # let _try_shortcut handle the actual execute
+            if req_lower in ("cancel", "no", "stop", "abort",
+                             "nevermind", "never mind"):
+                self._pending_file_op = None
+                return JarvisResponse(
+                    success=True,
+                    message="Cancelled.",
+                    latency_ms=0.0,
+                )
+
+        return None  # no pending state caught the input — proceed normally
+
+    # ── Shared follow-up / elaborate handling ──────────────────────────────
+
+    # Phrases that, when said on their own (or as a short standalone request),
+    # mean "expand on the previous answer" rather than "answer this as a new
+    # query". The router doesn't know about conversation state, so without
+    # this intercept "elaborate" would be routed as a web search for the word
+    # "elaborate" — useless.
+    _FOLLOWUP_TRIGGERS = [
+        "elaborate", "tell me more", "more detail", "more details",
+        "explain more", "expand", "expand on that", "go into more detail",
+        "go on", "continue", "and?", "more", "what else", "say more",
+        "explain in detail", "go into detail", "give me more",
+        "give me more detail", "give me more details",
+        "in more detail", "in detail", "give more detail",
+    ]
+
+    def _detect_followup(self, user_request: str) -> bool:
+        """True if the user's message is a bare 'elaborate'-style follow-up."""
+        stripped = user_request.strip().lower().rstrip("?.!")
+        if stripped in self._FOLLOWUP_TRIGGERS:
+            return True
+        # Allow short variations like "can you elaborate on that"
+        if len(user_request.split()) <= 6:
+            if any(stripped.startswith(t) for t in self._FOLLOWUP_TRIGGERS):
+                return True
+            if any(t in stripped for t in ("elaborate", "more detail", "more details", "in detail")):
+                return True
+        return False
+
+    def _extract_prev_exchange(self, history: List[Dict]) -> tuple:
+        """
+        Walk history backwards looking for the most recent complete
+        user→assistant exchange. Returns (prev_user_msg, prev_assistant_msg)
+        or (None, None) if no eligible exchange exists.
+        """
+        prev_user_msg = None
+        prev_assistant_msg = None
+        for turn in reversed(history):
+            role = turn.get("role")
+            content = (turn.get("content") or "").strip()
+            if not content:
+                continue
+            if role == "assistant" and prev_assistant_msg is None:
+                prev_assistant_msg = content
+            elif role == "user" and prev_assistant_msg is not None:
+                candidate = content.lower().rstrip("?.!")
+                if (candidate not in self._FOLLOWUP_TRIGGERS
+                        and len(candidate.split()) > 2):
+                    prev_user_msg = content
+                    break
+        return prev_user_msg, prev_assistant_msg
+
+    def _build_elaborate_messages(
+        self, prev_user_msg: str, prev_assistant_msg: str,
+    ) -> List[Dict[str, str]]:
+        """
+        Build the message list for an elaborate request. Crucially this
+        provides an EXPLICIT system message — that suppresses the default
+        JARVIS_SYSTEM_PROMPT, whose strict "one paragraph, never list
+        capabilities" rules fight the elaborate request and cause small
+        models to defensively dump their capability list instead of
+        actually elaborating.
+        """
+        elaborate_system = (
+            "You are answering a follow-up request for more detail. "
+            "The user has already received a brief answer and is now "
+            "asking you to expand on it. "
+            "Produce a thorough, well-organised response of 200-350 words. "
+            "You may use multiple paragraphs and numbered points (1. 2. 3.) "
+            "where helpful. "
+            "Do NOT use markdown asterisks (*), bold/italic markers, or "
+            "hash symbols (#). "
+            "Do NOT introduce yourself, mention your name, or list your "
+            "capabilities — the user already knows who you are. "
+            "Do NOT mention or cite sources or URLs. "
+            "Stay strictly on the topic of the previous question — go "
+            "deeper on background, key facts, context, and significance "
+            "of that specific topic only. Do not pivot to other topics."
+        )
+        elaborate_user = (
+            f"Previous question from the user:\n"
+            f"{prev_user_msg}\n\n"
+            f"Brief answer you gave earlier:\n"
+            f"{(prev_assistant_msg or '')[:2000]}\n\n"
+            f"Now elaborate. Expand on the topic above with more depth, "
+            f"background, and detail. Do not repeat the brief answer "
+            f"verbatim — add information the brief answer left out."
+        )
+        return [
+            {"role": "system", "content": elaborate_system},
+            {"role": "user",   "content": elaborate_user},
+        ]
+
     # ── Main entry point ───────────────────────────────────────────────────
 
     async def handle(
@@ -113,6 +405,7 @@ class JarvisOrchestrator:
         context: Optional[Dict[str, Any]] = None,
         model_override: Optional[str] = None,
         _routing=None,  # pre-computed RouterDecision — skips router step when provided
+        conversation_history: Optional[List[Dict]] = None,
     ) -> JarvisResponse:
         """
         Handle a user request end-to-end.
@@ -145,6 +438,74 @@ class JarvisOrchestrator:
             return elapsed
 
         try:
+            # ── Step -1: Pending-state intercept (must run before router) ─
+            # If we're waiting for an email address / meeting duration /
+            # file-op confirmation, the user's next message is a CONTINUATION
+            # of that flow. The router would misclassify (e.g. a bare email
+            # address gets routed as "news" with confidence 0.90 by the 1b
+            # router model). Catch those early.
+            if _routing is None:
+                pending = await self._try_pending_state_intercept(user_request)
+                if pending is not None:
+                    pending.latency_ms = (time.time() - start_time) * 1000
+                    return pending
+
+            # ── Step 0: Elaborate / follow-up intercept ────────────────────
+            # MUST run before the router. The router would otherwise treat
+            # "elaborate" / "give me more detail" as a fresh standalone
+            # query and route it (web search, planner, etc.), which is
+            # wrong — these phrases only make sense relative to the prior
+            # assistant turn. This intercept resolves them by re-asking
+            # the prior question with an "expand" system prompt.
+            #
+            # Skip when _routing is provided (means handle_stream already
+            # decided this is NOT a follow-up and is delegating to us for
+            # the Tier 3 full pipeline).
+            if _routing is None and self._detect_followup(user_request):
+                history = conversation_history or []
+                if history:
+                    prev_user_msg, prev_assistant_msg = self._extract_prev_exchange(history)
+                    if prev_user_msg:
+                        t0 = time.time()
+                        msgs = self._build_elaborate_messages(prev_user_msg, prev_assistant_msg)
+                        # 450 tokens ≈ 320 words. Caps generation time so the
+                        # blocking HTTP path fits comfortably inside the
+                        # 60s LLM timeout even on CPU-only Macs running
+                        # llama3.2. Streaming WS path can afford more.
+                        try:
+                            full_text = await self.llm.chat(msgs, model=model, max_tokens=450)
+                        except Exception as exc:
+                            # Surface a useful error instead of the bare
+                            # "I encountered an error:" — the user has been
+                            # staring at a thinking indicator for ~minute.
+                            err_msg = str(exc) or type(exc).__name__
+                            total_ms = (time.time() - start_time) * 1000
+                            print(f"[JARVIS] ⚠️ Elaborate failed: {err_msg}")
+                            return JarvisResponse(
+                                success=False,
+                                message=(
+                                    "The detailed answer took too long to generate. "
+                                    "This usually means the model is cold-loading "
+                                    "or another query is in flight. Please try again."
+                                ),
+                                error=err_msg,
+                                latency_ms=total_ms,
+                            )
+                        _t("elaborate", t0)
+                        total_ms = (time.time() - start_time) * 1000
+                        print(f"[JARVIS] ⚡ Elaborate complete — total: {total_ms/1000:.2f}s")
+                        return JarvisResponse(
+                            success=True,
+                            message=full_text.strip(),
+                            latency_ms=total_ms,
+                        )
+                # No history or no eligible prior turn — fall back to asking
+                return JarvisResponse(
+                    success=True,
+                    message="What would you like me to elaborate on?",
+                    latency_ms=(time.time() - start_time) * 1000,
+                )
+
             # ── Step 1: Route ──────────────────────────────────────────────
             if _routing is not None:
                 routing = _routing
@@ -193,15 +554,38 @@ class JarvisOrchestrator:
                     context_str = self.news.format_headlines(data)
                     _t("news_tool", t0)
 
-                user_content = (
-                    f"Context:\n{context_str}\n\nUser: {user_request}"
-                    if context_str else user_request
-                )
-                msgs = [{"role": "user", "content": user_content}]
+                if context_str and agent == AgentRole.WEBSEARCH:
+                    user_content = (
+                        f"Answer this question: {user_request}\n\n"
+                        f"Source material:\n{context_str}\n\n"
+                        f"STRICT OUTPUT FORMAT:\n"
+                        f"- Output EXACTLY ONE paragraph, 3-5 sentences, plain prose.\n"
+                        f"- Absolutely no bullet points, no numbered lists, no headers, no markdown.\n"
+                        f"- No blank lines anywhere — keep the entire answer on a single paragraph.\n"
+                        f"- Never introduce yourself or mention your name.\n"
+                        f"- Never cite, mention, or list sources, URLs, or websites — just answer directly.\n"
+                        f"- No follow-up offers ('Would you like to know more?' etc.)."
+                    )
+                else:
+                    user_content = (
+                        f"Context:\n{context_str}\n\nUser: {user_request}"
+                        if context_str else user_request
+                    )
+                history = conversation_history or []
+                recent_history = history[-8:] if len(history) > 8 else history
+                msgs = recent_history + [{"role": "user", "content": user_content}]
 
                 t0 = time.time()
-                llm_response = await self.llm.chat(msgs, max_tokens=512)
+                # 180 token cap = ~130 words = ~5 medium sentences. Hard upper
+                # bound that prevents the model from running away even when it
+                # ignores the prompt's "one paragraph" instruction.
+                llm_response = await self.llm.chat(msgs, max_tokens=180)
                 _t("llm_single_call", t0)
+
+                # Deterministic single-paragraph enforcement — guarantees the
+                # response is one paragraph of plain prose regardless of what
+                # the model emitted.
+                llm_response = _enforce_single_paragraph(llm_response)
 
                 total_ms = (time.time() - start_time) * 1000
                 print(f"[JARVIS] ⚡ Tier 2 complete — total: {total_ms/1000:.2f}s")
@@ -311,10 +695,22 @@ class JarvisOrchestrator:
             print(f"❌ Orchestrator error: {exc}")
             import traceback
             traceback.print_exc()
+            # Fall back to a useful explanation rather than the bare
+            # "I encountered an error:" when the exception has no message
+            # (common for timeouts on small models).
+            err_text = str(exc) or type(exc).__name__
+            if "Timeout" in err_text or "timeout" in err_text:
+                user_msg = (
+                    "The model took too long to respond. This usually means "
+                    "the LLM is cold-loading. Try again — the second attempt "
+                    "should be much faster."
+                )
+            else:
+                user_msg = f"I encountered an error: {err_text}"
             return JarvisResponse(
                 success=False,
-                message=f"I encountered an error: {exc}",
-                error=str(exc),
+                message=user_msg,
+                error=err_text,
                 latency_ms=latency_ms,
             )
 
@@ -325,6 +721,7 @@ class JarvisOrchestrator:
         user_request: str,
         context: Optional[Dict[str, Any]] = None,
         model_override: Optional[str] = None,
+        conversation_history: Optional[List[Dict]] = None,
     ):
         """
         Async generator version of handle().
@@ -347,7 +744,71 @@ class JarvisOrchestrator:
             print(f"[JARVIS] ⏱  {label}: {elapsed:.2f}s")
 
         try:
-            # Router (always needed — 1b model, fast)
+            # ── Pending-state intercept ────────────────────────────────────
+            # MUST run before the router. When _pending_email needs an
+            # address, "user@gmail.com" is a continuation, not a query.
+            # The 1b router model will otherwise classify a bare email
+            # address as "news" with high confidence and the address
+            # gets piped into the news headlines tool. Same risk for
+            # meeting durations ("45 minutes") and file-op confirms.
+            pending = await self._try_pending_state_intercept(user_request)
+            if pending is not None:
+                pending.latency_ms = (time.time() - start_time) * 1000
+                yield {
+                    "type": "response",
+                    "message": pending.message,
+                    "success": pending.success,
+                    "latency_ms": pending.latency_ms,
+                }
+                return
+
+            # ── Early intercept: pure follow-up with no new topic ─────────
+            # "elaborate", "tell me more", "give me more detail" etc. must
+            # be resolved against conversation history — never routed as a
+            # standalone query. The detection + prev-exchange walk +
+            # elaborate message construction all live on shared helpers
+            # so the WebSocket streaming path and the /chat HTTP path stay
+            # in lockstep (they were drifting before — only this path had
+            # the fix, so /chat would hallucinate capability lists).
+            if self._detect_followup(user_request):
+                _history = conversation_history or []
+                if not _history:
+                    yield {
+                        "type": "response",
+                        "message": "What would you like me to elaborate on?",
+                        "success": True,
+                        "latency_ms": (time.time() - start_time) * 1000,
+                    }
+                    return
+
+                prev_user_msg, prev_assistant_msg = self._extract_prev_exchange(_history)
+                if not prev_user_msg:
+                    yield {
+                        "type": "response",
+                        "message": "What would you like me to elaborate on?",
+                        "success": True,
+                        "latency_ms": (time.time() - start_time) * 1000,
+                    }
+                    return
+
+                yield {"type": "thinking"}
+                msgs = self._build_elaborate_messages(prev_user_msg, prev_assistant_msg)
+                full_text = ""
+                # chat_stream auto-injects JARVIS_SYSTEM_PROMPT only when
+                # no system message is present — our explicit system
+                # message above suppresses that injection.
+                async for chunk in self.llm.chat_stream(msgs, model=model, max_tokens=700):
+                    full_text += chunk
+                    yield {"type": "chunk", "text": chunk}
+                yield {
+                    "type": "response",
+                    "message": full_text,
+                    "success": True,
+                    "latency_ms": (time.time() - start_time) * 1000,
+                }
+                return
+
+            # ── Router (always needed — 1b model, fast) ───────────────────
             t0 = time.time()
             routing = await self.router.route(user_request)
             _t("router", t0)
@@ -386,27 +847,51 @@ class JarvisOrchestrator:
                     context_str = self.news.format_headlines(data)
                     _t("news_tool", t0)
 
-                user_content = (
-                    f"Context:\n{context_str}\n\nUser: {user_request}"
-                    if context_str else user_request
-                )
-                msgs = [{"role": "user", "content": user_content}]
+                if context_str and agent == AgentRole.WEBSEARCH:
+                    user_content = (
+                        f"Answer this question: {user_request}\n\n"
+                        f"Source material:\n{context_str}\n\n"
+                        f"STRICT OUTPUT FORMAT:\n"
+                        f"- Output EXACTLY ONE paragraph, 3-5 sentences, plain prose.\n"
+                        f"- Absolutely no bullet points, no numbered lists, no headers, no markdown.\n"
+                        f"- No blank lines anywhere — keep the entire answer on a single paragraph.\n"
+                        f"- Never introduce yourself or mention your name.\n"
+                        f"- Never cite, mention, or list sources, URLs, or websites — just answer directly.\n"
+                        f"- No follow-up offers ('Would you like to know more?' etc.)."
+                    )
+                else:
+                    user_content = (
+                        f"Context:\n{context_str}\n\nUser: {user_request}"
+                        if context_str else user_request
+                    )
+
+                # Build message list: inject recent conversation history for context
+                history = conversation_history or []
+                recent_history = history[-8:] if len(history) > 8 else history  # last 4 exchanges
+                msgs = recent_history + [{"role": "user", "content": user_content}]
 
                 full_text = ""
                 t0 = time.time()
-                async for chunk in self.llm.chat_stream(msgs, model=model, max_tokens=512):
+                # 180 token cap matches the non-streaming Tier 2 path — keeps
+                # the model honest about the one-paragraph rule.
+                async for chunk in self.llm.chat_stream(msgs, model=model, max_tokens=180):
                     full_text += chunk
                     yield {"type": "chunk", "text": chunk}
                 _t("llm_stream", t0)
 
+                # Enforce single-paragraph format on the final aggregated text.
+                # We stream chunks for perceived latency, then send a final
+                # cleaned message that overrides what the UI buffered.
+                cleaned = _enforce_single_paragraph(full_text)
+
                 total_ms = (time.time() - start_time) * 1000
                 print(f"[JARVIS] ⚡ Stream Tier 2 — {total_ms/1000:.2f}s")
                 asyncio.ensure_future(self.memory.store_task_result(
-                    user_request, routing.primary_agent.value, True, full_text[:100]
+                    user_request, routing.primary_agent.value, True, cleaned[:100]
                 ))
                 yield {
                     "type": "response",
-                    "message": full_text,
+                    "message": cleaned,
                     "success": True,
                     "latency_ms": total_ms,
                 }
@@ -416,7 +901,7 @@ class JarvisOrchestrator:
             yield {"type": "thinking"}
 
             # Pass pre-computed routing to avoid double-routing (saves ~2-3s)
-            response = await self.handle(user_request, context=ctx, model_override=model_override, _routing=routing)
+            response = await self.handle(user_request, context=ctx, model_override=model_override, _routing=routing, conversation_history=conversation_history)
             yield {
                 "type": "response",
                 "message": response.message,
@@ -577,12 +1062,32 @@ class JarvisOrchestrator:
             elif agent == "spotify":
                 if action == "search_tracks":
                     return await self.spotify.search(params.get("query", ""))
-                elif action == "play_track":
-                    return await self.spotify.play(params.get("uri"))
+                elif action in ("play_track", "play_by_name", "play"):
+                    # The Planner LLM is allowed to call any of these three
+                    # action names. If a URI is given we play it directly;
+                    # otherwise we treat the `query` / `name` param as a
+                    # natural-language song request and search-then-play.
+                    uri = params.get("uri") or params.get("track_uri")
+                    query = (
+                        params.get("query") or params.get("name")
+                        or params.get("track") or params.get("song")
+                    )
+                    if uri:
+                        result = await self.spotify.play(uri)
+                    elif query:
+                        result = await self.spotify.play_by_name(query)
+                    else:
+                        result = await self.spotify.play()
+                    return {
+                        **result,
+                        "message": self.spotify.format_play_result(result),
+                    }
                 elif action == "pause":
                     return await self.spotify.pause()
                 elif action == "skip":
                     return await self.spotify.skip()
+                elif action == "previous":
+                    return await self.spotify.previous()
                 elif action == "set_volume":
                     return await self.spotify.set_volume(int(params.get("level", 50)))
                 elif action == "get_now_playing":
@@ -732,6 +1237,51 @@ class JarvisOrchestrator:
                         if placeholder in value:
                             enriched[key] = value.replace(placeholder, str(field_val))
         return enriched
+
+    # ── Duration extraction ────────────────────────────────────────────────
+
+    def _extract_duration_minutes(self, text: str) -> Optional[int]:
+        """
+        Pull an explicit duration out of a natural language meeting request.
+
+        Returns minutes (int) when a duration is found, or None when the user
+        didn't specify one (caller should then ask). Examples that match:
+          "30 minute meeting"       → 30
+          "1 hour call"             → 60
+          "1.5 hour sync"           → 90
+          "half hour"               → 30
+          "quarter hour"            → 15
+          "an hour"                 → 60
+          "two hours"               → 120
+          "45 mins"                 → 45
+        """
+        import re as _redur
+        t = text.lower()
+
+        # Numeric: "30 minutes", "45 mins", "1 hour", "2 hrs", "1.5 hour"
+        m = _redur.search(
+            r'\b(\d+(?:\.\d+)?)\s*(hours?|hrs?|h|minutes?|mins?|m)\b',
+            t,
+        )
+        if m:
+            value = float(m.group(1))
+            unit = m.group(2)
+            if unit.startswith(("hour", "hr", "h")):
+                return int(round(value * 60))
+            return int(round(value))
+
+        # Worded numbers + "hour(s)"
+        worded = {
+            "an hour": 60, "one hour": 60, "a hour": 60,
+            "two hours": 120, "three hours": 180, "four hours": 240,
+            "half hour": 30, "half an hour": 30, "half-hour": 30,
+            "quarter hour": 15, "quarter of an hour": 15, "quarter-hour": 15,
+        }
+        for phrase, mins in worded.items():
+            if phrase in t:
+                return mins
+
+        return None
 
     # ── Temporal resolution ────────────────────────────────────────────────
 
@@ -1343,11 +1893,16 @@ class JarvisOrchestrator:
             import time as _ts
             _ss = _ts.time()
 
-            # Inject context so LLM writes on behalf of Abdullah, not as itself
+            # Pass the raw request straight through. The composer's _BODY_PROMPT
+            # already enforces identity rules (Jarvis writing on Abdullah's
+            # behalf) and a strict "stay on topic, do not fabricate" guard.
+            # The previous wrapper said "Write in first person as Abdullah",
+            # which CONTRADICTED the composer prompt and caused the model to
+            # hallucinate filler content trying to reconcile the two voices.
             _jarvis_context = (
-                "Write this email on behalf of Abdullah. "
-                "Do NOT make up facts not stated in the request — only use information explicitly given. "
-                "Write professionally in first person as Abdullah.\n\n"
+                "Stay strictly on the topic stated below. Do NOT invent or "
+                "add any facts, plans, projects, meetings, or details that "
+                "are not explicitly in the request.\n\n"
                 f"Email request: {user_request}"
             )
             draft = await self.composer.compose(_jarvis_context, self.contacts)
@@ -1538,7 +2093,7 @@ class JarvisOrchestrator:
                 "messages": "Messages", "facetime": "FaceTime",
                 "photos": "Photos", "maps": "Maps", "word": "Microsoft Word",
                 "excel": "Microsoft Excel", "powerpoint": "Microsoft PowerPoint",
-                "app": "__app__", "system preferences": "System Preferences",
+                "system preferences": "System Preferences",
                 "system settings": "System Settings", "settings": "System Settings",
             }
             # Try to find a known app name in the request
@@ -1554,20 +2109,6 @@ class JarvisOrchestrator:
                     app = open_match.group(1).strip().title()
             if app:
                 new_window = any(kw in req_lower for kw in ["new window", "new tab", "open new", "new session"])
-
-                # App — open native app
-                # App — open native app, new window via Cmd+N
-                if app == "__app__":
-                    script = (
-                        "tell application \"App\" to activate\n"
-                        "delay 0.5\n"
-                        "tell application \"System Events\"\n"
-                        "    keystroke \"n\" using {command down}\n"
-                        "end tell"
-                    )
-                    await self.mac._async_script(script)
-                    msg = "Opening new App window." if new_window else "Opening App."
-                    return JarvisResponse(success=True, message=msg, latency_ms=(_to.time()-_so)*1000)
 
                 # VSCode new window — Cmd+Shift+N
                 if app == "Visual Studio Code" and new_window:
@@ -1717,6 +2258,36 @@ class JarvisOrchestrator:
             import time as _tws
             _sws = _tws.time()
 
+            # Detect query complexity for adaptive length
+            _elaborate_triggers = ["elaborate", "explain in detail", "tell me more",
+                                   "more detail", "go into detail", "expand on",
+                                   "comprehensive", "deep dive", "in depth", "full overview",
+                                   "everything about", "give me a full"]
+            _req_low = user_request.lower()
+            is_elaborate = any(t in _req_low for t in _elaborate_triggers)
+
+            # ── Resolve follow-up queries using conversation history ────────
+            # If the message is a bare follow-up ("elaborate", "tell me more", etc.)
+            # with no new topic, pull the previous user query as the actual topic.
+            _history = conversation_history or []
+            _is_pure_followup = (
+                is_elaborate and
+                len(user_request.split()) <= 5 and
+                _history
+            )
+            if _is_pure_followup:
+                # Find the last user message that was a real query (not a follow-up itself)
+                prev_query = None
+                for turn in reversed(_history):
+                    if turn.get("role") == "user":
+                        candidate = turn["content"]
+                        if not any(t in candidate.lower() for t in _elaborate_triggers):
+                            prev_query = candidate
+                            break
+                if prev_query:
+                    user_request = prev_query  # expand on this topic
+                    is_research = True  # force detailed response
+
             # Use the search tool query parser to clean the query
             query = self.websearch.parse_query(user_request)
             # Also strip research/investigate triggers for cleaner queries
@@ -1729,24 +2300,16 @@ class JarvisOrchestrator:
 
             msg = "Could not find information about: " + query
 
-            # Detect query complexity for adaptive length
-            _simple_triggers = ["who is", "what is the", "when did", "where is",
-                                 "capital of", "ceo of", "founder of", "born in",
-                                 "how old is", "what year", "who won", "who owns"]
-            _elaborate_triggers = ["elaborate", "explain in detail", "tell me more",
-                                   "comprehensive", "deep dive", "in depth", "full overview",
-                                   "everything about", "give me a full"]
-            _req_low = user_request.lower()
-            is_elaborate = any(t in _req_low for t in _elaborate_triggers)
-            is_simple = (not is_research and not is_elaborate and
-                         any(_req_low.startswith(t) or t in _req_low for t in _simple_triggers))
-
-            if is_simple:
-                length_instruction = "- Answer in 3-5 sentences. Be direct and factual. No lists needed."
-            elif is_elaborate or is_research:
+            if is_elaborate or is_research:
                 length_instruction = "- Give a thorough response of 200-350 words. Cover background, key facts, current state, and significance. Use numbered lists where appropriate."
             else:
-                length_instruction = "- Aim for 5-10 sentences. Cover the key facts and essential context. Use a numbered list only if there are genuinely multiple distinct items."
+                # Default for ALL web queries: one concise paragraph.
+                # Only elaborate when the user explicitly asks for more detail.
+                length_instruction = (
+                    "- Answer in a single concise paragraph (3-5 sentences maximum). "
+                    "Be direct and factual. Do NOT use bullet points, numbered lists, or multiple paragraphs. "
+                    "If the user wants more detail they will ask you to elaborate."
+                )
 
             if is_research:
                 # Run all 3 searches IN PARALLEL instead of sequentially
@@ -1776,11 +2339,14 @@ class JarvisOrchestrator:
                         f"Source material:\n{combined2}\n\n"
                         f"Instructions:\n"
                         f"{length_instruction}\n"
-                        f"- Organise logically. Use numbered points (1. 2. 3.) for lists.\n"
+                        f"- Organise logically. Use numbered points (1. 2. 3.) for lists only if elaborating.\n"
                         f"- Write in clear prose. NO markdown asterisks (*) or hash (#).\n"
-                        f"- You are Jarvis, an AI assistant. Never refer to yourself as the user."
+                        f"- Never introduce yourself or mention your name.\n"
+                        f"- Never cite, mention, or list sources, URLs, or websites — just answer directly.\n"
+                        f"- Do NOT add 'Would you like to know more?' or similar follow-up offers."
                     )
-                    report = await self.llm.chat([{"role": "user", "content": rp}])
+                    recent_hist = _history[-6:] if len(_history) > 6 else _history
+                    report = await self.llm.chat(recent_hist + [{"role": "user", "content": rp}])
                     msg = report.strip()
                 else:
                     msg = "Could not find enough information about: " + query
@@ -1796,9 +2362,12 @@ class JarvisOrchestrator:
                         f"Instructions:\n"
                         f"{length_instruction}\n"
                         f"- Write in natural prose. NO markdown asterisks (*) or hash (#) symbols.\n"
-                        f"- You are Jarvis, an AI assistant. Never refer to yourself as the user."
+                        f"- Never introduce yourself or mention your name.\n"
+                        f"- Never cite, mention, or list sources, URLs, or websites — just answer directly.\n"
+                        f"- Do NOT add 'Would you like to know more?' or similar follow-up offers."
                     )
-                    summary = await self.llm.chat([{"role": "user", "content": ap}])
+                    recent_hist = _history[-6:] if len(_history) > 6 else _history
+                    summary = await self.llm.chat(recent_hist + [{"role": "user", "content": ap}])
                     msg = summary.strip()
                 else:
                     msg = "Could not find results for: " + query
@@ -1876,6 +2445,97 @@ class JarvisOrchestrator:
             _sslp = _tslp.time()
             result = await self.mac.sleep()
             return JarvisResponse(success=result.get("success", False), message="Putting Mac to sleep.", latency_ms=(_tslp.time()-_sslp)*1000)
+
+        # ── Reminder shortcuts ────────────────────────────────────────────────
+        # Must come BEFORE the calendar shortcuts because "remind me about
+        # the 3pm meeting" contains "meeting" and would otherwise trigger
+        # the calendar booking flow.
+        import re as _rerem
+        # List reminders
+        if any(kw in req_lower for kw in [
+            "my reminders", "list reminders", "list my reminders",
+            "what reminders", "show reminders", "show my reminders",
+            "pending reminders", "any reminders",
+        ]):
+            import time as _trml
+            _srml = _trml.time()
+            pending = self.reminders.list_pending()
+            msg = self.reminders.format_list(pending)
+            return JarvisResponse(success=True, message=msg, latency_ms=(_trml.time()-_srml)*1000)
+
+        # Create reminder. "remind me to X" / "set a reminder to X" / "alert me to X"
+        _remind_match = _rerem.search(
+            r'\b(?:remind me to|remind me|set a reminder to|set a reminder for|'
+            r'alert me to|alert me)\s+(.+)',
+            user_request,
+            _rerem.IGNORECASE,
+        )
+        if _remind_match:
+            import time as _trsa
+            _srsa = _trsa.time()
+            tail = _remind_match.group(1).strip()
+
+            # Two timing styles to handle:
+            #   - "in N minutes/hours" → offset from now
+            #   - "at 3pm", "tomorrow at 9", "on Monday at 10am" → absolute
+            offset_minutes = None
+            offset_match = _rerem.search(
+                r'\bin\s+(\d+)\s*(minute|min|m|hour|hr|h)s?\b',
+                tail, _rerem.IGNORECASE,
+            )
+            if offset_match:
+                val = int(offset_match.group(1))
+                unit = offset_match.group(2).lower()
+                offset_minutes = val * 60 if unit.startswith(('h',)) else val
+                # Title is everything before " in N ..."
+                title = tail[:offset_match.start()].strip(" ,.;:")
+                due_at = None
+            else:
+                # Try absolute time resolution
+                temporal = self._resolve_temporal(tail)
+                due_at_iso = temporal.get("datetime", "")
+                if due_at_iso:
+                    due_at = due_at_iso
+                    # Strip the time/date words out of the title
+                    title = tail
+                    for _noise in [
+                        r'\bat\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b',
+                        r'\btomorrow\b', r'\btonight\b', r'\btoday\b',
+                        r'\bnext week\b',
+                        r'\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b',
+                    ]:
+                        title = _rerem.sub(_noise, '', title, flags=_rerem.IGNORECASE)
+                    title = _rerem.sub(r'\s+', ' ', title).strip(" ,.;:")
+                else:
+                    # No time given — default to 5 minutes from now
+                    offset_minutes = 5
+                    title = tail.strip(" ,.;:")
+                    due_at = None
+
+            # Clean leading "to" / "that" from "remind me to call John"
+            title = _rerem.sub(r'^(?:to|that)\s+', '', title, flags=_rerem.IGNORECASE)
+            title = title.strip(" ,.;:") or "Reminder"
+
+            rid = self.reminders.add(
+                title=title,
+                due_at=due_at,
+                offset_minutes=offset_minutes,
+            )
+
+            # Build a human-readable confirmation
+            if offset_minutes is not None:
+                when = f"in {offset_minutes} minute{'s' if offset_minutes != 1 else ''}"
+            else:
+                try:
+                    from datetime import datetime as _dt
+                    when = _dt.fromisoformat(due_at).strftime("%-d %b at %-I:%M %p")
+                except Exception:
+                    when = due_at or "soon"
+            msg = f"Reminder set — '{title}' {when}."
+            asyncio.ensure_future(self.memory.store_task_result(
+                user_request, "set_reminder", True, msg[:100]
+            ))
+            return JarvisResponse(success=True, message=msg, latency_ms=(_trsa.time()-_srsa)*1000)
 
         # ── Calendar shortcuts ────────────────────────────────────────────────
         import re as _recal
@@ -2053,14 +2713,21 @@ class JarvisOrchestrator:
             else:
                 title = "Meeting"
 
-            # Strip time/date noise from title
+            # Strip time/date/duration noise from title
             noise = ["today","tomorrow","tonight","monday","tuesday","wednesday",
                      "thursday","friday","saturday","sunday","next week",
                      "9pm","8pm","7pm","6pm","5pm","4pm","3pm","2pm","1pm",
-                     "12pm","11am","10am","9am","8am","am","pm"]
+                     "12pm","11am","10am","9am","8am","am","pm",
+                     # Duration phrases — would otherwise leak into the title
+                     # for requests like "schedule a 30 minute meeting…"
+                     "minute","minutes","mins","min","hour","hours","hrs","hr",
+                     "half","quarter","an hour","one hour","two hours"]
             for n in noise:
                 title = _ret.sub(r"\b" + n + r"\b", "", title, flags=_ret.IGNORECASE).strip()
-            title = title.strip(". ").title() or "Meeting"
+            # Strip any standalone digit groups left behind by duration removal
+            # (e.g. "30 meeting" → "meeting"), then collapse whitespace.
+            title = _ret.sub(r"\b\d+\b", "", title)
+            title = _ret.sub(r"\s+", " ", title).strip(". ").title() or "Meeting"
 
             # Extract attendees — "with John and Sarah", "with john@email.com"
             attendees = []
@@ -2084,7 +2751,16 @@ class JarvisOrchestrator:
             if not start_time:
                 return JarvisResponse(success=False, message="I couldn't figure out when to schedule the meeting. Could you specify a date and time?", latency_ms=(_tcal.time()-_scal)*1000)
 
-            # Store pending meeting and ask for duration
+            # Try to extract duration from the original request so we can
+            # one-shot the booking when the user already said how long.
+            # Examples we want to catch:
+            #   "schedule a 30 minute meeting..."
+            #   "book a 1 hour call..."
+            #   "set up a half-hour sync..."
+            initial_duration_mins = self._extract_duration_minutes(user_request)
+
+            # Store pending meeting state — needed whether we ask for duration
+            # or skip straight to booking.
             self._pending_meeting = {
                 "title": title,
                 "start_time": start_time,
@@ -2093,11 +2769,64 @@ class JarvisOrchestrator:
 
             start_fmt = start_time[:16].replace("T", " at ")
             attendee_str = f" with {', '.join(attendees)}" if attendees else ""
-            msg = (
-                f"I will schedule {title!r}{attendee_str} on {start_fmt}. "
-                "How long should the meeting be? (e.g. 30 minutes, 1 hour, 45 minutes)"
+
+            if initial_duration_mins is None:
+                # No duration given — fall back to the two-step flow.
+                msg = (
+                    f"I will schedule {title!r}{attendee_str} on {start_fmt}. "
+                    "How long should the meeting be? (e.g. 30 minutes, 1 hour, 45 minutes)"
+                )
+                return JarvisResponse(success=True, message=msg, latency_ms=(_tcal.time()-_scal)*1000)
+
+            # ── One-shot booking path ───────────────────────────────────────
+            # User gave us everything (title, time, duration). Check for
+            # conflicts and create the event in a single turn.
+            from datetime import timedelta as _td, datetime as _dt
+            duration_mins = max(15, min(480, initial_duration_mins))
+            start_dt = _dt.fromisoformat(start_time)
+            end_dt = start_dt + _td(minutes=duration_mins)
+            end_time = end_dt.isoformat()
+
+            conflict = await self.calendar.check_conflicts(start_time, end_time)
+            if conflict.get("has_conflict"):
+                conflict_title = conflict["conflicts"][0].get("title", "another event")
+                # Keep the pending meeting so the next turn can pick a new time
+                self._pending_meeting["duration_mins"] = duration_mins
+                self._pending_meeting["needs_new_time"] = True
+                return JarvisResponse(
+                    success=False,
+                    message=(
+                        f"Conflict — '{conflict_title}' is already at that time. "
+                        "What other time works?"
+                    ),
+                    latency_ms=(_tcal.time()-_scal)*1000,
+                )
+
+            result = await self.calendar.create_event(
+                title=title,
+                start_time=start_time,
+                end_time=end_time,
+                attendees=attendees or None,
             )
-            return JarvisResponse(success=True, message=msg, latency_ms=(_tcal.time()-_scal)*1000)
+            self._pending_meeting = None
+
+            if result.get("success"):
+                dur_str = f"{duration_mins} minutes" if duration_mins != 60 else "1 hour"
+                msg = f"✅ '{title}' scheduled{attendee_str} on {start_fmt} for {dur_str}."
+                if result.get("link"):
+                    msg += " View: " + result["link"]
+            else:
+                msg = f"Could not create event: {result.get('error', 'unknown error')}"
+
+            asyncio.ensure_future(self.memory.store_task_result(
+                user_request, "schedule_meeting",
+                result.get("success", False), msg[:100],
+            ))
+            return JarvisResponse(
+                success=result.get("success", False),
+                message=msg,
+                latency_ms=(_tcal.time()-_scal)*1000,
+            )
 
         return None  # No shortcut — proceed with full pipeline
 

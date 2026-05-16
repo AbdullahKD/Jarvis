@@ -25,11 +25,26 @@ _thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=6, thread_name_
 
 # Default symbols to track
 DEFAULT_SYMBOLS = {
+    # Major indices
+    "^GSPC":    "S&P 500",
+    "^IXIC":    "NASDAQ",
+    "^DJI":     "Dow Jones",
+    "^FTSE":    "FTSE 100",
+    "^RUT":     "Russell 2000",
+    # Commodities
+    "GC=F":     "Gold",
+    "CL=F":     "Crude Oil",
+    # Crypto
     "BTC-USD":  "Bitcoin",
+    "ETH-USD":  "Ethereum",
+    # Big Tech
     "AAPL":     "Apple",
-    "NVDA":     "NVIDIA",
-    "TSLA":     "Tesla",
     "MSFT":     "Microsoft",
+    "NVDA":     "NVIDIA",
+    "GOOGL":    "Google",
+    "AMZN":     "Amazon",
+    "META":     "Meta",
+    "TSLA":     "Tesla",
 }
 
 

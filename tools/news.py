@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import aiohttp
 
 TIMEOUT = aiohttp.ClientTimeout(total=10)
-HEADERS = {"User-Agent": "Jarvis/1.0 (BNU Dissertation Project) Python/aiohttp"}
+HEADERS = {"User-Agent": "Jarvis/1.0 Python/aiohttp"}
 
 # ── Feed Directory ──────────────────────────────────────────────────────────
 FEEDS: Dict[str, Tuple[str, str, str]] = {
@@ -26,6 +26,9 @@ FEEDS: Dict[str, Tuple[str, str, str]] = {
     "bbc_uk":        ("BBC UK",             "https://feeds.bbci.co.uk/news/uk/rss.xml",                      "uk"),
     "bbc_sport":     ("BBC Sport",          "https://feeds.bbci.co.uk/sport/rss.xml",                        "sports"),
     "bbc_science":   ("BBC Science",        "https://feeds.bbci.co.uk/news/science_and_environment/rss.xml", "science"),
+    "bbc_ent":       ("BBC Entertainment",  "https://feeds.bbci.co.uk/news/entertainment_and_arts/rss.xml",  "entertainment"),
+    "guardian_cult": ("Guardian Culture",   "https://www.theguardian.com/culture/rss",                       "entertainment"),
+    "variety":       ("Variety",            "https://variety.com/feed/",                                     "entertainment"),
     "guardian":      ("The Guardian",       "https://www.theguardian.com/world/rss",                         "world"),
     "guardian_uk":   ("Guardian UK",        "https://www.theguardian.com/uk/rss",                            "uk"),
     "guardian_sport":("Guardian Sport",     "https://www.theguardian.com/sport/rss",                         "sports"),
@@ -51,7 +54,8 @@ CATEGORY_ALIASES = {
     "uk":         ["uk", "britain", "british", "england", "scotland", "wales", "local"],
     "sports":     ["sport", "sports", "football", "soccer", "cricket", "tennis", "f1", "formula 1", "nba", "nfl", "rugby", "golf", "boxing", "athletics"],
     "technology": ["tech", "technology", "computing", "software", "hardware", "ai", "artificial intelligence", "ml", "machine learning", "startups", "apps"],
-    "science":    ["science", "scientific", "research", "space", "environment", "climate", "health", "medicine"],
+    "science":        ["science", "scientific", "research", "space", "environment", "climate", "health", "medicine"],
+    "entertainment":  ["entertainment", "film", "movie", "music", "celebrity", "tv", "television", "culture", "arts", "award", "streaming"],
 }
 
 SOURCE_ALIASES = {
@@ -202,8 +206,14 @@ class NewsTool:
             lines.append(f"{i}. {title}")
             lines.append(f"   {source_str}{coverage}")
 
-            if detailed and desc:
-                lines.append(f"   {desc[:180]}")
+            # Always show a short summary if available
+            if desc:
+                snippet = desc[:160].rstrip()
+                if len(desc) > 160:
+                    snippet += "…"
+                lines.append(f"   {snippet}")
+            elif detailed:
+                pass  # already showed nothing, that's fine
 
             lines.append("")
 

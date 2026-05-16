@@ -10,12 +10,22 @@ so every call is dispatched to a thread executor to keep the event loop free.
 from __future__ import annotations
 
 import asyncio
+import os
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from typing import Any, Dict, List, Optional
 
-# Thread pool — FinEx LLM calls are blocking (HTTP, but still synchronous)
-_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="finex")
+# Thread pool — FinEx LLM calls are blocking (HTTP, but still synchronous).
+# Bumped from 2 → 8 (configurable via env) so a slow Ollama call doesn't freeze
+# the whole FinEx capacity. Per-call timeout is applied via asyncio.wait_for.
+_executor = ThreadPoolExecutor(
+    max_workers=int(os.environ.get("FINEX_WORKERS", "8")),
+    thread_name_prefix="finex",
+)
+
+# Per-question wall-clock budget. Ollama itself has a 120s HTTP timeout below,
+# so this is a soft cap to free the event loop / give the user a clean error.
+_CHAT_TIMEOUT_S = float(os.environ.get("FINEX_CHAT_TIMEOUT_S", "100"))
 
 
 def _import_engine():
@@ -52,6 +62,22 @@ class FinExAgent:
             _import_engine()
             self._ready = True
             print("💹 FinExAgent ready — financial statement Q&A enabled")
+            # One-time schema migration up-front (cheap, idempotent) so it's not
+            # repeated on every insert.
+            try:
+                _, _, insert_fn = _import_db()
+                from finex.db_insert import create_schema
+                create_schema()
+            except Exception as exc:
+                print(f"💹 FinEx schema init warning (non-fatal): {exc}")
+            # Best-effort: pre-warm Ollama in a background thread so first
+            # question doesn't pay cold-start cost.
+            try:
+                import threading
+                from finex.LLM_SQL import warm_model
+                threading.Thread(target=warm_model, name="finex-warm", daemon=True).start()
+            except Exception:
+                pass
         except ImportError as exc:
             self._error = str(exc)
             print(f"💹 FinExAgent unavailable: {exc} (run: pip install psycopg2-binary)")
@@ -77,12 +103,17 @@ class FinExAgent:
                 "question": question,
             }
 
-        # Build history string from last 6 messages
+        # Build history string from last 6 messages, capped at ~1500 chars
+        # so it never starves the system prompt out of the model's context window.
+        _HIST_BUDGET = 1500
         history_str = ""
         if history:
             for msg in history[-6:]:
                 role = "User" if msg.get("role") == "user" else "Analyst"
                 history_str += f"{role}: {msg.get('content', '')}\n\n"
+            if len(history_str) > _HIST_BUDGET:
+                # Drop oldest turns first; keep the tail
+                history_str = "…\n" + history_str[-_HIST_BUDGET:]
 
         loop = asyncio.get_event_loop()
         answer_fn, _, _, LEVEL_LABELS = _import_engine()
@@ -91,7 +122,28 @@ class FinExAgent:
             resp, level, label = answer_fn(question, company, history_str)
             return resp, level, label
 
-        resp_text, level, label = await loop.run_in_executor(_executor, _run)
+        try:
+            resp_text, level, label = await asyncio.wait_for(
+                loop.run_in_executor(_executor, _run),
+                timeout=_CHAT_TIMEOUT_S,
+            )
+        except asyncio.TimeoutError:
+            return {
+                "answer": (
+                    f"FinEx timed out after {_CHAT_TIMEOUT_S:.0f}s. "
+                    "The model may be loading or under load — try again in a moment."
+                ),
+                "level": 0,
+                "level_label": "Timeout",
+                "question": question,
+            }
+        except Exception as exc:
+            return {
+                "answer": f"FinEx error: {exc}",
+                "level": 0,
+                "level_label": "Error",
+                "question": question,
+            }
 
         return {
             "answer": resp_text,
