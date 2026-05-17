@@ -1,0 +1,24 @@
+# Jarvis voice layer — hybrid stack (local STT + cloud TTS)
+#
+# Install with:
+#     source venv/bin/activate
+#     pip install -r voice_requirements.txt
+
+# ── TTS — ElevenLabs streaming ─────────────────────────────────────────────
+elevenlabs>=1.0.0
+
+# ── STT — faster-whisper (CTranslate2, int8 CPU) ───────────────────────────
+faster-whisper>=1.0.0
+
+# ── Wake word — openWakeWord (pretrained "hey_jarvis" ONNX) ────────────────
+openwakeword>=0.6.0
+
+# ── VAD — Silero (ONNX) ────────────────────────────────────────────────────
+silero-vad>=5.1.2
+
+# ── Audio I/O ──────────────────────────────────────────────────────────────
+sounddevice>=0.4.6
+numpy>=1.24.0
+
+# ── Env loader ─────────────────────────────────────────────────────────────
+python-dotenv>=1.0.0

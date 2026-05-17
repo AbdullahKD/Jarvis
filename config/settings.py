@@ -11,12 +11,16 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 # ── Paths ──────────────────────────────────────────────────────────────────
+# In cloud deployments (Fly.io), JARVIS_DATA_DIR points at a mounted volume
+# (e.g. /data) so chroma + logs + notes survive deploys/restarts. Locally
+# we fall back to ./data alongside the source.
 BASE_DIR = Path(__file__).parent.parent
-LOGS_DIR = BASE_DIR / "logs"
-DATA_DIR = BASE_DIR / "data"
-NOTES_DIR = DATA_DIR / "notes"
-CHROMA_DIR = DATA_DIR / "chroma"
-SQLITE_PATH = DATA_DIR / "jarvis.db"
+DATA_DIR = Path(os.getenv("JARVIS_DATA_DIR", str(BASE_DIR / "data")))
+LOGS_DIR = Path(os.getenv("JARVIS_LOGS_DIR", str(DATA_DIR / "logs"))) \
+    if os.getenv("JARVIS_DATA_DIR") else BASE_DIR / "logs"
+NOTES_DIR = Path(os.getenv("JARVIS_NOTES_DIR", str(DATA_DIR / "notes")))
+CHROMA_DIR = Path(os.getenv("CHROMA_DIR", str(DATA_DIR / "chroma")))
+SQLITE_PATH = Path(os.getenv("JARVIS_SQLITE_PATH", str(DATA_DIR / "jarvis.db")))
 
 for _dir in [LOGS_DIR, DATA_DIR, NOTES_DIR, CHROMA_DIR]:
     _dir.mkdir(parents=True, exist_ok=True)

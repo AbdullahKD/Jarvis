@@ -152,7 +152,15 @@ class ReminderStore:
 # ── Scheduler ──────────────────────────────────────────────────────────────────
 
 def _fire_notification(title: str, body: str):
-    """Fire a macOS notification via osascript (no extra deps required)."""
+    """Fire a macOS notification via osascript (no extra deps required).
+    On non-Mac platforms (cloud deployment) this silently no-ops — the
+    reminder is still tracked in the data store, just not surfaced via
+    a desktop notification.
+    """
+    from tools.platform_guard import is_mac
+    if not is_mac():
+        print(f"⏰ Reminder fired (cloud, no notification): {title} — {body}")
+        return
     body_safe = body.replace('"', "'") or title
     title_safe = title.replace('"', "'")
     script = f'display notification "{body_safe}" with title "⏰ {title_safe}" sound name "Glass"'
