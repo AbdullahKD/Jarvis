@@ -324,3 +324,31 @@ class OllamaClient:
                     delay *= RETRY_BACKOFF
 
         raise last_exc
+
+
+# ── Backend selection ───────────────────────────────────────────────────────
+# If LLM_BACKEND=groq, rebind the `OllamaClient` name to the cloud client so
+# every caller (orchestrator, agents, tools) transparently uses Groq. This
+# lets a single env var switch the entire stack between local Ollama and
+# cloud Groq without touching any import sites.
+#
+# Keep the original implementation accessible as `_LocalOllamaClient` in case
+# something needs to force-use local Ollama.
+import os as _os
+
+_LocalOllamaClient = OllamaClient  # original Ollama class, always available
+
+if _os.getenv("LLM_BACKEND", "ollama").lower() == "groq":
+    try:
+        from config.groq_client import GroqClient as _GroqClient
+        OllamaClient = _GroqClient  # type: ignore[misc]
+    except ImportError as _exc:
+        # sentence-transformers / aiohttp missing → fall back to Ollama with
+        # a clear warning so the dev knows why the switch didn't take.
+        import sys as _sys
+        print(
+            f"⚠️  LLM_BACKEND=groq but import failed ({_exc}); "
+            "falling back to local Ollama. Run "
+            "`pip install sentence-transformers` and ensure GROQ_API_KEY is set.",
+            file=_sys.stderr,
+        )

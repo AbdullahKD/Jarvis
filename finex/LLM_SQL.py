@@ -65,55 +65,35 @@ _session = requests.Session()
 
 def ask_llm(prompt: str, system: str = "", num_ctx: int = 4096) -> str:
     """
-    Send a prompt to the local Ollama server via HTTP POST.
-    Uses a persistent requests.Session and tells Ollama to keep the model
-    loaded for 10 minutes between calls (eliminates cold-start on idle).
+    Send a prompt to the active LLM backend (Groq in cloud, Ollama locally).
+    Returns the assistant content or an "[LLM error: ...]" string on failure.
     """
+    from finex._llm_helper import chat_sync
     messages = []
     if system:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
-
-    try:
-        resp = _session.post(
-            _OLLAMA_URL,
-            json={
-                "model": _FINEX_MODEL,
-                "messages": messages,
-                "stream": False,
-                "keep_alive": "10m",
-                "options": {
-                    "temperature": 0.1,
-                    "num_predict": 512,
-                    "num_ctx": num_ctx,
-                },
-            },
-            timeout=_OLLAMA_TIMEO,
-        )
-        resp.raise_for_status()
-        return resp.json()["message"]["content"].strip()
-    except requests.exceptions.ConnectionError:
-        return "[Ollama is not running. Please start Ollama and try again.]"
-    except requests.exceptions.Timeout:
-        return f"[LLM timeout after {_OLLAMA_TIMEO:.0f}s — model may be loading. Try again.]"
-    except Exception as e:
-        return f"[LLM error: {e}]"
+    return chat_sync(
+        messages,
+        max_tokens=512,
+        temperature=0.1,
+        num_ctx=num_ctx,
+        timeout=int(_OLLAMA_TIMEO),
+    )
 
 
 def warm_model() -> bool:
     """Pre-load the model so the first user question doesn't pay cold-start.
-    Called from FinExAgent.__init__. Best-effort; never raises."""
+    On Groq there's nothing to warm — just probe /models. On Ollama we send
+    a 1-token chat to load the model into memory."""
+    from finex._llm_helper import health_check, _backend, chat_sync
+    if _backend() == "groq":
+        return health_check()
     try:
-        _session.post(
-            _OLLAMA_URL,
-            json={
-                "model": _FINEX_MODEL,
-                "messages": [{"role": "user", "content": "warm"}],
-                "stream": False,
-                "keep_alive": "10m",
-                "options": {"num_predict": 1, "num_ctx": 256},
-            },
-            timeout=5,
+        # 1-token Ollama warm-up
+        chat_sync(
+            [{"role": "user", "content": "warm"}],
+            max_tokens=1, temperature=0.0, num_ctx=256, timeout=5,
         )
         return True
     except Exception:

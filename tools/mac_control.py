@@ -11,9 +11,15 @@ import asyncio
 import subprocess
 from typing import Any, Dict, Optional
 
+from tools.platform_guard import is_mac, mac_only_response
+
 
 def _run_applescript(script: str) -> Dict[str, Any]:
     """Run an AppleScript and return result."""
+    # Cloud-deployment guard — every Mac-only method in this file ultimately
+    # funnels through here, so one check disables them all cleanly.
+    if not is_mac():
+        return mac_only_response("mac_control")
     try:
         result = subprocess.run(
             ["osascript", "-e", script],
@@ -35,6 +41,23 @@ class MacControlTool:
     macOS system control via AppleScript and subprocess.
     All methods are async (run in executor to avoid blocking).
     """
+
+    def __init__(self):
+        # If we're not on macOS (e.g. inside a Fly.io Linux container),
+        # replace every public async method with a stub that returns a
+        # friendly "feature disabled in cloud" payload. This avoids
+        # editing each individual method body.
+        if not is_mac():
+            for _name in dir(self):
+                if _name.startswith("_"):
+                    continue
+                _attr = getattr(self.__class__, _name, None)
+                if _attr is None or not asyncio.iscoroutinefunction(_attr):
+                    continue
+                # Capture _name in default arg to dodge late-binding bug.
+                async def _stub(*_a, __feature=_name, **_kw):
+                    return mac_only_response(f"mac_control.{__feature}")
+                setattr(self, _name, _stub)
 
     async def _async_script(self, script: str) -> Dict[str, Any]:
         loop = asyncio.get_event_loop()

@@ -1078,9 +1078,10 @@ _STMT_NAMES = {
 
 
 def _llm_available() -> bool:
+    """Probe the active LLM backend (Groq in cloud, Ollama locally)."""
     try:
-        r = requests.get("http://localhost:11434/api/tags", timeout=3)
-        return r.status_code == 200
+        from finex._llm_helper import health_check
+        return health_check()
     except Exception:
         return False
 
@@ -1123,18 +1124,13 @@ Return ONLY valid JSON (no markdown, no explanation):
 {{"A": "revenue", "B": null, ...}}"""
 
     try:
-        resp = requests.post(
-            _OLLAMA_URL,
-            json={
-                "model": _FINEX_MODEL,
-                "messages": [{"role": "user", "content": prompt}],
-                "stream": False,
-                "options": {"temperature": 0.0, "num_predict": 500},
-            },
-            timeout=40,
+        from finex._llm_helper import chat_sync
+        content = chat_sync(
+            [{"role": "user", "content": prompt}],
+            max_tokens=500, temperature=0.0, timeout=40,
         )
-        resp.raise_for_status()
-        content = resp.json()["message"]["content"].strip()
+        if not content or content.startswith("[LLM"):
+            return {}
 
         m = re.search(r'\{[^{}]+\}', content, re.DOTALL)
         if not m:
@@ -1433,18 +1429,13 @@ Financial statement text:
 JSON:"""
 
     try:
-        resp = requests.post(
-            _OLLAMA_URL,
-            json={
-                "model": _FINEX_MODEL,
-                "messages": [{"role": "user", "content": prompt}],
-                "stream": False,
-                "options": {"temperature": 0.0, "num_predict": 300},
-            },
-            timeout=45,
+        from finex._llm_helper import chat_sync
+        content = chat_sync(
+            [{"role": "user", "content": prompt}],
+            max_tokens=300, temperature=0.0, timeout=45,
         )
-        resp.raise_for_status()
-        content = resp.json()["message"]["content"].strip()
+        if not content or content.startswith("[LLM"):
+            return {}
         m = re.search(r'\{[^{}]*\}', content, re.DOTALL)
         if not m:
             return {}

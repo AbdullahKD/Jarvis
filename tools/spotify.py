@@ -320,14 +320,17 @@ class SpotifyTool:
         devices_data = await self.get_devices()
         devices = devices_data.get("devices", [])
         if not devices:
-            # Open Spotify silently and wait for it to register a playback device
-            try:
-                _subprocess.Popen(["open", "-a", "Spotify"])
-                await _asyncio.sleep(4)
-                devices_data = await self.get_devices()
-                devices = devices_data.get("devices", [])
-            except Exception:
-                pass
+            # `open -a Spotify` only works on macOS. In a Linux container we
+            # skip this fallback — the user just won't have a local device.
+            from tools.platform_guard import is_mac
+            if is_mac():
+                try:
+                    _subprocess.Popen(["open", "-a", "Spotify"])
+                    await _asyncio.sleep(4)
+                    devices_data = await self.get_devices()
+                    devices = devices_data.get("devices", [])
+                except Exception:
+                    pass
 
         if not devices:
             return {

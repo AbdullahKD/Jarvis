@@ -89,6 +89,52 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ── Optional HTTP Basic Auth (cloud deployment) ────────────────────────────
+# If JARVIS_AUTH_PASSWORD is set, every request must include a matching
+# Basic-Auth header. The browser handles this transparently with a login
+# popup, and curl users can pass `-u admin:<password>`.
+#
+# Set neither var locally to keep dev unauthenticated.
+import base64 as _b64
+from fastapi import Request as _Request, Response as _Response
+from starlette.middleware.base import BaseHTTPMiddleware as _BaseHTTPMiddleware
+
+_AUTH_USER = os.getenv("JARVIS_AUTH_USER", "admin")
+_AUTH_PASS = os.getenv("JARVIS_AUTH_PASSWORD", "")
+# Public paths that bypass auth — health checks must be reachable for Fly.
+_AUTH_PUBLIC_PATHS = {"/healthz"}
+
+
+class _BasicAuthMiddleware(_BaseHTTPMiddleware):
+    async def dispatch(self, request: _Request, call_next):
+        if not _AUTH_PASS:
+            return await call_next(request)
+        if request.url.path in _AUTH_PUBLIC_PATHS:
+            return await call_next(request)
+        header = request.headers.get("authorization", "")
+        if header.startswith("Basic "):
+            try:
+                decoded = _b64.b64decode(header[6:]).decode("utf-8", errors="ignore")
+                user, _, pw = decoded.partition(":")
+                if user == _AUTH_USER and pw == _AUTH_PASS:
+                    return await call_next(request)
+            except Exception:
+                pass
+        return _Response(
+            status_code=401,
+            headers={"WWW-Authenticate": 'Basic realm="Jarvis", charset="UTF-8"'},
+        )
+
+
+if _AUTH_PASS:
+    app.add_middleware(_BasicAuthMiddleware)
+
+
+@app.get("/healthz")
+async def _healthz():
+    """Unauthenticated health endpoint for Fly.io."""
+    return {"ok": True}
+
 # Shared orchestrator instance
 jarvis = JarvisOrchestrator()
 finex  = FinExAgent()
@@ -127,6 +173,124 @@ async def chat(req: ChatRequest):
         "message": response.message,
         "latency_ms": response.latency_ms,
     }
+
+
+# ── Voice endpoints ────────────────────────────────────────────────────────
+#
+# A single voice "turn" = listen → think → speak. The UI polls /voice/status
+# 4× per second to drive the orb animation. The session is lazy-loaded on
+# first use so server boot doesn't pull Whisper into memory unless needed.
+
+import threading as _voice_threading
+
+_voice_session = None
+_voice_session_lock = _voice_threading.Lock()
+
+
+async def _ensure_voice_session():
+    """Lazy-build the VoiceSession with a brain bound to FastAPI's event loop."""
+    global _voice_session
+    if _voice_session is not None:
+        return _voice_session
+
+    main_loop = asyncio.get_running_loop()
+
+    def _voice_brain(transcript: str) -> str:
+        """Run the orchestrator from a worker thread by dispatching to the main loop."""
+        fut = asyncio.run_coroutine_threadsafe(
+            jarvis.handle(transcript),
+            main_loop,
+        )
+        try:
+            response = fut.result(timeout=120)
+        except Exception as exc:  # noqa: BLE001
+            return f"Sorry sir, I hit an error: {exc}"
+        return getattr(response, "message", str(response))
+
+    with _voice_session_lock:
+        if _voice_session is None:
+            from voice.web import VoiceSession  # heavy import → defer until needed
+            _voice_session = VoiceSession(brain=_voice_brain)
+    return _voice_session
+
+
+@app.post("/voice/start")
+async def voice_start():
+    """Begin a single voice turn (listen → think → speak)."""
+    try:
+        session = await _ensure_voice_session()
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse(
+            status_code=503,
+            content={
+                "ok": False,
+                "error": str(exc),
+                "hint": "Check VOICE_SETUP.md — ELEVENLABS_API_KEY and pip install -r voice_requirements.txt",
+            },
+        )
+    started = session.start()
+    return {"ok": True, "started": started, "status": session.status()}
+
+
+@app.get("/voice/status")
+async def voice_status():
+    """Return current voice session state — UI polls this 4 Hz."""
+    if _voice_session is None:
+        return {"state": "idle", "transcript": "", "reply": "", "error": "", "active": False}
+    return _voice_session.status()
+
+
+@app.post("/voice/stop")
+async def voice_stop():
+    """Interrupt the current turn (cancels STT or TTS mid-stream)."""
+    if _voice_session is None:
+        return {"ok": True, "status": {"state": "idle"}}
+    _voice_session.cancel()
+    return {"ok": True, "status": _voice_session.status()}
+
+
+@app.get("/voice/health")
+async def voice_health():
+    """
+    One-shot diagnostic: which voice dependencies are wired up?
+
+    Visit /voice/health in your browser (or `curl localhost:8000/voice/health`)
+    to see exactly which piece of the voice stack is missing.
+    """
+    import importlib
+    report: dict = {"ok": True, "checks": {}}
+
+    # 1. ElevenLabs API key
+    key = os.getenv("ELEVENLABS_API_KEY", "").strip()
+    report["checks"]["elevenlabs_api_key"] = {
+        "ok": bool(key),
+        "detail": f"set ({len(key)} chars)" if key else "missing — add ELEVENLABS_API_KEY to .env",
+    }
+    if not key:
+        report["ok"] = False
+
+    # 2. Python deps
+    for mod, hint in [
+        ("elevenlabs",      "pip install elevenlabs"),
+        ("faster_whisper",  "pip install faster-whisper"),
+        ("openwakeword",    "pip install openwakeword"),
+        ("silero_vad",      "pip install silero-vad"),
+        ("sounddevice",     "pip install sounddevice (and on macOS: brew install portaudio)"),
+    ]:
+        try:
+            importlib.import_module(mod)
+            report["checks"][mod] = {"ok": True, "detail": "importable"}
+        except Exception as exc:  # noqa: BLE001
+            report["checks"][mod] = {"ok": False, "detail": f"{type(exc).__name__}: {exc} — {hint}"}
+            report["ok"] = False
+
+    # 3. Voice session state
+    if _voice_session is None:
+        report["checks"]["voice_session"] = {"ok": True, "detail": "not yet instantiated (lazy)"}
+    else:
+        report["checks"]["voice_session"] = {"ok": True, "detail": _voice_session.status()}
+
+    return report
 
 
 @app.get("/sidebar")
