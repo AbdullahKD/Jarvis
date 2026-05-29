@@ -28,13 +28,26 @@ class BriefingHandler:
         " + ", " & ", ", and ", " then ", " also get ", " with "
     ]
 
-    # Morning briefing triggers
+    # Morning briefing triggers. Be generous — missing one here means the
+    # request falls through to Tier-2 LLM chat, which then HALLUCINATES a
+    # briefing from training data (stale news, wrong PM, fictional scores).
+    # Order matters: longer phrases first so we don't false-positive on
+    # something like "morning email".
     MORNING_TRIGGERS = [
-        "morning briefing", "good morning", "morning jarvis",
-        "morning update", "daily briefing", "daily update",
-        "start my day", "begin my day", "wake up", "morning digest",
-        "what do i have today", "what's on today", "todays briefing",
-        "today's briefing", "briefing", "daily summary", "morning summary",
+        # Exact phrases (highest priority)
+        "morning briefing", "morning brief", "give me a brief",
+        "give me a morning brief", "give me a morning briefing",
+        "give me my morning brief", "give me my morning briefing",
+        "good morning", "morning jarvis", "morning update",
+        "daily briefing", "daily update", "daily summary", "morning summary",
+        "morning digest", "morning rundown",
+        "start my day", "begin my day", "wake up",
+        "what do i have today", "what's on today",
+        "todays briefing", "today's briefing", "today's brief", "todays brief",
+        "brief me", "morning brief me",
+        # Single-word fallback (only "briefing" — bare "brief" is too greedy
+        # and false-positives on phrases like "let me be brief").
+        "briefing",
     ]
 
     # Intent detection map — what sub-queries map to

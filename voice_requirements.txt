@@ -10,9 +10,6 @@ elevenlabs>=1.0.0
 # ── STT — faster-whisper (CTranslate2, int8 CPU) ───────────────────────────
 faster-whisper>=1.0.0
 
-# ── Wake word — openWakeWord (pretrained "hey_jarvis" ONNX) ────────────────
-openwakeword>=0.6.0
-
 # ── VAD — Silero (ONNX) ────────────────────────────────────────────────────
 silero-vad>=5.1.2
 

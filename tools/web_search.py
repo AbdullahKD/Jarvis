@@ -18,7 +18,12 @@ from urllib.parse import quote_plus, urlencode
 import aiohttp
 from bs4 import BeautifulSoup
 
-TIMEOUT = aiohttp.ClientTimeout(total=20)
+# Dropped from 20s → 6s. Worst-case previously was Wikipedia (20s) → DDG API
+# (20s) → DDG HTML (20s) → fallback wiki (20s) → fallback DDG (20s) = 100s
+# while the user stared at "thinking…". 6s is well above the 95th percentile
+# response time of both DDG and Wikipedia, and we race the two endpoints below
+# rather than running them serially.
+TIMEOUT = aiohttp.ClientTimeout(total=6)
 
 # Browser-like headers for DuckDuckGo HTML scraping
 BROWSER_HEADERS = {
@@ -118,36 +123,35 @@ class WebSearchTool:
 
     async def search(self, raw_query: str, max_results: int = 5) -> Dict[str, Any]:
         """
-        Search the web with automatic source selection and fallbacks.
+        Search the web by racing Wikipedia and DuckDuckGo in parallel.
 
-        Pipeline (smart routing by query type):
-        - Factual/person/technical → Wikipedia first (fast, reliable), then DDG API
-        - News/general → DDG API first, then Wikipedia
-        - HTML scraper used as last resort (slow, unreliable)
+        Both endpoints are fired concurrently; the first one that returns
+        a non-empty result wins. The other task is cancelled. If both miss,
+        we fall back to the slower DDG HTML scraper as a last resort.
+
+        Rationale: serial chain (wiki → ddg API → ddg HTML → fallbacks) with
+        a 20-second timeout per call could stall a "search the web" prompt
+        for nearly two minutes when sources were down. Racing eliminates the
+        chain-multiplication of timeouts; the user sees a result in at most
+        TIMEOUT seconds even when one source is dead.
         """
         query = self.parse_query(raw_query)
         query_type = self.detect_query_type(query)
 
-        # For factual, person, or technical queries — Wikipedia is faster and more reliable
+        # Choose which two sources to race. Both fire concurrently — only the
+        # order in the iterable matters for the "primary winner" log line.
         if query_type in ("factual", "person", "technical"):
-            wiki = await self._wiki(query, max_results)
-            if wiki.get("success") and wiki.get("results"):
-                return wiki
-            # Wikipedia missed — try DDG API
-            ddg_api = await self._ddg_api(query, max_results)
-            if ddg_api.get("success") and ddg_api.get("results"):
-                return ddg_api
+            primary_label, primary_coro = "wiki", self._wiki(query, max_results)
+            backup_label,  backup_coro  = "ddg_api", self._ddg_api(query, max_results)
         else:
-            # News/general queries — DDG API first
-            ddg_api = await self._ddg_api(query, max_results)
-            if ddg_api.get("success") and ddg_api.get("results"):
-                return ddg_api
-            # DDG missed — try Wikipedia
-            wiki = await self._wiki(query, max_results)
-            if wiki.get("success") and wiki.get("results"):
-                return wiki
+            primary_label, primary_coro = "ddg_api", self._ddg_api(query, max_results)
+            backup_label,  backup_coro  = "wiki", self._wiki(query, max_results)
 
-        # Last resort: DDG HTML scraper (slow but catches more)
+        winner = await self._race_two(primary_coro, backup_coro)
+        if winner is not None:
+            return winner
+
+        # Both raced sources missed — try the DDG HTML scraper once.
         ddg_html = await self._ddg_html(query, max_results)
         if ddg_html.get("success") and ddg_html.get("results"):
             query_words = set(w.lower() for w in query.split() if len(w) > 3)
@@ -162,19 +166,6 @@ class WebSearchTool:
             if ddg_html["results"]:
                 return ddg_html
 
-        # Last resort: try core topic only
-        words = [w for w in query.split() if len(w) > 3]
-        if len(words) > 1:
-            core = " ".join(words[:2])
-            wiki2 = await self._wiki(core, max_results)
-            if wiki2.get("success") and wiki2.get("results"):
-                return wiki2
-
-            # Also try DDG HTML with core topic
-            ddg2 = await self._ddg_html(core, max_results)
-            if ddg2.get("success") and ddg2.get("results"):
-                return ddg2
-
         return {
             "success": False,
             "query": query,
@@ -182,6 +173,41 @@ class WebSearchTool:
             "results": [],
             "error": "No results found across all sources",
         }
+
+    async def _race_two(self, coro_a, coro_b) -> Optional[Dict[str, Any]]:
+        """
+        Race two source coroutines. Return the first that yields a
+        non-empty `{"success": True, "results": [...]}` payload, cancelling
+        the loser. If both finish with empty/failed payloads, return None.
+        """
+        import asyncio as _aio
+        task_a = _aio.create_task(coro_a)
+        task_b = _aio.create_task(coro_b)
+        pending = {task_a, task_b}
+        winner: Optional[Dict[str, Any]] = None
+        try:
+            while pending:
+                done, pending = await _aio.wait(
+                    pending, return_when=_aio.FIRST_COMPLETED,
+                )
+                for task in done:
+                    try:
+                        result = task.result()
+                    except Exception:
+                        result = None
+                    if isinstance(result, dict) and result.get("success") and result.get("results"):
+                        winner = result
+                        # Cancel the slower sibling.
+                        for p in pending:
+                            p.cancel()
+                        pending = set()
+                        break
+            return winner
+        finally:
+            # Make sure no orphan tasks leak if we exit early.
+            for t in (task_a, task_b):
+                if not t.done():
+                    t.cancel()
 
     # ── DuckDuckGo Instant Answer API ─────────────────────────────────────
 

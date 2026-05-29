@@ -59,15 +59,7 @@ async def startup():
     scheduler.start()
 
     # ── Warm the Ollama model so the first user query isn't cold ──
-    # We expose the future on `app.state` so the request path can await
-    # it before the first chat call. This avoids a user query and the
-    # warmup competing for the cold model — instead, the first request
-    # blocks until warmup completes (~30–60s once, then never again
-    # while keep_alive holds the model resident).
     async def _warmup():
-        # Use chat_stream and discard the chunks. This goes through the
-        # idle-only timeout profile, so the cold model load can take as
-        # long as it needs without tripping a wall-clock cap.
         try:
             t0 = time.time()
             async for _ in jarvis.llm.chat_stream(
@@ -80,6 +72,82 @@ async def startup():
             print(f"⚠️  LLM warmup failed: {type(exc).__name__}: {exc}")
 
     app.state.warmup_task = asyncio.ensure_future(_warmup())
+
+    # ── Pre-warm the voice subsystem so the first /voice/start is snappy ──
+    # Also validates the ElevenLabs API key against ElevenLabs' /v1/user so
+    # bad permissions surface in the server log immediately, not 20 seconds
+    # later when the user clicks the button.
+    asyncio.ensure_future(_voice_preflight())
+
+
+async def _voice_preflight() -> None:
+    """Background voice subsystem warmup + API key check. Never raises."""
+    import threading
+
+    # 1. ElevenLabs API key validation
+    key = os.getenv("ELEVENLABS_API_KEY", "").strip()
+    if not key:
+        print("⚠️  Voice: ELEVENLABS_API_KEY is empty in .env — voice replies will fail.")
+    else:
+        fingerprint = f"...{key[-4:]}" if len(key) >= 4 else "(short)"
+        print(f"🎙️  Voice: ElevenLabs key fingerprint {fingerprint}")
+        try:
+            import aiohttp
+            timeout = aiohttp.ClientTimeout(total=8)
+            async with aiohttp.ClientSession(timeout=timeout) as s:
+                async with s.get(
+                    "https://api.elevenlabs.io/v1/user",
+                    headers={"xi-api-key": key},
+                ) as r:
+                    if r.status == 200:
+                        body = await r.json()
+                        tier = body.get("subscription", {}).get("tier", "?")
+                        chars_used = body.get("subscription", {}).get("character_count", "?")
+                        chars_limit = body.get("subscription", {}).get("character_limit", "?")
+                        print(f"✅  Voice: ElevenLabs key OK ({tier}, used {chars_used}/{chars_limit} chars)")
+                    elif r.status == 401:
+                        body = await r.text()
+                        print(f"❌  Voice: ElevenLabs key REJECTED (401). Body: {body[:200]}")
+                        print("    Fix: regenerate the key with `text_to_speech: Access` enabled.")
+                    else:
+                        body = await r.text()
+                        print(f"⚠️  Voice: ElevenLabs returned HTTP {r.status}: {body[:200]}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"⚠️  Voice: couldn't reach ElevenLabs to validate key: {exc}")
+
+    # 2. Audio output device — honour AUDIO_OUTPUT_DEVICE if set
+    try:
+        import sounddevice as sd
+        from voice.config import load_config as _vlc
+        _cfg_for_audio = _vlc()
+        if _cfg_for_audio.output_device is not None:
+            current_in, _ = sd.default.device
+            sd.default.device = (current_in, _cfg_for_audio.output_device)
+            print(f"🔊  Voice: output device overridden to #{_cfg_for_audio.output_device} via AUDIO_OUTPUT_DEVICE")
+        default_out_idx = sd.default.device[1]
+        try:
+            default_out_name = sd.query_devices(default_out_idx)["name"]
+        except Exception:  # noqa: BLE001
+            default_out_name = f"device #{default_out_idx}"
+        print(f"🔊  Voice: audio output device = {default_out_name!r}  (set AUDIO_OUTPUT_DEVICE=N in .env to override; list via GET /voice/devices)")
+    except Exception as exc:  # noqa: BLE001
+        print(f"⚠️  Voice: couldn't enumerate audio devices: {exc}")
+
+    # 3. Whisper model pre-load (eager, not lazy)
+    def _load_whisper():
+        try:
+            t0 = time.time()
+            from voice.config import load_config
+            from voice.stt import StreamingSTT
+            cfg = load_config()
+            stt = StreamingSTT(cfg)
+            stt.warmup()
+            print(f"✅  Voice: Whisper {cfg.whisper_model} loaded in {time.time()-t0:.1f}s")
+            app.state.warm_stt = stt
+        except Exception as exc:  # noqa: BLE001
+            print(f"⚠️  Voice: Whisper warmup failed: {type(exc).__name__}: {exc}")
+
+    threading.Thread(target=_load_whisper, daemon=True).start()
 
 app.add_middleware(
     CORSMiddleware,
@@ -135,6 +203,29 @@ async def _healthz():
     """Unauthenticated health endpoint for Fly.io."""
     return {"ok": True}
 
+
+def _voice_is_active() -> bool:
+    """True when the voice session is mid-turn (listening/thinking/speaking).
+    The sidebar + live-tick endpoints check this and tell the UI to back off
+    so we don't fan out 30+ HTTP requests at the exact moment the user is
+    talking to Jarvis. Falls open (returns False) when the session hasn't
+    been instantiated yet."""
+    sess = globals().get("_voice_session")
+    if sess is None:
+        return False
+    try:
+        state = sess.status().get("state", "idle")
+    except Exception:
+        return False
+    return state in ("listening", "thinking", "speaking")
+
+
+@app.get("/voice/active")
+async def voice_active():
+    """Lightweight flag the UI polls every few seconds to decide whether to
+    suspend heavy refresh loops (sidebar, live-tick) during a voice turn."""
+    return {"active": _voice_is_active()}
+
 # Shared orchestrator instance
 jarvis = JarvisOrchestrator()
 finex  = FinExAgent()
@@ -185,32 +276,140 @@ import threading as _voice_threading
 
 _voice_session = None
 _voice_session_lock = _voice_threading.Lock()
+_voice_stylizer = None  # PersonaStylizer (lazy-built alongside the session)
 
 
 async def _ensure_voice_session():
-    """Lazy-build the VoiceSession with a brain bound to FastAPI's event loop."""
-    global _voice_session
+    """Lazy-build the VoiceSession with a streaming brain bound to FastAPI's event loop."""
+    global _voice_session, _voice_stylizer
     if _voice_session is not None:
         return _voice_session
 
     main_loop = asyncio.get_running_loop()
 
-    def _voice_brain(transcript: str) -> str:
-        """Run the orchestrator from a worker thread by dispatching to the main loop."""
-        fut = asyncio.run_coroutine_threadsafe(
-            jarvis.handle(transcript),
-            main_loop,
-        )
+    # Persona stylizing is disabled — replies go orchestrator → TTS directly.
+    _voice_stylizer = None
+
+    def _voice_brain_streaming(transcript: str, *, tts, on_state, cancel_event) -> str:
+        """
+        Streaming voice brain.
+
+        Pipes `orchestrator.handle_stream(...)` chunks through a sentence
+        splitter into a queue, and a worker thread inside this function
+        drives `tts.speak_sentence_stream(queue)` to play each completed
+        sentence via ElevenLabs Flash v2.5 the moment it lands. The user
+        hears Jarvis start talking within ~1 s of the LLM beginning to
+        stream, instead of waiting for the whole reply first.
+
+        Falls back to a single tts.speak() call when the orchestrator
+        returns the whole answer in one chunk (Tier 1 / FinEx fast path).
+        """
+        import re as _re
+        import queue as _queue
+        import threading as _threading
+        import time
+
+        print(f"🧠  [brain] Streaming orchestrator: {transcript!r}")
+        t0 = time.perf_counter()
+
+        sentence_split = _re.compile(r'(?<=[.!?])\s+')
+        sentence_q: "_queue.Queue[Optional[str]]" = _queue.Queue()
+        full_text_holder = {"text": ""}
+        tts_started = _threading.Event()
+
+        # TTS worker: drains the sentence queue and plays each sentence in
+        # arrival order via ElevenLabs streaming. on_state flips the UI
+        # orb to "speaking" the moment the first audio plays.
+        def _on_first_audio():
+            tts_started.set()
+            on_state()
+
+        def _tts_worker():
+            try:
+                tts.speak_sentence_stream(sentence_q, on_first_audio=_on_first_audio)
+            except Exception as exc:  # noqa: BLE001
+                print(f"🔊  [brain] TTS worker error: {exc!r}")
+
+        worker = _threading.Thread(target=_tts_worker, name="voice-tts-worker", daemon=True)
+        worker.start()
+
+        # Async producer that runs on the main event loop and chops chunks
+        # into sentences as they stream out of the orchestrator.
+        async def _produce() -> str:
+            buf = ""
+            full_text = ""
+            try:
+                async for event in jarvis.handle_stream(
+                    transcript,
+                    voice_mode=True,
+                ):
+                    if cancel_event.is_set():
+                        break
+                    etype = event.get("type")
+                    if etype == "chunk":
+                        chunk = event.get("text", "")
+                        if not chunk:
+                            continue
+                        buf += chunk
+                        full_text += chunk
+                        # Split on sentence boundaries — push every complete
+                        # sentence to the queue, keep the trailing partial.
+                        parts = sentence_split.split(buf)
+                        if len(parts) > 1:
+                            for s in parts[:-1]:
+                                s = s.strip()
+                                if s:
+                                    sentence_q.put(s)
+                            buf = parts[-1]
+                    elif etype == "response":
+                        # Final canonical text from the orchestrator. Overrides
+                        # the streamed accumulator (the orchestrator may have
+                        # post-processed via _enforce_single_paragraph).
+                        msg = event.get("message")
+                        if msg:
+                            full_text = msg
+            finally:
+                # Flush any trailing buffer.
+                tail = buf.strip()
+                if tail:
+                    sentence_q.put(tail)
+                # If we never streamed any sentence (Tier 1 or FinEx fast-path
+                # returned a single chunk), make sure the final text gets
+                # spoken in full.
+                if not tts_started.is_set() and full_text.strip() and not tail:
+                    sentence_q.put(full_text.strip())
+                sentence_q.put(None)  # sentinel
+            return full_text
+
+        fut = asyncio.run_coroutine_threadsafe(_produce(), main_loop)
         try:
-            response = fut.result(timeout=120)
+            full_text = fut.result(timeout=120)
+            full_text_holder["text"] = full_text
         except Exception as exc:  # noqa: BLE001
-            return f"Sorry sir, I hit an error: {exc}"
-        return getattr(response, "message", str(response))
+            print(f"❌  [brain] Orchestrator FAILED: {type(exc).__name__}: {exc}")
+            sentence_q.put(None)  # let worker exit
+            return f"I hit an error, sir: {exc}"
+
+        # Wait for TTS to finish speaking the queued sentences.
+        worker.join(timeout=90)
+
+        orch_ms = (time.perf_counter() - t0) * 1000
+        print(f"🧠  [brain] Streaming turn done ({orch_ms:.0f} ms): {full_text_holder['text'][:120]!r}")
+        return full_text_holder["text"]
 
     with _voice_session_lock:
         if _voice_session is None:
             from voice.web import VoiceSession  # heavy import → defer until needed
-            _voice_session = VoiceSession(brain=_voice_brain)
+            _voice_session = VoiceSession(
+                brain=_voice_brain_streaming,
+                brain_streams_tts=True,
+            )
+            # If startup pre-warmed Whisper, hand the warm instance to the
+            # session so the first listen_once doesn't re-load the model.
+            warm_stt = getattr(app.state, "warm_stt", None)
+            if warm_stt is not None and hasattr(warm_stt, "_model") and warm_stt._model is not None:
+                _voice_session._stt._model = warm_stt._model  # type: ignore[attr-defined]
+                print("🎙️  Voice session adopted pre-warmed Whisper model")
     return _voice_session
 
 
@@ -249,6 +448,251 @@ async def voice_stop():
     return {"ok": True, "status": _voice_session.status()}
 
 
+@app.post("/voice/test")
+async def voice_test():
+    """
+    Isolated TTS test. Synthesises a fixed phrase through ElevenLabs and
+    plays it via sounddevice. Bypasses STT / orchestrator / persona.
+
+    Also prints the API key fingerprint (last 4 chars) so you can confirm
+    the server is using the key you think it is.
+    """
+    test_phrase = "Audio test successful, sir. ElevenLabs and the output device are both working."
+
+    from voice.config import load_config
+    cfg = load_config()
+    fingerprint = (
+        f"...{cfg.elevenlabs_api_key[-4:]}"
+        if cfg.elevenlabs_api_key else "(EMPTY!)"
+    )
+    print(f"🔊  [voice/test] Using ElevenLabs key fingerprint: {fingerprint}")
+    print(f"🔊  [voice/test] Voice ID: {cfg.elevenlabs_voice_id}  |  Model: {cfg.elevenlabs_model}")
+
+    if not cfg.elevenlabs_api_key:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "ok": False,
+                "error": "ELEVENLABS_API_KEY is empty in .env",
+                "hint": "Paste a key into .env and restart the server.",
+            },
+        )
+
+    try:
+        from voice.tts import StreamingTTS
+        tts = StreamingTTS(cfg)
+        print(f"🔊  [voice/test] Speaking: {test_phrase!r}")
+        tts.speak(test_phrase)
+        print("🔊  [voice/test] Done.")
+        return {"ok": True, "key_fingerprint": fingerprint, "spoken": test_phrase}
+    except Exception as exc:  # noqa: BLE001
+        import traceback
+        tb = traceback.format_exc()
+        msg = str(exc)
+        # Surface the ElevenLabs JSON detail if it's a 401 / permission error
+        hint = None
+        if "missing the permission text_to_speech" in msg:
+            hint = (
+                "Your API key doesn't have text_to_speech permission. "
+                "Recreate the key at elevenlabs.io with Text to Speech → Access enabled."
+            )
+        elif "401" in msg or "Unauthorized" in msg:
+            hint = "API key invalid or revoked. Generate a new key at elevenlabs.io."
+        elif "429" in msg:
+            hint = "Rate limited. Wait a minute or upgrade tier."
+        print(f"❌  [voice/test] Failed: {msg[:300]}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "ok": False,
+                "key_fingerprint": fingerprint,
+                "error": msg[:500],
+                "hint": hint,
+                "traceback_tail": tb.splitlines()[-6:],
+            },
+        )
+
+
+@app.get("/voice/devices")
+async def voice_devices():
+    """
+    List all audio devices visible to sounddevice (both inputs and outputs)
+    plus the current defaults. Use this to confirm macOS is capturing from
+    the mic you expect *and* playing through the speakers you expect.
+
+    To override either default, set AUDIO_INPUT_DEVICE=<index> or
+    AUDIO_OUTPUT_DEVICE=<index> in .env, then restart the server.
+    """
+    try:
+        import sounddevice as sd
+        devices = sd.query_devices()
+        default_input, default_output = sd.default.device
+        in_devices = []
+        out_devices = []
+        for i, d in enumerate(devices):
+            entry_in = {
+                "index": i,
+                "name": d.get("name"),
+                "channels": d.get("max_input_channels"),
+                "default_sample_rate": d.get("default_samplerate"),
+                "is_default": (i == default_input),
+            }
+            entry_out = {
+                "index": i,
+                "name": d.get("name"),
+                "channels": d.get("max_output_channels"),
+                "default_sample_rate": d.get("default_samplerate"),
+                "is_default": (i == default_output),
+            }
+            if d.get("max_input_channels", 0) > 0:
+                in_devices.append(entry_in)
+            if d.get("max_output_channels", 0) > 0:
+                out_devices.append(entry_out)
+        return {
+            "ok": True,
+            "default_input_index": int(default_input),
+            "default_output_index": int(default_output),
+            "inputs": in_devices,
+            "outputs": out_devices,
+            "hint": (
+                "If the wrong mic is default, switch in System Settings → "
+                "Sound → Input, or set AUDIO_INPUT_DEVICE=<index> in .env "
+                "and restart. Same for outputs via AUDIO_OUTPUT_DEVICE."
+            ),
+        }
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse(
+            status_code=500,
+            content={"ok": False, "error": f"{type(exc).__name__}: {exc}"},
+        )
+
+
+@app.post("/voice/mic-test")
+async def voice_mic_test(duration: float = 3.0):
+    """
+    Definitive microphone diagnostic. Captures `duration` seconds of audio
+    from the configured input device and reports:
+
+      - bytes_captured / frames_captured  (is anything coming through?)
+      - peak_amplitude_int16              (0..32767 — anything < 100 means
+                                           macOS is feeding digital silence,
+                                           almost certainly a permission issue)
+      - rms_amplitude_int16               (loudness over the window)
+      - vad_max_prob                      (did Silero ever think it heard speech?)
+      - device                            (which device was used)
+
+    Call this once before trying /voice/start to confirm the mic actually
+    works. If peak_amplitude_int16 stays near zero while you speak, the
+    problem is upstream of Jarvis: grant mic permission in
+    System Settings → Privacy & Security → Microphone (Terminal / VS Code).
+    """
+    duration = max(0.5, min(float(duration), 10.0))
+
+    def _run_capture() -> dict:
+        import numpy as np
+        import sounddevice as sd
+        from voice.audio import MicStream, CHUNK_SAMPLES
+        from voice.config import load_config
+        from voice.vad import SileroEndpointer
+
+        cfg = load_config()
+
+        # Resolve which device sounddevice will actually use, so the report
+        # is unambiguous (default_input may be -1 on headless setups).
+        try:
+            idx = cfg.input_device if cfg.input_device is not None else sd.default.device[0]
+            dev_info = sd.query_devices(idx)
+            device_name = dev_info.get("name", f"device #{idx}")
+            device_index = int(idx)
+        except Exception as exc:  # noqa: BLE001
+            device_name = f"(unknown — {exc})"
+            device_index = -1
+
+        mic = MicStream(cfg)
+        mic.start()
+
+        chunks: list = []
+        vad = SileroEndpointer(cfg)
+        vad.reset()
+        peak = 0
+        import time as _t
+        deadline = _t.monotonic() + duration
+        try:
+            while _t.monotonic() < deadline:
+                try:
+                    remaining = max(0.05, deadline - _t.monotonic())
+                    frame = mic.read(timeout=remaining)
+                except Exception:  # noqa: BLE001
+                    break
+                chunks.append(frame)
+                vad.feed(frame)
+                if frame.size:
+                    p = int(np.max(np.abs(frame)))
+                    if p > peak:
+                        peak = p
+        finally:
+            mic.stop()
+
+        if not chunks:
+            audio = np.zeros(0, dtype=np.int16)
+        else:
+            audio = np.concatenate(chunks)
+
+        rms = int(float(np.sqrt(np.mean(audio.astype(np.float32) ** 2))) if audio.size else 0)
+        bytes_captured = int(audio.nbytes)
+        frames_captured = int(audio.size)
+
+        # Verdict
+        if peak < 100:
+            verdict = (
+                "FAIL — mic appears to be feeding digital silence. Grant mic "
+                "permission to the terminal / VS Code in System Settings → "
+                "Privacy & Security → Microphone, then restart the server."
+            )
+            ok = False
+        elif peak < 500:
+            verdict = (
+                "WEAK — mic is capturing but the signal is very quiet. "
+                "Speak louder, move closer, or pick a better mic via "
+                "AUDIO_INPUT_DEVICE in .env."
+            )
+            ok = True
+        elif vad.max_prob < 0.3:
+            verdict = (
+                "OK — audio captured but Silero VAD didn't recognise speech. "
+                "If you spoke during the test, lower VAD_THRESHOLD in .env "
+                "(try 0.35 or 0.3)."
+            )
+            ok = True
+        else:
+            verdict = "OK — mic captures audio and Silero detected speech."
+            ok = True
+
+        return {
+            "ok": ok,
+            "verdict": verdict,
+            "device": {"index": device_index, "name": device_name},
+            "duration_s": duration,
+            "frames_captured": frames_captured,
+            "bytes_captured": bytes_captured,
+            "peak_amplitude_int16": int(peak),
+            "rms_amplitude_int16": rms,
+            "vad_max_prob": round(float(vad.max_prob), 3),
+            "sample_rate": cfg.sample_rate,
+        }
+
+    # The mic capture is blocking — run it off the event loop so /voice/status
+    # polling stays responsive during the 3 s test.
+    try:
+        result = await asyncio.to_thread(_run_capture)
+        return result
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse(
+            status_code=500,
+            content={"ok": False, "error": f"{type(exc).__name__}: {exc}"},
+        )
+
+
 @app.get("/voice/health")
 async def voice_health():
     """
@@ -269,11 +713,10 @@ async def voice_health():
     if not key:
         report["ok"] = False
 
-    # 2. Python deps
+    # 2. Python deps (wake-word removed — push-to-talk only)
     for mod, hint in [
         ("elevenlabs",      "pip install elevenlabs"),
         ("faster_whisper",  "pip install faster-whisper"),
-        ("openwakeword",    "pip install openwakeword"),
         ("silero_vad",      "pip install silero-vad"),
         ("sounddevice",     "pip install sounddevice (and on macOS: brew install portaudio)"),
     ]:
@@ -290,6 +733,16 @@ async def voice_health():
     else:
         report["checks"]["voice_session"] = {"ok": True, "detail": _voice_session.status()}
 
+    # 4. Persona stylizer state
+    persona_enabled = os.getenv("VOICE_PERSONA_ENABLED", "true").lower() in ("1","true","yes","on")
+    report["checks"]["voice_persona"] = {
+        "ok": True,
+        "detail": {
+            "enabled": persona_enabled,
+            "stylizer_instantiated": _voice_stylizer is not None,
+        },
+    }
+
     return report
 
 
@@ -298,7 +751,14 @@ async def sidebar():
     """
     Return all sidebar widget data in one call.
     Called on page load and every 60 seconds.
+
+    Suspended while a voice turn is in flight so we don't fan out 22
+    parallel HTTP requests at the same moment the user is talking to
+    Jarvis (which used to contend for network + the Ollama socket).
     """
+    if _voice_is_active():
+        return SafeJSONResponse({"_suspended": True, "reason": "voice_active"})
+
     # Fetch everything in parallel
     async def safe(coro):
         try:
@@ -477,7 +937,12 @@ async def live_tick():
     so the UI can keep prices and scores up to date every 20-30s without
     re-fetching news, weather, gmail, calendar, prayer times etc. that
     change much less often (those stay on the 60s /sidebar tick).
+
+    Suspended while a voice turn is in flight (same reason as /sidebar).
     """
+    if _voice_is_active():
+        return SafeJSONResponse({"_suspended": True, "reason": "voice_active"})
+
     async def safe(coro):
         try:
             return await coro

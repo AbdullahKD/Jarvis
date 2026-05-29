@@ -39,6 +39,7 @@ Available agents and their actions:
 - document:   extract_text, summarise_document
 - summariser: summarise_text
 - memory:     retrieve_context, store_fact
+- finex:      chat   (params: {"question": "<finance question>", "company": "Bestway Cement"})
 
 Output MUST be valid JSON:
 {

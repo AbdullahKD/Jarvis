@@ -47,6 +47,7 @@ class AgentRole(str, Enum):
     SPOTIFY    = "spotify"
     FILE       = "file"
     DOCUMENT   = "document"
+    FINEX      = "finex"   # Financial-statement Q&A sub-agent (Bestway, HBL, …)
 
 
 # ── Core data structures ───────────────────────────────────────────────────

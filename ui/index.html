@@ -209,6 +209,9 @@
   .thread.active { display: flex; }
   .thread::-webkit-scrollbar { width: 6px; } .thread::-webkit-scrollbar-thumb { background: rgba(180,140,255,0.25); border-radius: 3px; }
   .msg { max-width: 88%; padding: 10px 14px; border-radius: 16px; line-height: 1.45; font-size: 14px; white-space: pre-wrap; word-wrap: break-word; }
+  .msg.bot strong { display: inline-block; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; font-size: 11px; color: var(--accent, #c084fc); margin-top: 4px; }
+  .msg.bot strong:first-child { margin-top: 0; }
+  .msg.bot code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; background: rgba(255,255,255,0.06); padding: 1px 5px; border-radius: 4px; }
   .msg.user { align-self: flex-end; background: linear-gradient(135deg, rgba(192,132,252,0.28), rgba(255,92,242,0.20)); border: 1px solid rgba(192,132,252,0.35); }
   .msg.bot { align-self: flex-start; background: var(--glass-3); border: 1px solid var(--stroke); color: var(--text-0); }
   .msg.bot.typing { color: var(--text-2); font-style: italic; }
@@ -1570,10 +1573,37 @@ async function addTask(title) {
 }
 
 // ── chat ──────────────────────────────────────────────────────────────────────
+// Safe minimal-markdown renderer for Jarvis replies.
+// Supports:
+//   **bold**          → <strong>bold</strong>
+//   `inline code`     → <code>inline code</code>
+//   newlines          → preserved (CSS already uses white-space: pre-wrap)
+// Everything else is HTML-escaped so the bot can't inject markup.
+function renderJarvisMarkdown(text) {
+  if (!text) return '';
+  const esc = String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+  return esc
+    // **bold** — non-greedy, no asterisks inside
+    .replace(/\*\*([^*\n][^*\n]*?)\*\*/g, '<strong>$1</strong>')
+    // `inline code` — single line only
+    .replace(/`([^`\n]+)`/g, '<code>$1</code>');
+}
+
 function appendMsg(text, who, opts={}) {
   const el = document.createElement('div');
   el.className = `msg ${who}${opts.typing ? ' typing' : ''}`;
-  el.textContent = text;
+  if (who === 'bot' && !opts.typing) {
+    // Bot replies may contain **bold** section headers (morning brief,
+    // diagnostic, etc.). Render the limited markdown set.
+    el.innerHTML = renderJarvisMarkdown(text);
+  } else {
+    el.textContent = text;
+  }
   $('#thread').appendChild(el);
   $('#thread').scrollTop = $('#thread').scrollHeight;
   return el;
@@ -1685,7 +1715,9 @@ function _sendOverWS(text) {
         const finalText = payload.message || buffer || '(no response)';
         if (typingEl) {
           typingEl.classList.remove('typing');
-          typingEl.textContent = finalText;
+          // Final message — render the limited markdown subset so morning
+          // brief / diagnostic / FinEx section headers come through bold.
+          typingEl.innerHTML = renderJarvisMarkdown(finalText);
           if (payload.latency_ms != null) {
             const meta = document.createElement('div');
             meta.className = 'meta';
@@ -1812,6 +1844,10 @@ function setupUpload() {
 async function refreshSidebar() {
   try {
     const d = await api('/sidebar');
+    // Server tells us the sidebar is suspended because a voice turn is
+    // mid-flight — don't repaint with empty data, keep what's already on
+    // screen. The next tick (60s) or the post-voice push will refresh.
+    if (d && d._suspended) { setOnline(); return; }
     state.sidebar = d;
     setOnline();
     if (d.weather) renderWeather(d.weather);
@@ -1931,6 +1967,9 @@ async function refreshLiveTick() {
   try {
     const d = await api('/live-tick');
     if (!d) return;
+    // Server is suspending live-tick because a voice turn is in flight.
+    // Keep the existing prices/scores on screen; next tick will refresh.
+    if (d._suspended) return;
     if (!state.sidebar) state.sidebar = {};
     if (d.markets)         state.sidebar.markets         = d.markets;
     if (d.sports_pl)       state.sidebar.sports_pl       = d.sports_pl;

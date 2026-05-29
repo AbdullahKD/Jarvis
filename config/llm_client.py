@@ -134,6 +134,11 @@ class OllamaClient:
             "model": model or self.model,
             "messages": messages,
             "stream": True,
+            # Keep the model resident for 30 minutes between calls. Default Ollama
+            # is 5 min, which is long enough for a single session but reliably bites
+            # demos when the user pauses to introduce a feature. FinEx already does
+            # this; we now do it everywhere so Jarvis never pays cold-start mid-turn.
+            "keep_alive": "30m",
             "options": options,
         }
 
@@ -166,6 +171,7 @@ class OllamaClient:
             "model": model or self.model,
             "messages": messages,
             "stream": True,
+            "keep_alive": "30m",  # see note in `chat()` — match its keep_alive
             "options": {
                 "temperature": self.temperature,
                 "num_predict": max_tokens,
@@ -221,7 +227,11 @@ class OllamaClient:
         Generate an embedding vector for text using Ollama.
         Falls back to a simple TF-IDF-style hash if embed model unavailable.
         """
-        payload = {"model": self.embed_model, "prompt": text}
+        payload = {
+            "model": self.embed_model,
+            "prompt": text,
+            "keep_alive": "30m",
+        }
         try:
             result = await self._post_with_retry("/api/embeddings", payload)
             data = json.loads(result)

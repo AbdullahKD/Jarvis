@@ -47,7 +47,18 @@ from tools.web_search import WebSearchTool
 from tools.file_manager import FileManagerTool, PendingFileOp
 from tools.reminders import ReminderStore
 
-MAX_REPLAN_ATTEMPTS = 2
+# Demo-tuned: planner replan disabled. Each replan adds a planner+critic
+# round-trip (~2-3 s on llama3.2:latest). The deterministic shortcuts and
+# tightened critic trigger below catch the cases where a replan would actually
+# have helped, so a 0 here costs us nothing in practice and removes a
+# significant chunk of the Tier-3 worst-case latency.
+MAX_REPLAN_ATTEMPTS = 0
+
+# Voice replies are TTS'd via ElevenLabs. Each extra token = ~0.3 s of speaking.
+# This cap keeps Tier-2 voice replies to ~1-2 short sentences (~5-7 s of audio),
+# which is the right shape for a back-and-forth voice demo. Text-mode replies
+# stay on the original 180 cap so the web UI gets the fuller answer.
+VOICE_MAX_TOKENS = 100
 
 
 # ── One-paragraph enforcement ──────────────────────────────────────────────────
@@ -122,10 +133,17 @@ class JarvisOrchestrator:
         self.critic    = CriticAgent(self.llm)
         self.evaluator = EvaluatorAgent()
         self.summariser = SummariserAgent(self.llm)
-        self.calendar  = CalendarAgent()
-        self.gmail     = GmailAgent()
+        # Google APIs lazy-built — see properties below. The OAuth refresh in
+        # CalendarAgent / GmailAgent constructors used to block server startup
+        # whenever the saved token had expired, so we defer instantiation
+        # until something actually needs them.
+        self._calendar: Optional[CalendarAgent] = None
+        self._gmail: Optional[GmailAgent] = None
         self.contacts  = ContactBook()
         self.composer  = EmailComposer(self.llm)
+        # FinEx sub-agent — lazy. Importing it pulls psycopg2, ChromaDB, etc.
+        # so we hold off until the first finance query lands.
+        self._finex = None
         # Pending confirmation states
         self._pending_email: EmailDraft | None = None
         self._pending_meeting: dict | None = None
@@ -146,8 +164,49 @@ class JarvisOrchestrator:
         self.reminders  = ReminderStore()
 
         print(f"\n🤖 Jarvis Orchestrator ready — model: {model}")
-        print(f"   Agents: Router, Memory, Planner, Critic, Evaluator, Summariser, Calendar, Gmail")
+        print(f"   Agents: Router, Memory, Planner, Critic, Evaluator, Summariser, Calendar(lazy), Gmail(lazy), FinEx(lazy)")
         print(f"   Tools:  Weather, WebSearch, News, Mac, Spotify, Document, FileManager\n")
+
+    # ── Lazy Google + FinEx accessors ──────────────────────────────────────
+    # Building CalendarAgent / GmailAgent fires a Google OAuth token refresh
+    # over the network. If the saved token has expired (which happens every
+    # 7 days while the OAuth app is in "Testing" mode), that refresh used to
+    # block the orchestrator constructor — and therefore server startup.
+    # Lazy-loading defers that risk to the first user request that actually
+    # needs Calendar or Gmail.
+    @property
+    def calendar(self) -> "CalendarAgent":
+        if self._calendar is None:
+            self._calendar = CalendarAgent()
+        return self._calendar
+
+    @calendar.setter
+    def calendar(self, value: "CalendarAgent") -> None:
+        # /google/reauth in server.py re-assigns to refresh credentials.
+        self._calendar = value
+
+    @property
+    def gmail(self) -> "GmailAgent":
+        if self._gmail is None:
+            self._gmail = GmailAgent()
+        return self._gmail
+
+    @gmail.setter
+    def gmail(self, value: "GmailAgent") -> None:
+        self._gmail = value
+
+    @property
+    def finex(self):
+        """Lazy-built FinEx sub-agent. Imported on first use so missing
+        psycopg2 / chroma deps don't break Jarvis startup for non-finance demos."""
+        if self._finex is None:
+            from agents.finex_agent import FinExAgent
+            self._finex = FinExAgent()
+        return self._finex
+
+    @finex.setter
+    def finex(self, value) -> None:
+        self._finex = value
 
     # ── Shared pending-state intercept ─────────────────────────────────────
     #
@@ -406,6 +465,7 @@ class JarvisOrchestrator:
         model_override: Optional[str] = None,
         _routing=None,  # pre-computed RouterDecision — skips router step when provided
         conversation_history: Optional[List[Dict]] = None,
+        voice_mode: bool = False,
     ) -> JarvisResponse:
         """
         Handle a user request end-to-end.
@@ -506,6 +566,22 @@ class JarvisOrchestrator:
                     latency_ms=(time.time() - start_time) * 1000,
                 )
 
+            # ── Morning Brief intercept (BEFORE the router) ────────────────
+            # Must run before the router because the LLM router classifies
+            # "morning brief" as Tier-2 general_chat, which then hallucinates
+            # a fake brief. Catching it here bypasses the router entirely.
+            if _routing is None and self.briefing.is_morning_briefing(user_request):
+                t0 = time.time()
+                msg = await self._morning_briefing(voice_mode=voice_mode)
+                total_ms = (time.time() - start_time) * 1000
+                _t("morning_brief", t0)
+                print(f"[JARVIS] ⚡ Morning brief ({'voice' if voice_mode else 'text'}) — {total_ms/1000:.2f}s")
+                return JarvisResponse(
+                    success=True,
+                    message=msg,
+                    latency_ms=total_ms,
+                )
+
             # ── Step 1: Route ──────────────────────────────────────────────
             if _routing is not None:
                 routing = _routing
@@ -545,6 +621,26 @@ class JarvisOrchestrator:
                 t0 = time.time()
                 context_str = ""
                 agent = routing.primary_agent
+
+                # ── FinEx fast-path ────────────────────────────────────────
+                # FinEx has its own deterministic Python router + level-specific
+                # handlers; we don't want the generic Jarvis LLM to also fire.
+                # Send the question straight through.
+                if agent == AgentRole.FINEX:
+                    fx = await self.finex.chat(question=user_request)
+                    answer = fx.get("answer", "") or "No answer from FinEx."
+                    _t("finex_chat", t0)
+                    total_ms = (time.time() - start_time) * 1000
+                    print(f"[JARVIS] ⚡ Tier 2 FinEx ({fx.get('level_label','?')}) — {total_ms/1000:.2f}s")
+                    asyncio.ensure_future(self.memory.store_task_result(
+                        user_request, "finex_query", True, answer[:100]
+                    ))
+                    return JarvisResponse(
+                        success=True,
+                        message=_enforce_single_paragraph(answer),
+                        latency_ms=total_ms,
+                    )
+
                 if agent == AgentRole.WEBSEARCH:
                     data = await self.websearch.search(user_request)
                     context_str = self.websearch.format_results(data)
@@ -553,6 +649,15 @@ class JarvisOrchestrator:
                     data = await self.news.get_headlines(query=user_request, max_items=5)
                     context_str = self.news.format_headlines(data)
                     _t("news_tool", t0)
+
+                # Voice mode tightens the spoken format: 1-2 short sentences max,
+                # no markdown of any kind (TTS reads it verbatim).
+                _voice_suffix = (
+                    "\n\nVOICE MODE — your reply will be read aloud:\n"
+                    "- Maximum 2 short sentences (≤ 30 words total).\n"
+                    "- Speak conversationally — no markdown, no bullet points, no lists.\n"
+                    "- No URLs, no citations, no follow-up offers."
+                ) if voice_mode else ""
 
                 if context_str and agent == AgentRole.WEBSEARCH:
                     user_content = (
@@ -565,21 +670,30 @@ class JarvisOrchestrator:
                         f"- Never introduce yourself or mention your name.\n"
                         f"- Never cite, mention, or list sources, URLs, or websites — just answer directly.\n"
                         f"- No follow-up offers ('Would you like to know more?' etc.)."
+                        f"{_voice_suffix}"
                     )
                 else:
                     user_content = (
-                        f"Context:\n{context_str}\n\nUser: {user_request}"
-                        if context_str else user_request
+                        f"Context:\n{context_str}\n\nUser: {user_request}{_voice_suffix}"
+                        if context_str else f"{user_request}{_voice_suffix}"
                     )
                 history = conversation_history or []
-                recent_history = history[-8:] if len(history) > 8 else history
+                # Voice turns trim history harder — every extra token costs both
+                # TTFT (re-eval) and (downstream) TTS speaking time.
+                _hist_cap = 4 if voice_mode else 8
+                recent_history = history[-_hist_cap:] if len(history) > _hist_cap else history
+
                 msgs = recent_history + [{"role": "user", "content": user_content}]
 
                 t0 = time.time()
                 # 180 token cap = ~130 words = ~5 medium sentences. Hard upper
                 # bound that prevents the model from running away even when it
                 # ignores the prompt's "one paragraph" instruction.
-                llm_response = await self.llm.chat(msgs, max_tokens=180)
+                # Voice mode clamps tighter (VOICE_MAX_TOKENS = 100) because
+                # ElevenLabs is going to read the whole thing aloud and we don't
+                # want the demo dominated by Jarvis speaking.
+                _tier2_tokens = VOICE_MAX_TOKENS if voice_mode else 180
+                llm_response = await self.llm.chat(msgs, max_tokens=_tier2_tokens)
                 _t("llm_single_call", t0)
 
                 # Deterministic single-paragraph enforcement — guarantees the
@@ -614,10 +728,14 @@ class JarvisOrchestrator:
             _t("planner", t0)
 
             # ── Step 4: Critic ─────────────────────────────────────────────
+            # Tightened for the demo: only invoke the critic for low-confidence
+            # plans with more than 3 subtasks, OR for the research agent
+            # specifically (which benefits from a sanity check). Most demo
+            # prompts have confidence > 0.9 and ≤ 2 subtasks so they skip
+            # the critic entirely, saving an LLM round-trip.
             _needs_critic = (
-                routing.confidence < 0.82 or
-                len(plan.subtasks) > 2 or
-                any(a in routing.primary_agent.value for a in ["planner", "research"])
+                (routing.confidence < 0.70 and len(plan.subtasks) > 3)
+                or routing.primary_agent.value == "research"
             )
             planning_score = 0.8
 
@@ -652,10 +770,14 @@ class JarvisOrchestrator:
             _t("execute_dag", t0)
 
             # ── Step 6: Critic result review ───────────────────────────────
-            if _needs_critic:
-                t0 = time.time()
-                result_verdict = await self.critic.review_result(plan, results)
-                _t("critic_result", t0)
+            # Disabled for the demo. The verdict was only ever logged — it
+            # didn't gate any re-execution path — and burned another
+            # ~1-2 s of LLM time. Re-enable for the dissertation
+            # evaluation runs only.
+            # if _needs_critic:
+            #     t0 = time.time()
+            #     result_verdict = await self.critic.review_result(plan, results)
+            #     _t("critic_result", t0)
 
             # ── Step 7: Evaluate ───────────────────────────────────────────
             t0 = time.time()
@@ -722,6 +844,7 @@ class JarvisOrchestrator:
         context: Optional[Dict[str, Any]] = None,
         model_override: Optional[str] = None,
         conversation_history: Optional[List[Dict]] = None,
+        voice_mode: bool = False,
     ):
         """
         Async generator version of handle().
@@ -808,6 +931,27 @@ class JarvisOrchestrator:
                 }
                 return
 
+            # ── Morning Brief intercept (BEFORE the router) ────────────────
+            # Same intercept as in handle() — must run before the LLM router
+            # classifies "morning brief" as Tier-2 general_chat.
+            if self.briefing.is_morning_briefing(user_request):
+                yield {"type": "thinking"}
+                t0 = time.time()
+                msg = await self._morning_briefing(voice_mode=voice_mode)
+                total_ms = (time.time() - start_time) * 1000
+                _t("morning_brief", t0)
+                print(f"[JARVIS] ⚡ Stream morning brief ({'voice' if voice_mode else 'text'}) — {total_ms/1000:.2f}s")
+                # Emit the whole brief as one chunk so the streaming voice
+                # brain can sentence-split it for TTS in voice mode.
+                yield {"type": "chunk", "text": msg}
+                yield {
+                    "type": "response",
+                    "message": msg,
+                    "success": True,
+                    "latency_ms": total_ms,
+                }
+                return
+
             # ── Router (always needed — 1b model, fast) ───────────────────
             t0 = time.time()
             routing = await self.router.route(user_request)
@@ -836,6 +980,31 @@ class JarvisOrchestrator:
 
                 context_str = ""
                 agent = routing.primary_agent
+
+                # ── FinEx fast-path (no Jarvis LLM, no streaming — FinEx
+                # has its own engine and returns a final answer directly).
+                if agent == AgentRole.FINEX:
+                    t0 = time.time()
+                    fx = await self.finex.chat(question=user_request)
+                    answer = fx.get("answer", "") or "No answer from FinEx."
+                    _t("finex_chat", t0)
+                    total_ms = (time.time() - start_time) * 1000
+                    print(f"[JARVIS] ⚡ Stream Tier 2 FinEx — {total_ms/1000:.2f}s")
+                    cleaned = _enforce_single_paragraph(answer)
+                    # Emit the whole answer in one chunk so the streaming voice
+                    # brain (server.py) treats it as the sentence buffer.
+                    yield {"type": "chunk", "text": cleaned}
+                    asyncio.ensure_future(self.memory.store_task_result(
+                        user_request, "finex_query", True, cleaned[:100]
+                    ))
+                    yield {
+                        "type": "response",
+                        "message": cleaned,
+                        "success": True,
+                        "latency_ms": total_ms,
+                    }
+                    return
+
                 if agent == AgentRole.WEBSEARCH:
                     t0 = time.time()
                     data = await self.websearch.search(user_request)
@@ -846,6 +1015,13 @@ class JarvisOrchestrator:
                     data = await self.news.get_headlines(query=user_request, max_items=5)
                     context_str = self.news.format_headlines(data)
                     _t("news_tool", t0)
+
+                _voice_suffix = (
+                    "\n\nVOICE MODE — your reply will be read aloud:\n"
+                    "- Maximum 2 short sentences (≤ 30 words total).\n"
+                    "- Speak conversationally — no markdown, no bullet points, no lists.\n"
+                    "- No URLs, no citations, no follow-up offers."
+                ) if voice_mode else ""
 
                 if context_str and agent == AgentRole.WEBSEARCH:
                     user_content = (
@@ -858,23 +1034,28 @@ class JarvisOrchestrator:
                         f"- Never introduce yourself or mention your name.\n"
                         f"- Never cite, mention, or list sources, URLs, or websites — just answer directly.\n"
                         f"- No follow-up offers ('Would you like to know more?' etc.)."
+                        f"{_voice_suffix}"
                     )
                 else:
                     user_content = (
-                        f"Context:\n{context_str}\n\nUser: {user_request}"
-                        if context_str else user_request
+                        f"Context:\n{context_str}\n\nUser: {user_request}{_voice_suffix}"
+                        if context_str else f"{user_request}{_voice_suffix}"
                     )
 
-                # Build message list: inject recent conversation history for context
+                # Build message list: inject recent conversation history for context.
+                # Voice mode trims harder so TTFT stays low.
                 history = conversation_history or []
-                recent_history = history[-8:] if len(history) > 8 else history  # last 4 exchanges
+                _hist_cap = 4 if voice_mode else 8
+                recent_history = history[-_hist_cap:] if len(history) > _hist_cap else history
                 msgs = recent_history + [{"role": "user", "content": user_content}]
 
                 full_text = ""
                 t0 = time.time()
                 # 180 token cap matches the non-streaming Tier 2 path — keeps
-                # the model honest about the one-paragraph rule.
-                async for chunk in self.llm.chat_stream(msgs, model=model, max_tokens=180):
+                # the model honest about the one-paragraph rule. Voice mode
+                # clamps tighter so TTS doesn't run away.
+                _tier2_tokens = VOICE_MAX_TOKENS if voice_mode else 180
+                async for chunk in self.llm.chat_stream(msgs, model=model, max_tokens=_tier2_tokens):
                     full_text += chunk
                     yield {"type": "chunk", "text": chunk}
                 _t("llm_stream", t0)
@@ -900,8 +1081,16 @@ class JarvisOrchestrator:
             # ── Tier 3: full pipeline, show thinking indicator ─────────────
             yield {"type": "thinking"}
 
-            # Pass pre-computed routing to avoid double-routing (saves ~2-3s)
-            response = await self.handle(user_request, context=ctx, model_override=model_override, _routing=routing, conversation_history=conversation_history)
+            # Pass pre-computed routing to avoid double-routing (saves ~2-3s).
+            # voice_mode flows through so Tier 3 also clamps to short replies.
+            response = await self.handle(
+                user_request,
+                context=ctx,
+                model_override=model_override,
+                _routing=routing,
+                conversation_history=conversation_history,
+                voice_mode=voice_mode,
+            )
             yield {
                 "type": "response",
                 "message": response.message,
@@ -1175,6 +1364,27 @@ class JarvisOrchestrator:
                     )
                     return result
 
+            # ── FinEx (financial-statement Q&A) ─────────────────────────────
+            elif agent == "finex":
+                question = (
+                    params.get("question")
+                    or params.get("query")
+                    or params.get("q")
+                    or ""
+                )
+                company = params.get("company", "Bestway Cement")
+                if not question:
+                    return {
+                        "success": False,
+                        "error": "finex subtask missing 'question' param",
+                    }
+                fx = await self.finex.chat(question=question, company=company)
+                return {
+                    "success": True,
+                    "result": fx,
+                    "message": fx.get("answer", ""),
+                }
+
             # ── Reminders ───────────────────────────────────────────────────
             elif agent == "reminder":
                 if action == "add_reminder":
@@ -1414,6 +1624,151 @@ class JarvisOrchestrator:
             else:
                 msg = "Could not read battery level."
             return JarvisResponse(success=result.get("success", False), message=msg, latency_ms=(_tbat2.time()-_sbat2)*1000)
+
+        # ── System diagnostic — real subprocess checks, no LLM ──────────────
+        # Without this, "run a system diagnostic / check / health check" falls
+        # through to Tier-2 LLM chat which fabricates plausible-looking numbers
+        # (e.g. invents "92% disk usage", "56°C") from training data instead of
+        # measuring the actual machine. We collect the same metrics the
+        # /hardware endpoint exposes — battery, disk, memory, CPU, thermal —
+        # and format them as a real diagnostic report.
+        _diag_phrases = (
+            "system diagnostic", "system check", "system health",
+            "run diagnostic", "run a diagnostic", "run a quick diagnostic",
+            "run a system", "diagnose my mac", "diagnose my system",
+            "health check", "system status", "hardware check",
+            "how is my mac", "how's my mac", "check my mac",
+        )
+        if any(p in req_lower for p in _diag_phrases):
+            import asyncio as _adiag
+            import subprocess as _sp, re as _re_diag, time as _tdiag
+            _sdiag = _tdiag.time()
+
+            async def _shell(cmd: str) -> str:
+                try:
+                    proc = await _adiag.create_subprocess_shell(
+                        cmd,
+                        stdout=_sp.PIPE,
+                        stderr=_sp.DEVNULL,
+                    )
+                    stdout, _ = await _adiag.wait_for(proc.communicate(), timeout=4)
+                    return (stdout or b"").decode(errors="ignore").strip()
+                except Exception:
+                    return ""
+
+            # All probes run in parallel — total wall-clock ~1-1.5s on M-series
+            (bat_pct, bat_state, disk_raw, mem_total_raw, vm_raw,
+             cpu_raw, uptime_raw, sw_ver) = await _adiag.gather(
+                _shell("pmset -g batt | grep -Eo '[0-9]+%' | head -1"),
+                _shell("pmset -g batt | grep -Eo 'AC Power|Battery Power' | head -1"),
+                _shell("df -h / | tail -1 | awk '{print $2, $3, $4, $5}'"),
+                _shell("sysctl -n hw.memsize"),
+                _shell("vm_stat | head -20"),
+                _shell("top -l 1 -n 0 | awk '/CPU usage/ {print $3, $5}'"),
+                _shell("uptime"),
+                _shell("sw_vers -productVersion"),
+            )
+
+            # Parse battery
+            battery_str = "—"
+            if bat_pct:
+                bs = bat_state or ""
+                battery_str = f"{bat_pct.strip()} ({'plugged in' if 'AC' in bs else 'on battery'})"
+
+            # Parse disk
+            disk_str = "—"
+            parts = disk_raw.split() if disk_raw else []
+            if len(parts) >= 4:
+                # total, used, available, pct
+                disk_str = f"{parts[1]} used of {parts[0]} ({parts[3]} full, {parts[2]} free)"
+
+            # Parse memory
+            mem_str = "—"
+            try:
+                total_b = int(mem_total_raw) if mem_total_raw else 0
+                total_gb = total_b / (1024 ** 3)
+                page_size = 4096
+                pm = _re_diag.search(r"page size of (\d+)", vm_raw)
+                if pm:
+                    page_size = int(pm.group(1))
+                def _vm(field):
+                    m = _re_diag.search(rf"{field}:\s+(\d+)\.", vm_raw)
+                    return int(m.group(1)) if m else 0
+                used_pages = _vm("Pages active") + _vm("Pages wired down") + _vm("Pages occupied by compressor")
+                used_gb = used_pages * page_size / (1024 ** 3)
+                if total_gb:
+                    pct = round(used_gb / total_gb * 100, 1)
+                    mem_str = f"{used_gb:.1f} GB used of {total_gb:.1f} GB ({pct}%)"
+            except Exception:
+                pass
+
+            # Parse CPU
+            cpu_str = "—"
+            try:
+                nums = _re_diag.findall(r"([\d.]+)%", cpu_raw or "")
+                if nums:
+                    total = round(sum(float(n) for n in nums), 1)
+                    cpu_str = f"{total}% active"
+            except Exception:
+                pass
+
+            # Parse uptime
+            uptime_str = "—"
+            if uptime_raw:
+                m = _re_diag.search(r"up\s+(.+?),\s+\d+\s+user", uptime_raw)
+                if m:
+                    uptime_str = m.group(1).strip()
+
+            os_str = f"macOS {sw_ver}" if sw_ver else "macOS"
+
+            # Mini health verdict — green/amber/red per metric
+            def _verdict_disk():
+                if len(parts) >= 4 and parts[3].endswith("%"):
+                    try:
+                        pct = int(parts[3].rstrip("%"))
+                        if pct >= 90: return "critical"
+                        if pct >= 80: return "watch"
+                    except ValueError:
+                        pass
+                return "ok"
+
+            def _verdict_mem():
+                try:
+                    pct_match = _re_diag.search(r"\(([\d.]+)%\)", mem_str)
+                    if pct_match:
+                        pct = float(pct_match.group(1))
+                        if pct >= 90: return "critical"
+                        if pct >= 75: return "watch"
+                except Exception:
+                    pass
+                return "ok"
+
+            disk_verdict = _verdict_disk()
+            mem_verdict = _verdict_mem()
+            overall = "All systems nominal."
+            if "critical" in (disk_verdict, mem_verdict):
+                overall = "One or more metrics need attention."
+            elif "watch" in (disk_verdict, mem_verdict):
+                overall = "Everything's within range, a couple of values are worth watching."
+
+            lines = [
+                f"**System diagnostic** — {os_str}",
+                "",
+                f"**Battery**   {battery_str}",
+                f"**Disk**      {disk_str}",
+                f"**Memory**    {mem_str}",
+                f"**CPU**       {cpu_str}",
+                f"**Uptime**    {uptime_str}",
+                "",
+                f"**Verdict**   {overall}",
+            ]
+            msg = "\n".join(lines)
+            print(f"Jarvis shortcut: diagnostic — {(_tdiag.time()-_sdiag)*1000:.0f}ms")
+            return JarvisResponse(
+                success=True,
+                message=msg,
+                latency_ms=(_tdiag.time() - _sdiag) * 1000,
+            )
 
         weather_keywords = ["weather", "temperature", "forecast", "humid", "rain", "sunny", "cloudy", "wind speed"]
         is_weather_request = (
@@ -1710,12 +2065,13 @@ class JarvisOrchestrator:
             if multi_msg:
                 return JarvisResponse(success=True, message=multi_msg, latency_ms=(_tmq.time()-_smq)*1000)
 
-        # ── Morning Briefing ──────────────────────────────────────────────────
-        if self.briefing.is_morning_briefing(user_request):
-            import time as _tbf
-            _sbf = _tbf.time()
-            msg = await self._morning_briefing()
-            return JarvisResponse(success=True, message=msg, latency_ms=(_tbf.time()-_sbf)*1000)
+        # ── Morning Briefing ─────────────────────────────────────────────────
+        # NOTE: this intercept is now done at the TOP of handle() and
+        # handle_stream() — before the router runs — because the LLM router
+        # was classifying "morning brief" as Tier-2 chat and skipping
+        # _try_shortcut entirely. Kept as a comment so the routing audit
+        # trail is clear; the logic itself lives in
+        # _try_morning_brief_intercept() and _morning_briefing().
 
         # ── File Manager — confirmation flow ──────────────────────────────────
         import time as _tfile
@@ -2830,225 +3186,303 @@ class JarvisOrchestrator:
 
         return None  # No shortcut — proceed with full pipeline
 
-    async def _morning_briefing(self) -> str:
+    async def _morning_briefing(self, voice_mode: bool = False) -> str:
         """
-        Fully personalised morning briefing for Abdullah.
-        Sections: greeting, weather, prayer times, calendar, inbox,
-                  news (detailed), tech, sports (fav teams), markets, quote.
-        All fetched in parallel for speed.
+        Morning brief — fresh implementation (rewritten 29 May 2026).
+
+        TEXT MODE  → bold-headed, ~20-30 line digest. Sections, in order:
+                     Weather, Prayer Times, Your Day (calendar), Inbox,
+                     Top News, Sports, Markets.
+        VOICE MODE → 2-3 sentence spoken summary, no markdown, no lists.
+
+        All data is fetched live via asyncio.gather (~3-5s wall-clock).
+        Every section is independently optional — a failed API call just
+        drops that section, the rest still ships.
+
+        Routing: intercepted at the TOP of handle()/handle_stream() before
+        the router runs, so the LLM never sees the request and can't
+        hallucinate a fake briefing.
         """
         import random
         now = datetime.now()
         hour = now.hour
         date_str = now.strftime("%A, %d %B %Y")
 
-        # ── Dynamic name + greeting ────────────────────────────────────────
-        names_morning   = ["champ", "legend", "boss", "big man", "chief"]
-        names_afternoon = ["mate", "boss", "legend", "G"]
-        names_evening   = ["night owl", "champ", "boss"]
-
+        # ── Greeting ───────────────────────────────────────────────────────
+        # Time-of-day aware. Voice mode keeps it simple; text mode allows a
+        # touch of personality ("champ"/"legend"/"boss").
         if hour < 12:
             time_phrase = "Good morning"
-            name = random.choice(names_morning)
         elif hour < 17:
             time_phrase = "Good afternoon"
-            name = random.choice(names_afternoon)
         else:
             time_phrase = "Good evening"
-            name = random.choice(names_evening)
-
-        # Check memory for mood
-        mood_memories = await self.memory.retrieve("mood feeling tired stressed", k=2)
-        mood_note = ""
-        if mood_memories:
-            last_mood = mood_memories[0].content
-            if any(w in last_mood.lower() for w in ["tired", "stressed", "rough", "bad"]):
-                mood_note = " Hope you're feeling better today."
-            elif any(w in last_mood.lower() for w in ["good", "great", "happy", "productive"]):
-                mood_note = " Glad to hear you were in good form."
 
         # ── Parallel fetch everything ──────────────────────────────────────
         from config.settings import FAVOURITE_TEAMS, FAVOURITE_FOOTBALL_LEAGUE, FAVOURITE_BASKETBALL_LEAGUE
 
-        (weather_data, prayer_data, news_data, tech_data,
-         cal_data, email_data, sports_pl, sports_ucl,
-         sports_nba, market_data) = await asyncio.gather(
+        # All six tools run concurrently. return_exceptions=True means a
+        # single failed fetch (e.g. Gmail OAuth expired) doesn't crash the
+        # brief — that section just renders empty.
+        (weather_data, prayer_data, cal_data, email_data,
+         news_data, sports_pl, sports_rm, sports_nba,
+         sports_cricket, market_data) = await asyncio.gather(
             self.weather.get_current(),
             self.prayer.get_times(),
-            self.news.get_headlines(max_stories=5),
-            self.news.get_headlines(category="technology", max_stories=2),
             self.calendar.search_events(),
             self.gmail.get_inbox(max_results=5),
+            self.news.get_headlines(max_stories=5),
             self.sports.get_scores(FAVOURITE_FOOTBALL_LEAGUE, limit=10),
-            self.sports.get_scores("champions_league", limit=8),
+            self.sports.search_team("Real Madrid", "la_liga"),
             self.sports.get_scores(FAVOURITE_BASKETBALL_LEAGUE, limit=8),
+            self.sports.get_scores("cricket_psl", limit=4),
             self.markets.get_all(),
-            return_exceptions=True
+            return_exceptions=True,
         )
 
-        lines_out = []
+        # ════════════════════════════════════════════════════════════════
+        # VOICE MODE — short spoken summary (2-3 sentences, no markdown)
+        # ════════════════════════════════════════════════════════════════
+        if voice_mode:
+            bits: list[str] = []
 
-        # ── Greeting ───────────────────────────────────────────────────────
-        lines_out.append(f"{time_phrase}, {name}!{mood_note} Here is your briefing for {date_str}.")
-        lines_out.append("")
+            # Sentence 1: greeting + weather
+            if isinstance(weather_data, dict) and weather_data.get("success"):
+                w = weather_data
+                bits.append(
+                    f"{time_phrase}. It's {w.get('temperature_c','')} degrees "
+                    f"and {str(w.get('condition','')).lower()} in {w.get('location','High Wycombe')}."
+                )
+            else:
+                bits.append(f"{time_phrase}.")
+
+            # Sentence 2: schedule + inbox
+            ev_count = 0
+            if isinstance(cal_data, dict) and cal_data.get("success"):
+                ev_count = len(cal_data.get("events", []))
+            unread = 0
+            if isinstance(email_data, dict) and email_data.get("success"):
+                unread = email_data.get("count", 0) or 0
+            schedule_bit = (
+                f"You have {ev_count} event{'s' if ev_count != 1 else ''} today"
+                if ev_count else "Nothing on the calendar today"
+            )
+            inbox_bit = (
+                f"and {unread} unread email{'s' if unread != 1 else ''}"
+                if unread else "and a clean inbox"
+            )
+            bits.append(f"{schedule_bit} {inbox_bit}.")
+
+            # Sentence 3: one news headline + market mood
+            top_headline = ""
+            if isinstance(news_data, dict) and news_data.get("success"):
+                stories = news_data.get("stories", [])
+                if stories:
+                    top_headline = str(stories[0].get("title", "")).strip()
+                    # Strip trailing punctuation so we can chain it
+                    if top_headline.endswith("."):
+                        top_headline = top_headline[:-1]
+            market_bit = ""
+            if isinstance(market_data, dict) and market_data.get("success"):
+                try:
+                    tickers = market_data.get("tickers") or market_data.get("data") or []
+                    ups = sum(1 for t in tickers if isinstance(t, dict) and (t.get("change_pct") or 0) > 0)
+                    downs = sum(1 for t in tickers if isinstance(t, dict) and (t.get("change_pct") or 0) < 0)
+                    if ups + downs > 0:
+                        market_bit = "markets are mostly up" if ups > downs else "markets are mostly down" if downs > ups else "markets are mixed"
+                except Exception:
+                    pass
+
+            if top_headline and market_bit:
+                bits.append(f"Top story: {top_headline}. And {market_bit}.")
+            elif top_headline:
+                bits.append(f"Top story: {top_headline}.")
+            elif market_bit:
+                bits.append(f"On the markets, {market_bit}.")
+
+            return " ".join(bits)
+
+        # ════════════════════════════════════════════════════════════════
+        # TEXT MODE — bold-headed, 20-30 line digest
+        # ════════════════════════════════════════════════════════════════
+        lines: list[str] = [
+            f"{time_phrase}, Abdullah. Here's your brief for {date_str}.",
+            "",
+        ]
 
         # ── Weather ────────────────────────────────────────────────────────
         if isinstance(weather_data, dict) and weather_data.get("success"):
             w = weather_data
-            lines_out.append("WEATHER")
-            lines_out.append(
-                f"  {w.get('condition','')}, {w.get('temperature_c','')}°C "
-                f"(feels like {w.get('feels_like_c','')}°C) in {w.get('location','')}. "
-                f"Humidity {w.get('humidity_pct','')}%, wind {w.get('wind_kph','')} km/h."
-            )
-            lines_out.append("")
+            cond = w.get("condition", "—")
+            temp = w.get("temperature_c", "—")
+            feels = w.get("feels_like_c", "—")
+            loc = w.get("location", "High Wycombe")
+            hum = w.get("humidity_pct", "—")
+            wind = w.get("wind_kph", "—")
+            lines.append("**Weather**")
+            lines.append(f"  {cond}, {temp}°C (feels {feels}°C) in {loc}.")
+            lines.append(f"  Humidity {hum}%, wind {wind} km/h.")
+            lines.append("")
 
-        # ── Prayer times ───────────────────────────────────────────────────
+        # ── Prayer Times ───────────────────────────────────────────────────
         if isinstance(prayer_data, dict) and prayer_data.get("success"):
-            lines_out.append(self.prayer.format_times(prayer_data))
-            lines_out.append("  " + self.prayer.get_next_prayer(prayer_data))
-            lines_out.append("")
+            lines.append("**Prayer Times**")
+            ptimes = prayer_data.get("times") or {}
+            # Compact one-liner: Fajr 02:57 · Zuhr 13:00 · Asr 17:19 · Maghrib 21:08 · Isha 23:04
+            wanted = [("Fajr", "fajr"), ("Zuhr", "zuhr"),
+                      ("Asr", "asr"), ("Maghrib", "maghrib"), ("Isha", "isha")]
+            row = []
+            for label, key in wanted:
+                t = ptimes.get(key)
+                if t:
+                    row.append(f"{label} {t}")
+            if row:
+                lines.append("  " + " · ".join(row))
+            try:
+                _next = self.prayer.get_next_prayer(prayer_data)
+                if _next:
+                    lines.append(f"  Next: {_next}")
+            except Exception:
+                pass
+            lines.append("")
 
-        # ── Calendar ───────────────────────────────────────────────────────
+        # ── Your Day (calendar) ───────────────────────────────────────────
         if isinstance(cal_data, dict) and cal_data.get("success"):
-            events = cal_data.get("events", [])
-            lines_out.append("YOUR DAY")
+            events = cal_data.get("events", []) or []
+            lines.append("**Your Day**")
             if events:
-                lines_out.append(f"  {len(events)} event(s) scheduled:")
+                lines.append(f"  {len(events)} event{'s' if len(events) != 1 else ''} scheduled:")
                 for e in events[:5]:
-                    start_t = e.get("start", "")[:16].replace("T", " at ")
-                    lines_out.append(f"  • {e.get('title','Event')} — {start_t}")
+                    title = e.get("title", "Untitled")
+                    start_raw = (e.get("start") or "")[:16]
+                    start_fmt = start_raw.replace("T", " at ") if start_raw else "—"
+                    lines.append(f"  • {title} — {start_fmt}")
             else:
-                lines_out.append("  Nothing in the calendar today. A free day!")
-            lines_out.append("")
+                lines.append("  Nothing scheduled — a free day.")
+            lines.append("")
+        elif not isinstance(cal_data, dict) or cal_data.get("error"):
+            # Calendar is disconnected (mock mode). Surface it honestly
+            # rather than silently dropping the section.
+            lines.append("**Your Day**")
+            lines.append("  Calendar offline — connect Google Calendar to see events.")
+            lines.append("")
 
-        # ── Email ──────────────────────────────────────────────────────────
+        # ── Inbox ──────────────────────────────────────────────────────────
         if isinstance(email_data, dict) and email_data.get("success"):
-            emails = email_data.get("emails", [])
-            count = email_data.get("count", 0)
-            lines_out.append("INBOX")
-            lines_out.append(f"  {count} unread email(s).")
-            if emails:
-                subj = emails[0].get("subject", "(no subject)")
-                sender = emails[0].get("from", "")[:50]
-                lines_out.append("  Latest: " + repr(subj) + " from " + sender)
-            lines_out.append("")
+            emails = email_data.get("emails", []) or []
+            count = email_data.get("count", 0) or 0
+            lines.append("**Inbox**")
+            lines.append(f"  {count} unread email{'s' if count != 1 else ''}.")
+            for em in emails[:3]:
+                subj = (em.get("subject") or "(no subject)").strip()
+                sender = (em.get("from") or "").split("<")[0].strip()[:40]
+                if len(subj) > 65:
+                    subj = subj[:62] + "…"
+                lines.append(f"  • {subj} — {sender}")
+            lines.append("")
+        elif not isinstance(email_data, dict) or email_data.get("error"):
+            lines.append("**Inbox**")
+            lines.append("  Gmail offline — connect Google to see your inbox.")
+            lines.append("")
 
-        # ── Top News (detailed) ────────────────────────────────────────────
+        # ── Top News (5 stories with one-line description) ────────────────
         if isinstance(news_data, dict) and news_data.get("success"):
-            stories = news_data.get("stories", [])
-            lines_out.append("TOP NEWS")
-            for i, story in enumerate(stories[:5], 1):
-                sources = story.get("sources", [])
-                if len(sources) > 1:
-                    src_str = f"[{', '.join(sources)}] — {len(sources)} outlets"
-                else:
-                    src_str = f"[{sources[0]}]" if sources else ""
-                lines_out.append(f"  {i}. {story['title']}")
-                lines_out.append(f"     {src_str}")
-                if story.get("description"):
-                    lines_out.append(f"     {story['description'][:180]}")
-            lines_out.append("")
+            stories = news_data.get("stories", []) or []
+            if stories:
+                lines.append("**Top News**")
+                for i, story in enumerate(stories[:5], 1):
+                    title = (story.get("title") or "—").strip()
+                    sources = story.get("sources") or []
+                    src = sources[0] if sources else ""
+                    src_tag = f" [{src}]" if src else ""
+                    lines.append(f"  {i}. {title}{src_tag}")
+                    desc = (story.get("description") or "").strip()
+                    if desc:
+                        if len(desc) > 140:
+                            desc = desc[:137] + "…"
+                        lines.append(f"     {desc}")
+                lines.append("")
 
-        # ── Tech & AI ──────────────────────────────────────────────────────
-        if isinstance(tech_data, dict) and tech_data.get("success"):
-            tech_stories = tech_data.get("stories", [])
-            if tech_stories:
-                lines_out.append("TECH & AI")
-                for story in tech_stories[:2]:
-                    sources = story.get("sources", [])
-                    src_str = f" [{sources[0]}]" if sources else ""
-                    lines_out.append(f"  • {story['title']}{src_str}")
-                lines_out.append("")
-
-        # ── Sports ────────────────────────────────────────────────────────
+        # ── Sports ─────────────────────────────────────────────────────────
+        sports_block: list[str] = []
         fav_lower = [t.lower() for t in FAVOURITE_TEAMS]
 
-        def is_fav(game):
-            home = game.get("home_team", "").lower()
-            away = game.get("away_team", "").lower()
+        def _is_fav(g: dict) -> bool:
+            home = (g.get("home_team", "") or "").lower()
+            away = (g.get("away_team", "") or "").lower()
             return any(
-                any(word in home or word in away for word in fav.lower().split())
+                any(w in home or w in away for w in fav.split())
                 for fav in fav_lower
             )
 
-        def is_big_game(game):
-            big_teams = ["manchester city", "real madrid", "barcelona", "liverpool",
-                        "arsenal", "chelsea", "Bayern", "psg", "juventus",
-                        "lakers", "celtics", "heat", "nuggets"]
-            home = game.get("home_team", "").lower()
-            away = game.get("away_team", "").lower()
-            return sum(1 for t in big_teams if t in home or t in away) >= 2
-
-        sports_lines = []
-
-        for league_data, league_label in [
-            (sports_pl, "PREMIER LEAGUE"),
-            (sports_ucl, "CHAMPIONS LEAGUE"),
-            (sports_nba, "NBA"),
-        ]:
-            if not isinstance(league_data, dict) or not league_data.get("success"):
-                continue
-            games = league_data.get("games", [])
-            finished = [g for g in games if g.get("status") == "final"]
+        def _add_league(label: str, data, max_games: int = 2):
+            if not isinstance(data, dict) or not data.get("success"):
+                return
+            games = data.get("games", []) or []
             live = [g for g in games if g.get("status") == "live"]
+            done = [g for g in games if g.get("status") == "final"]
+            picks: list[dict] = []
+            # Priority: live games > favourite-team finished games > most recent
+            for g in live[:2]:
+                picks.append(g)
+            for g in done:
+                if len(picks) >= max_games:
+                    break
+                if _is_fav(g) and g not in picks:
+                    picks.append(g)
+            for g in done:
+                if len(picks) >= max_games:
+                    break
+                if g not in picks:
+                    picks.append(g)
+            for g in picks[:max_games]:
+                star = " ★" if _is_fav(g) else ""
+                clock = f" ({g.get('clock','live')})" if g.get("status") == "live" else ""
+                ht = g.get("home_team", "?")
+                at = g.get("away_team", "?")
+                hs = g.get("home_score", "")
+                as_ = g.get("away_score", "")
+                sports_block.append(
+                    f"  {label}: {ht} {hs} - {as_} {at}{clock}{star}"
+                )
 
-            fav_games = [g for g in finished if is_fav(g)]
-            big_games = [g for g in finished if is_big_game(g) and not is_fav(g)]
-            show = fav_games + big_games[:2]
+        _add_league("PL", sports_pl)
+        _add_league("La Liga", sports_rm, max_games=1)
+        _add_league("NBA", sports_nba)
+        _add_league("Cricket", sports_cricket, max_games=1)
 
-            if live:
-                sports_lines.append(f"{league_label} — LIVE")
-                for g in live[:2]:
-                    fav = " ★" if is_fav(g) else ""
-                    sports_lines.append(
-                        f"  {g['home_team']} {g['home_score']} - "
-                        f"{g['away_score']} {g['away_team']} [{g.get('clock','')}]{fav}"
-                    )
+        if sports_block:
+            lines.append("**Sports**")
+            lines.extend(sports_block)
+            lines.append("")
 
-            if show:
-                if not live:
-                    sports_lines.append(f"{league_label}")
-                for g in show[:4]:
-                    fav = " ★" if is_fav(g) else ""
-                    sports_lines.append(
-                        f"  {g['home_team']} {g['home_score']} - "
-                        f"{g['away_score']} {g['away_team']}{fav}"
-                    )
-
-        if sports_lines:
-            lines_out.extend(sports_lines)
-            lines_out.append("")
-
-        # ── Markets ───────────────────────────────────────────────────────
+        # ── Markets ────────────────────────────────────────────────────────
         if isinstance(market_data, dict) and market_data.get("success"):
-            lines_out.append(self.markets.format_prices(market_data))
-            lines_out.append("")
+            tickers = market_data.get("tickers") or market_data.get("data") or []
+            if tickers:
+                lines.append("**Markets**")
+                for t in tickers[:8]:
+                    if not isinstance(t, dict):
+                        continue
+                    sym = t.get("symbol") or t.get("name") or "—"
+                    price = t.get("price")
+                    chg = t.get("change_pct")
+                    arrow = "↗" if (chg is not None and chg > 0) else ("↘" if (chg is not None and chg < 0) else "·")
+                    price_str = f"${price:,.2f}" if isinstance(price, (int, float)) else (str(price) if price else "—")
+                    chg_str = f"{chg:+.2f}%" if isinstance(chg, (int, float)) else ""
+                    lines.append(f"  {sym:<8} {arrow} {price_str}  {chg_str}".rstrip())
+                lines.append("")
 
-        # ── Witty + inspirational quote (LLM generated, unique daily) ─────
-        quote_prompt = (
-            f"Generate a single witty yet genuinely inspiring quote or observation "
-            f"that is relevant to someone starting their {date_str}. "
-            f"It should feel fresh, not cliché. Max 2 sentences. "
-            f"No quotation marks needed, just the text."
-        )
-        try:
-            quote = await self.llm.chat([{"role": "user", "content": quote_prompt}])
-            lines_out.append("THOUGHT FOR THE DAY")
-            lines_out.append(f"  {quote.strip()}")
-            lines_out.append("")
-        except Exception:
-            pass
-
-        # ── Closing ────────────────────────────────────────────────────────
+        # ── Sign-off (deterministic — no LLM) ──────────────────────────────
         closings = [
             "Make it count today.",
-            "Go get it.",
-            "Let's have a good one.",
+            "Have a good one.",
             "You've got this.",
-            "Make it a productive one.",
+            "Go well today.",
         ]
-        lines_out.append(random.choice(closings))
+        lines.append(random.choice(closings))
+
+        lines_out = lines
 
         return chr(10).join(lines_out)
 
