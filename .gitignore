@@ -20,3 +20,13 @@ logs/
 # Secrets
 credentials.json
 token.json
+
+# Secrets — never commit these
+.env
+token.json
+credentials.json
+data/chroma/
+data/jarvis.db
+*.icloud
+venv/
+venv.icloud.bak/
