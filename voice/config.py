@@ -49,12 +49,8 @@ class VoiceConfig:
     input_device: int | None   # None = system default microphone
     output_device: int | None  # None = system default speaker
 
-    # ── Wake word (openWakeWord) ───────────────────────────────────────────
-    wake_word_enabled: bool
-    wake_word_model: str       # built-in ID, e.g. "hey_jarvis_v0.1"
-    wake_word_threshold: float # 0..1; higher = stricter
-
     # ── VAD (Silero) ───────────────────────────────────────────────────────
+    # Wake word has been removed — voice is push-to-talk from the UI.
     vad_threshold: float       # speech-probability cutoff
     end_silence_ms: int        # silence before we stop listening
     listen_timeout_s: float    # hard cap on a single utterance
@@ -69,9 +65,6 @@ class VoiceConfig:
     elevenlabs_voice_id: str
     elevenlabs_model: str
 
-    # ── Behaviour ──────────────────────────────────────────────────────────
-    barge_in_enabled: bool     # interrupt TTS if wake word fires mid-speech
-
 
 def load_config() -> VoiceConfig:
     """Load voice configuration from environment variables."""
@@ -82,16 +75,12 @@ def load_config() -> VoiceConfig:
         sample_rate=int(os.getenv("AUDIO_SAMPLE_RATE", "16000")),
         input_device=_optional_int(os.getenv("AUDIO_INPUT_DEVICE")),
         output_device=_optional_int(os.getenv("AUDIO_OUTPUT_DEVICE")),
-        # Wake word
-        wake_word_enabled=_get_bool("WAKE_WORD_ENABLED", True),
-        wake_word_model=os.getenv("WAKE_WORD_MODEL", "hey_jarvis_v0.1"),
-        wake_word_threshold=float(os.getenv("WAKE_WORD_THRESHOLD", "0.5")),
         # VAD
         vad_threshold=float(os.getenv("VAD_THRESHOLD", "0.5")),
-        end_silence_ms=int(os.getenv("END_SILENCE_MS", "900")),
+        end_silence_ms=int(os.getenv("END_SILENCE_MS", "400")),
         listen_timeout_s=float(os.getenv("LISTEN_TIMEOUT_SECONDS", "12")),
         # STT
-        whisper_model=os.getenv("WHISPER_MODEL", "small.en"),
+        whisper_model=os.getenv("WHISPER_MODEL", "tiny.en"),
         whisper_compute_type=os.getenv("WHISPER_COMPUTE_TYPE", "int8"),
         whisper_device=os.getenv("WHISPER_DEVICE", "cpu"),
         # TTS (ElevenLabs)
@@ -100,8 +89,6 @@ def load_config() -> VoiceConfig:
             "ELEVENLABS_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb"  # George (British male)
         ),
         elevenlabs_model=os.getenv("ELEVENLABS_MODEL", "eleven_flash_v2_5"),
-        # Behaviour
-        barge_in_enabled=_get_bool("BARGE_IN_ENABLED", True),
     )
 
 

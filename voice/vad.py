@@ -52,6 +52,13 @@ class SileroEndpointer:
         self._spillover = np.zeros(0, dtype=np.int16)
         self._silence_ms = 0
         self._has_seen_speech = False
+        # ── Telemetry ──────────────────────────────────────────────────────
+        # last_prob: most recent Silero speech probability (0..1) — used by
+        # the diagnostic endpoints and the live "I hear you" orb feedback.
+        # max_prob: highest speech probability ever observed this utterance —
+        # lets us tell "mic was silent" from "mic captured something quiet".
+        self._last_prob = 0.0
+        self._max_prob = 0.0
 
     # ── Public API ─────────────────────────────────────────────────────────
 
@@ -59,6 +66,8 @@ class SileroEndpointer:
         self._spillover = np.zeros(0, dtype=np.int16)
         self._silence_ms = 0
         self._has_seen_speech = False
+        self._last_prob = 0.0
+        self._max_prob = 0.0
         try:
             self._model.reset_states()
         except AttributeError:
@@ -87,6 +96,9 @@ class SileroEndpointer:
             tensor = self._torch.from_numpy(w)
             with self._torch.no_grad():
                 prob = float(self._model(tensor, self._cfg.sample_rate))
+            self._last_prob = prob
+            if prob > self._max_prob:
+                self._max_prob = prob
             window_ms = int(self._WINDOW * 1000 / self._cfg.sample_rate)
 
             if prob >= self._cfg.vad_threshold:
@@ -106,3 +118,13 @@ class SileroEndpointer:
     @property
     def has_seen_speech(self) -> bool:
         return self._has_seen_speech
+
+    @property
+    def last_prob(self) -> float:
+        """Most recent Silero speech probability (0..1)."""
+        return self._last_prob
+
+    @property
+    def max_prob(self) -> float:
+        """Highest speech probability seen during this utterance."""
+        return self._max_prob

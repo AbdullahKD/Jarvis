@@ -41,6 +41,8 @@ INTENT_MAP = {
     "spotify_control":     AgentRole.SPOTIFY,
     "open_file":           AgentRole.FILE,
     "read_document":       AgentRole.DOCUMENT,
+    # Finance
+    "finex_query":         AgentRole.FINEX,
     # Meta
     "summarise":           AgentRole.SUMMARISER,
     "general_chat":        AgentRole.PLANNER,
@@ -177,6 +179,29 @@ class RouterAgent:
             # needs tier=1 to fire. The shortcut falls back to tier=2
             # automatically if it doesn't match.
             return _decision(AgentRole.REMINDER, tier=1)
+
+        # ── FinEx (financial-statement Q&A) patterns ──────────────────────
+        # Must come before the generic factual-question rule, otherwise a
+        # query like "what was Bestway's revenue?" gets routed to websearch.
+        # Tier 2 — single LLM call inside FinEx (no planner needed).
+        _finex_rx = re.compile(
+            r'\b(finex|bestway|hbl|annual report|financial statement|'
+            r'balance sheet|income statement|cash flow|p\s*&\s*l|'
+            r'gross margin|operating margin|profit margin|ebitda|ebit|'
+            r'(?:net|gross|operating)\s+profit|revenue|turnover|'
+            r'eps|earnings per share|dividend per share|'
+            r'(?:current|debt[-\s]to[-\s]equity|quick)\s+ratio|'
+            r'\broa\b|\broe\b|\broce\b|\broic\b)\b',
+            re.I,
+        )
+        if _finex_rx.search(r):
+            return RouterDecision(
+                primary_agent=AgentRole.FINEX,
+                supporting_agents=[AgentRole.MEMORY],
+                confidence=0.95,
+                reasoning="deterministic finex rule (financial statement keyword)",
+                tier=2,
+            )
 
         # ── Factual-question patterns (who/what/when/etc.) ────────────────
         # These short-circuit the router LLM call (saves ~1–3s) and route

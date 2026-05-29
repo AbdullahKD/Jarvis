@@ -99,6 +99,56 @@ class StreamingTTS:
     def is_speaking(self) -> bool:
         return not self._done.is_set()
 
+    def speak_sentence_stream(
+        self,
+        sentence_queue,
+        on_first_audio=None,
+    ) -> None:
+        """
+        Drain a queue of sentences and synthesise+play each one back-to-back
+        through ElevenLabs Flash v2.5. Blocks the current thread.
+
+        The queue contract:
+          - put(str) → enqueue a sentence (will be spoken in order)
+          - put(None) → sentinel: no more sentences, return when drained
+
+        `on_first_audio` (optional, no-args) fires once the first sentence
+        begins playing — used by VoiceSession to flip state from
+        "thinking" → "speaking" so the UI orb updates the moment the user
+        starts hearing audio (typically within ~150 ms of the first
+        sentence being enqueued).
+        """
+        first = True
+        while True:
+            sentence = sentence_queue.get()
+            if sentence is None:
+                return
+            if not sentence or not sentence.strip():
+                continue
+            if self._stop.is_set():
+                return
+            if first and on_first_audio is not None:
+                try:
+                    on_first_audio()
+                except Exception:
+                    pass
+                first = False
+            try:
+                pcm = self._elevenlabs_stream(sentence.strip())
+                # play_pcm_stream blocks for the duration of this sentence,
+                # which is exactly what we want — sentences play in order.
+                from .audio import play_pcm_stream as _play
+                _play(
+                    pcm,
+                    sample_rate=ELEVENLABS_SAMPLE_RATE,
+                    stop_event=self._stop,
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.warning("speak_sentence_stream: sentence skipped: %s", exc)
+                # Best-effort: keep draining the queue even if one sentence
+                # fails — a single 429 shouldn't kill the whole turn.
+                continue
+
     # ── Internals ──────────────────────────────────────────────────────────
 
     def _run(self, text: str) -> None:
