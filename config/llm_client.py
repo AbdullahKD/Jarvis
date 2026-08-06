@@ -18,6 +18,8 @@ from config.settings import (
     OLLAMA_BASE_URL,
     OLLAMA_CHAT_MODEL,
     OLLAMA_EMBED_MODEL,
+    OLLAMA_KEEP_ALIVE,
+    LLM_NUM_CTX,
     LLM_TEMPERATURE,
     LLM_TIMEOUT,
     MAX_RETRIES,
@@ -26,8 +28,45 @@ from config.settings import (
 )
 
 
+import os as _os_dim
+
+# Dimension of the deterministic fallback embedding produced by
+# OllamaClient._hash_embed. MUST equal the live embed model's output dim so a
+# fallback vector can coexist with real vectors in the same ChromaDB collection.
+# nomic-embed-text = 768. Override via EMBED_FALLBACK_DIM if you switch models.
+EMBED_FALLBACK_DIM = int(_os_dim.getenv("EMBED_FALLBACK_DIM", "768"))
+
+
 class OllamaError(Exception):
     pass
+
+
+# ── Thinking-model handling ─────────────────────────────────────────────────
+# Model families that emit chain-of-thought by default (Ollama puts it in
+# message.thinking, or inline <think>...</think> tags). Left alone, they burn
+# the whole num_predict budget "thinking" and the visible reply arrives empty
+# — the UI shows "(no response)". We ask Ollama to disable thinking for these
+# families, and additionally strip any inline think tags as a safety net.
+_THINKING_FAMILIES = ("qwen3", "deepseek-r1", "magistral")
+
+_THINK_RE_BLOCK = None  # compiled lazily
+
+
+def _wants_think_off(model: str) -> bool:
+    m = (model or "").lower()
+    return any(fam in m for fam in _THINKING_FAMILIES)
+
+
+def _strip_think(text: str) -> str:
+    """Remove <think>...</think> blocks (and a dangling unclosed <think>)
+    that some thinking models emit inline in content."""
+    if "<think>" not in text:
+        return text
+    global _THINK_RE_BLOCK
+    if _THINK_RE_BLOCK is None:
+        import re as _re
+        _THINK_RE_BLOCK = _re.compile(r"<think>.*?(?:</think>|$)", _re.S)
+    return _THINK_RE_BLOCK.sub("", text).strip()
 
 
 class OllamaClient:
@@ -53,6 +92,16 @@ class OllamaClient:
         self.base_url = base_url.rstrip("/")
         self.temperature = temperature
         self.timeout = aiohttp.ClientTimeout(total=timeout)
+        # Streaming uses an INTER-CHUNK (sock_read) timeout, not a total cap.
+        # A total cap kills long but healthy generations (e.g. "deep research"
+        # / "elaborate") the moment they run past `timeout` seconds, even while
+        # tokens are still flowing. With sock_read we only abort if NO token
+        # arrives for STREAM_IDLE_TIMEOUT seconds (covers a slow first token /
+        # cold model), and otherwise let the full answer stream to completion.
+        _stream_idle = int(_os_dim.getenv("STREAM_IDLE_TIMEOUT", str(max(timeout, 120))))
+        self.stream_timeout = aiohttp.ClientTimeout(
+            total=None, sock_connect=15, sock_read=_stream_idle
+        )
 
     # ── Chat ──────────────────────────────────────────────────────────────
 
@@ -125,20 +174,21 @@ class OllamaClient:
             "temperature": temperature or self.temperature,
             "num_predict": max_tokens,
         }
-        # num_ctx caps the prompt window — useful for short body-only calls
-        # (e.g. the email composer) where the default 4096 wastes memory.
-        if num_ctx is not None:
-            options["num_ctx"] = num_ctx
+        # num_ctx caps the prompt window. Per-call override wins (short
+        # body-only calls like the email composer pass a small value to save
+        # memory); otherwise use the configured default (LLM_NUM_CTX, 8192 on
+        # the M5/24GB machine — up from Ollama's implicit 4096).
+        options["num_ctx"] = num_ctx if num_ctx is not None else LLM_NUM_CTX
 
         payload: Dict[str, Any] = {
             "model": model or self.model,
             "messages": messages,
             "stream": True,
-            # Keep the model resident for 30 minutes between calls. Default Ollama
-            # is 5 min, which is long enough for a single session but reliably bites
-            # demos when the user pauses to introduce a feature. FinEx already does
-            # this; we now do it everywhere so Jarvis never pays cold-start mid-turn.
-            "keep_alive": "30m",
+            # Keep the model resident between calls (env-configurable via
+            # OLLAMA_KEEP_ALIVE; "-1" = pinned forever, the right call on the
+            # 24GB M5). Ollama's default 5 min reliably bit demos whenever the
+            # user paused to introduce a feature.
+            "keep_alive": OLLAMA_KEEP_ALIVE,
             "options": options,
         }
 
@@ -146,13 +196,18 @@ class OllamaClient:
             payload["format"] = "json"
             payload["stream"] = False
 
+        # Thinking models (qwen3 etc.): answer directly, don't reason first.
+        # _post_with_retry auto-drops this key if the server rejects it.
+        if _wants_think_off(payload["model"]):
+            payload["think"] = False
+
         return await self._post_with_retry("/api/chat", payload, expect_json)
 
     async def chat_stream(
         self,
         messages: List[Dict[str, str]],
         model: Optional[str] = None,
-        max_tokens: int = 512,
+        max_tokens: int = 1024,
     ):
         """
         Async generator that yields text chunks as they arrive from Ollama.
@@ -171,36 +226,66 @@ class OllamaClient:
             "model": model or self.model,
             "messages": messages,
             "stream": True,
-            "keep_alive": "30m",  # see note in `chat()` — match its keep_alive
+            "keep_alive": OLLAMA_KEEP_ALIVE,  # see note in `chat()` — match its keep_alive
             "options": {
                 "temperature": self.temperature,
                 "num_predict": max_tokens,
+                "num_ctx": LLM_NUM_CTX,
             },
         }
+        if _wants_think_off(payload["model"]):
+            payload["think"] = False
 
-        try:
-            async with aiohttp.ClientSession(timeout=self.timeout) as session:
-                async with session.post(
-                    f"{self.base_url}/api/chat", json=payload
-                ) as resp:
-                    if resp.status != 200:
-                        text = await resp.text()
-                        raise OllamaError(f"HTTP {resp.status}: {text[:200]}")
-                    async for raw_line in resp.content:
-                        line = raw_line.strip()
-                        if not line:
-                            continue
-                        try:
-                            chunk = json.loads(line)
-                        except json.JSONDecodeError:
-                            continue
-                        content = chunk.get("message", {}).get("content", "")
-                        if content:
-                            yield content
-                        if chunk.get("done"):
-                            break
-        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
-            raise OllamaError(f"Stream error: {exc}") from exc
+        # Inline <think> tag filter state (safety net for models that emit
+        # reasoning in content rather than the separate thinking field).
+        _in_think = False
+
+        for _attempt in (1, 2):
+            try:
+                async with aiohttp.ClientSession(timeout=self.stream_timeout) as session:
+                    async with session.post(
+                        f"{self.base_url}/api/chat", json=payload
+                    ) as resp:
+                        if resp.status != 200:
+                            text = await resp.text()
+                            # Older Ollama servers reject the `think` key —
+                            # drop it and retry once rather than failing.
+                            if (resp.status == 400 and "think" in payload
+                                    and "think" in text.lower() and _attempt == 1):
+                                payload.pop("think", None)
+                                break  # out of session; loop retries
+                            raise OllamaError(f"HTTP {resp.status}: {text[:200]}")
+                        async for raw_line in resp.content:
+                            line = raw_line.strip()
+                            if not line:
+                                continue
+                            try:
+                                chunk = json.loads(line)
+                            except json.JSONDecodeError:
+                                continue
+                            content = chunk.get("message", {}).get("content", "")
+                            if content:
+                                # Skip inline <think>...</think> spans.
+                                if _in_think:
+                                    if "</think>" in content:
+                                        content = content.split("</think>", 1)[1]
+                                        _in_think = False
+                                    else:
+                                        content = ""
+                                if "<think>" in content:
+                                    pre, _, rest = content.partition("<think>")
+                                    if "</think>" in rest:
+                                        content = pre + rest.split("</think>", 1)[1]
+                                    else:
+                                        content = pre
+                                        _in_think = True
+                                if content:
+                                    yield content
+                            if chunk.get("done"):
+                                return
+                        return
+            except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+                raise OllamaError(f"Stream error: {exc}") from exc
 
     async def chat_json(
         self,
@@ -230,7 +315,7 @@ class OllamaClient:
         payload = {
             "model": self.embed_model,
             "prompt": text,
-            "keep_alive": "30m",
+            "keep_alive": OLLAMA_KEEP_ALIVE,
         }
         try:
             result = await self._post_with_retry("/api/embeddings", payload)
@@ -241,19 +326,40 @@ class OllamaClient:
             # or return a deterministic hash vector for testing
             return self._hash_embed(text)
 
-    def _hash_embed(self, text: str) -> List[float]:
+    def _hash_embed(self, text: str, dim: Optional[int] = None) -> List[float]:
         """
-        Deterministic fallback embedding (for when embed model not pulled).
-        Not semantic — only used if Ollama embed model is unavailable.
+        Deterministic fallback embedding, used only when the Ollama embed
+        model is unavailable or times out.
+
+        Produces a ``dim``-dimensional unit vector. ``dim`` MUST match the live
+        embed model's output dimension (nomic-embed-text = 768, configurable
+        via the EMBED_FALLBACK_DIM env var). This matters: a fallback vector of
+        a different length than the real embeddings is rejected by ChromaDB with
+        a dimension-mismatch error, which silently breaks memory store/retrieve
+        whenever an embedding briefly falls back (e.g. a cold/slow Ollama). The
+        old implementation emitted only 8 dims and could contain NaN/inf from
+        raw-byte float decoding — both of which corrupted the memory collection.
+
+        Not semantic — similarity between two hash embeddings is meaningless;
+        this only keeps the vector store consistent so it never errors.
         """
         import hashlib
-        import struct
-        h = hashlib.sha256(text.encode()).digest()
-        # Produce 256-dim float vector from hash bytes
-        floats = [struct.unpack("f", h[i:i+4])[0] for i in range(0, min(len(h), 64), 4)]
-        # Normalise to unit vector
-        magnitude = sum(x**2 for x in floats) ** 0.5 or 1.0
-        return [x / magnitude for x in floats]
+
+        if dim is None:
+            dim = EMBED_FALLBACK_DIM
+
+        vec: List[float] = []
+        counter = 0
+        while len(vec) < dim:
+            digest = hashlib.sha256(f"{text}#{counter}".encode()).digest()
+            for b in digest:
+                # Map each byte [0, 255] → [-1.0, 1.0]; no NaN/inf possible.
+                vec.append((b / 127.5) - 1.0)
+                if len(vec) >= dim:
+                    break
+            counter += 1
+        magnitude = sum(x * x for x in vec) ** 0.5 or 1.0
+        return [x / magnitude for x in vec]
 
     # ── Model management ──────────────────────────────────────────────────
 
@@ -299,6 +405,12 @@ class OllamaClient:
                     ) as resp:
                         if resp.status != 200:
                             text = await resp.text()
+                            # Older Ollama servers reject the `think` key —
+                            # drop it and retry immediately instead of failing.
+                            if (resp.status == 400 and "think" in payload
+                                    and "think" in text.lower()):
+                                payload.pop("think", None)
+                                raise OllamaError("retry-without-think")
                             raise OllamaError(f"HTTP {resp.status}: {text[:200]}")
 
                         if is_streaming:
@@ -317,17 +429,22 @@ class OllamaClient:
                                     chunks.append(content)
                                 if chunk.get("done"):
                                     break
-                            return "".join(chunks)
+                            return _strip_think("".join(chunks))
                         else:
                             data = await resp.json()
                             # /api/chat non-streamed response
                             if "message" in data:
-                                return data["message"]["content"]
+                                return _strip_think(data["message"]["content"])
                             # /api/embeddings response
                             return json.dumps(data)
 
             except (aiohttp.ClientError, asyncio.TimeoutError, OllamaError) as exc:
                 last_exc = exc
+                if str(exc) == "retry-without-think":
+                    # Not a real failure — the server just didn't understand
+                    # the `think` key (now removed from payload). Retry
+                    # immediately without consuming a retry attempt.
+                    continue
                 if attempt < MAX_RETRIES:
                     jitter = random.uniform(0, delay * 0.1)
                     await asyncio.sleep(delay + jitter)
@@ -337,28 +454,8 @@ class OllamaClient:
 
 
 # ── Backend selection ───────────────────────────────────────────────────────
-# If LLM_BACKEND=groq, rebind the `OllamaClient` name to the cloud client so
-# every caller (orchestrator, agents, tools) transparently uses Groq. This
-# lets a single env var switch the entire stack between local Ollama and
-# cloud Groq without touching any import sites.
-#
-# Keep the original implementation accessible as `_LocalOllamaClient` in case
-# something needs to force-use local Ollama.
-import os as _os
-
-_LocalOllamaClient = OllamaClient  # original Ollama class, always available
-
-if _os.getenv("LLM_BACKEND", "ollama").lower() == "groq":
-    try:
-        from config.groq_client import GroqClient as _GroqClient
-        OllamaClient = _GroqClient  # type: ignore[misc]
-    except ImportError as _exc:
-        # sentence-transformers / aiohttp missing → fall back to Ollama with
-        # a clear warning so the dev knows why the switch didn't take.
-        import sys as _sys
-        print(
-            f"⚠️  LLM_BACKEND=groq but import failed ({_exc}); "
-            "falling back to local Ollama. Run "
-            "`pip install sentence-transformers` and ensure GROQ_API_KEY is set.",
-            file=_sys.stderr,
-        )
+# Ollama is the only backend. Jarvis previously carried a swappable cloud
+# client selected by LLM_BACKEND=groq; that path is gone, so the alias below
+# exists purely so the handful of call sites that ask for the local client by
+# name keep resolving.
+_LocalOllamaClient = OllamaClient

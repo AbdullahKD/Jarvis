@@ -18,6 +18,12 @@ fi
 source venv/bin/activate
 
 # 2. Ollama ────────────────────────────────────────────────────────────────
+# M5/24GB server tuning (only takes effect when WE start the daemon below;
+# if Ollama.app is already running these are harmless no-ops):
+#   MAX_LOADED_MODELS=3 → router + chat + embed models resident together
+#   NUM_PARALLEL=2      → router and chat calls can overlap instead of queuing
+export OLLAMA_MAX_LOADED_MODELS="${OLLAMA_MAX_LOADED_MODELS:-3}"
+export OLLAMA_NUM_PARALLEL="${OLLAMA_NUM_PARALLEL:-2}"
 if ! curl -s --max-time 2 http://localhost:11434/api/tags >/dev/null; then
   echo "🟡 Ollama not running — starting in background..."
   # `ollama serve` is the daemon. The Ollama.app does the same thing.
@@ -34,13 +40,17 @@ if ! curl -s --max-time 2 http://localhost:11434/api/tags >/dev/null; then
   fi
 fi
 
-# 3. Make sure the chat model is pulled ────────────────────────────────────
-MODEL="${OLLAMA_CHAT_MODEL:-$(grep -E '^OLLAMA_CHAT_MODEL=' .env 2>/dev/null | cut -d= -f2-)}"
-MODEL="${MODEL:-llama3.2:1b}"
-if ! ollama list | awk '{print $1}' | grep -qx "$MODEL"; then
-  echo "🟡 Pulling Ollama model: $MODEL ..."
-  ollama pull "$MODEL"
-fi
+# 3. Make sure all three models are pulled (chat + router + embeddings) ────
+_env_model() { grep -E "^$1=" .env 2>/dev/null | cut -d= -f2-; }
+CHAT_MODEL="${OLLAMA_CHAT_MODEL:-$(_env_model OLLAMA_CHAT_MODEL)}";  CHAT_MODEL="${CHAT_MODEL:-qwen3:8b}"
+ROUTER_MODEL="${OLLAMA_ROUTER_MODEL:-$(_env_model OLLAMA_ROUTER_MODEL)}"; ROUTER_MODEL="${ROUTER_MODEL:-llama3.2:3b}"
+EMBED_MODEL="${OLLAMA_EMBED_MODEL:-$(_env_model OLLAMA_EMBED_MODEL)}"; EMBED_MODEL="${EMBED_MODEL:-nomic-embed-text:latest}"
+for MODEL in "$CHAT_MODEL" "$ROUTER_MODEL" "$EMBED_MODEL"; do
+  if ! ollama list | awk '{print $1}' | grep -qx "$MODEL"; then
+    echo "🟡 Pulling Ollama model: $MODEL ..."
+    ollama pull "$MODEL"
+  fi
+done
 
 # 4. Free port 8000 if a previous Jarvis is still bound ───────────────────
 if lsof -tiTCP:8000 -sTCP:LISTEN >/dev/null 2>&1; then

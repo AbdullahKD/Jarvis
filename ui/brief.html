@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Jarvis · Morning Brief</title>
+<style>
+  /* Brief is violet — see the palette block in ui/index.html. Each Jarvis app
+     owns one hue and its launcher dot matches it. */
+  :root{
+    --bg-0:#0b0916; --glass:rgba(26,22,44,.82); --glass-2:rgba(30,26,52,.6); --glass-3:rgba(38,32,62,.5);
+    --stroke:rgba(160,140,255,.14); --stroke-strong:rgba(170,150,255,.30);
+    --text-0:#f3f0fc; --text-1:#cec7ea; --text-2:#918ab2; --text-3:#5b5480;
+    --accent:#b9a3ff; --accent-2:#8b7bf0; --accent-soft:rgba(160,140,255,.12);
+    --green:#5ee7a8; --red:#ff8090; --amber:#ffcf6b; --cyan:#7fe7ff; --pink:#f0a6d6;
+    --r-lg:20px; --r-md:14px; --r-sm:10px;
+    --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter",system-ui,sans-serif;
+    --font-mono:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,monospace;
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;margin:0;}
+  body{color:var(--text-0);font-family:var(--font);font-size:14px;
+    background:
+      radial-gradient(1200px 720px at 80% -16%,rgba(139,92,246,.20),transparent 56%),
+      radial-gradient(1000px 640px at -8% 110%,rgba(217,70,239,.10),transparent 56%),
+      linear-gradient(165deg,#0e0b1e 0%,#0b0917 46%,#080510 100%);
+    min-height:100%;}
+
+  .chrome{position:relative;z-index:5;height:46px;display:flex;align-items:center;gap:10px;padding:0 22px;}
+  .chrome .title{color:var(--text-2);font-size:12px;letter-spacing:.08em;text-transform:uppercase;}
+  .chrome .badge{padding:2px 9px;border-radius:999px;background:var(--accent-soft);color:var(--accent);border:1px solid var(--stroke-strong);font-size:10px;letter-spacing:.08em;text-transform:uppercase;}
+  .chrome .right{margin-left:auto;display:flex;align-items:center;gap:12px;color:var(--text-2);font-size:12px;}
+  .chrome-back{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:999px;background:var(--glass-3);border:1px solid var(--stroke);color:var(--text-2);font-size:11px;text-decoration:none;transition:all .15s;cursor:pointer;}
+  .chrome-back:hover{color:var(--text-0);border-color:var(--stroke-strong);}
+  .meta{font-family:var(--font-mono);font-size:11px;color:var(--text-2);}
+
+  .wrap{position:relative;z-index:1;max-width:1180px;margin:0 auto;padding:12px 22px 64px;}
+
+  /* ── hero ────────────────────────────────────────────────────────────── */
+  .hero{display:flex;align-items:flex-start;justify-content:space-between;gap:24px;flex-wrap:wrap;margin:14px 0 4px;}
+  .hero h1{font-size:31px;font-weight:700;letter-spacing:-.022em;margin:0;line-height:1.1;}
+  .hero .date{color:var(--text-2);font-size:13px;margin-top:7px;font-family:var(--font-mono);letter-spacing:.02em;}
+  .env{display:flex;gap:22px;align-items:center;flex-wrap:wrap;}
+  .env .wx{display:flex;align-items:center;gap:11px;}
+  .env .wx .ico{font-size:27px;}
+  .env .wx .t{font-size:23px;font-weight:600;font-family:var(--font-mono);line-height:1;}
+  .env .wx .c{font-size:11px;color:var(--text-2);text-transform:capitalize;margin-top:4px;}
+
+  /* Prayer times were an unlabelled run of five numbers. Labelled columns,
+     with the elapsed ones dimmed and the next one highlighted, so the row
+     answers "what's next" at a glance instead of needing to be decoded. */
+  .pray{display:flex;gap:2px;}
+  .pray .p{min-width:52px;text-align:center;padding:5px 7px;border-radius:8px;border:1px solid transparent;}
+  .pray .p .n{font-size:8.5px;letter-spacing:.11em;text-transform:uppercase;color:var(--text-3);}
+  .pray .p .v{font-family:var(--font-mono);font-size:12px;color:var(--text-1);margin-top:3px;}
+  .pray .p.past .n,.pray .p.past .v{color:var(--text-3);opacity:.55;}
+  .pray .p.next{background:var(--accent-soft);border-color:var(--stroke-strong);}
+  .pray .p.next .n{color:var(--accent);} .pray .p.next .v{color:var(--accent);font-weight:600;}
+
+  /* ── summary ─────────────────────────────────────────────────────────── */
+  .summary{position:relative;margin-top:18px;padding:15px 20px 15px 22px;border-radius:var(--r-lg);
+    background:linear-gradient(120deg,rgba(160,140,255,.10),rgba(160,140,255,.02));
+    border:1px solid var(--stroke-strong);overflow:hidden;}
+  .summary::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:linear-gradient(180deg,var(--accent),transparent);}
+  .summary p{margin:0;font-size:15px;line-height:1.55;color:var(--text-0);}
+  .summary .shimmer{height:15px;border-radius:7px;margin:6px 0;background:linear-gradient(90deg,rgba(255,255,255,.04),rgba(255,255,255,.1),rgba(255,255,255,.04));background-size:200% 100%;animation:sh 1.4s ease infinite;}
+  @keyframes sh{0%{background-position:200% 0;}100%{background-position:-200% 0;}}
+
+  /* ── section furniture, identical for every card ─────────────────────── */
+  .sec-head{display:flex;align-items:center;gap:11px;margin-bottom:11px;}
+  .sec-head h2{font-size:11px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;color:var(--text-1);margin:0;white-space:nowrap;}
+  .sec-head .chip{font-family:var(--font-mono);font-size:10px;color:var(--accent);background:var(--accent-soft);border:1px solid var(--stroke-strong);border-radius:999px;padding:2px 9px;white-space:nowrap;}
+  .sec-head .chip.quiet{color:var(--text-3);background:transparent;border-color:var(--stroke);}
+  .sec-head .rule{flex:1;height:1px;background:linear-gradient(90deg,var(--stroke-strong),transparent);}
+
+  .card{background:var(--glass);border:1px solid var(--stroke);border-radius:var(--r-md);backdrop-filter:blur(22px);overflow:hidden;}
+  .rows{display:flex;flex-direction:column;}
+  .row{display:flex;align-items:center;gap:13px;padding:11px 15px;border-bottom:1px solid var(--stroke);min-width:0;}
+  .row:last-child{border-bottom:none;}
+  .row .ic{width:29px;height:29px;flex:none;border-radius:9px;display:grid;place-items:center;font-size:14px;background:var(--accent-soft);border:1px solid var(--stroke);}
+  .row .main{flex:1;min-width:0;}
+  .row .main .t{font-size:13.5px;color:var(--text-0);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;}
+  .row .main .s{font-size:11.5px;color:var(--text-2);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .row .tag{flex:none;font-family:var(--font-mono);font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;padding:3px 8px;border-radius:999px;border:1px solid var(--stroke);color:var(--text-2);white-space:nowrap;}
+  .tag.red{color:var(--red);border-color:rgba(255,128,144,.34);background:rgba(255,128,144,.08);}
+  .tag.green{color:var(--green);border-color:rgba(94,231,168,.34);background:rgba(94,231,168,.08);}
+  .tag.amber{color:var(--amber);border-color:rgba(255,207,107,.34);background:rgba(255,207,107,.08);}
+  .tag.violet{color:var(--accent);border-color:var(--stroke-strong);background:var(--accent-soft);}
+  .tag.cyan{color:var(--cyan);border-color:rgba(127,231,255,.3);background:rgba(127,231,255,.08);}
+  a.t{text-decoration:none;} a.t:hover{color:var(--accent);}
+  .empty{padding:15px;color:var(--text-3);font-size:12.5px;line-height:1.5;}
+
+  /* ── needs you ───────────────────────────────────────────────────────── */
+  .needs{margin-top:26px;}
+  .needs .card{border-color:var(--stroke-strong);}
+  .needs.clear .card{border-color:rgba(94,231,168,.22);background:linear-gradient(120deg,rgba(94,231,168,.05),rgba(94,231,168,.01));}
+  .needs.clear .empty{color:var(--green);display:flex;align-items:center;gap:11px;font-size:13.5px;}
+  .needs.clear .empty .big{font-size:19px;}
+
+  /* ── the fixed grid ──────────────────────────────────────────────────── */
+  /* Same slots every day, whether or not they have content. The old layout
+     hid empty sections, so the page changed shape daily and you had to re-find
+     everything. `min-width:0` is load-bearing: grid children default to
+     min-width:auto, so a nowrap row sets the column's minimum to the full
+     untruncated string — that is what pushed the right-hand column off-screen
+     and stopped text-overflow:ellipsis from ever engaging. */
+  /* Two flowing columns, not a 2x2 grid of sections. A grid aligns rows to
+     the tallest cell, so a short "Today" beside a tall "Pipeline" left a
+     column-height hole under it — the single biggest source of the page
+     looking haphazard. Columns let each side flow at its own height. */
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:26px;align-items:start;}
+  .grid > .col{min-width:0;display:flex;flex-direction:column;gap:22px;}
+  .grid section{min-width:0;}
+  @media(max-width:860px){.grid{grid-template-columns:1fr;}}
+
+  .stat-row{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;margin-bottom:12px;}
+  .stat{background:var(--glass-2);border:1px solid var(--stroke);border-radius:var(--r-sm);padding:10px 12px;min-width:0;}
+  .stat .v{font-family:var(--font-mono);font-size:21px;font-weight:700;line-height:1;}
+  .stat .k{font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-2);margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .stat.disc .v{color:var(--text-0);} .stat.applied .v{color:var(--accent);}
+  .stat.int .v{color:var(--cyan);} .stat.off .v{color:var(--green);}
+  .stat.zero .v{color:var(--text-3);}
+
+  .mkt{display:flex;justify-content:space-between;gap:8px;padding:7px 15px;border-top:1px solid var(--stroke);font-family:var(--font-mono);font-size:12px;}
+  .mkt .nm{color:var(--text-1);} .mkt .pr{color:var(--text-0);}
+  .up{color:var(--green);} .dn{color:var(--red);} .flat{color:var(--text-3);}
+
+  .focus{margin-top:26px;padding:16px 20px;border-radius:var(--r-lg);background:linear-gradient(120deg,rgba(94,231,168,.10),rgba(94,231,168,.02));border:1px solid rgba(94,231,168,.28);display:flex;gap:14px;align-items:center;}
+  .focus .ic{font-size:21px;}
+  .focus .lbl{font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--green);font-weight:700;}
+  .focus .txt{font-size:14.5px;color:var(--text-0);margin-top:3px;line-height:1.5;}
+
+  .banner{margin:10px 0 0;padding:10px 14px;border-radius:var(--r-md);background:rgba(255,128,144,.08);border:1px solid rgba(255,128,144,.24);color:#ffc6ce;font-size:12px;line-height:1.5;display:none;}
+  .banner.show{display:block;}
+  .banner code{font-family:var(--font-mono);color:#fff;background:rgba(0,0,0,.25);padding:1px 5px;border-radius:5px;}
+</style>
+</head>
+<body>
+<div class="chrome">
+  <span class="title">Jarvis</span><span class="badge">Morning Brief</span>
+  <div class="right">
+    <span id="clock" class="meta"></span>
+    <button class="chrome-back" onclick="load()" title="Rebuild brief">↻ Refresh</button>
+    <a href="/" class="chrome-back">← Back to Jarvis</a>
+  </div>
+</div>
+
+<div class="wrap">
+  <div class="hero">
+    <div>
+      <h1 id="greeting">Good morning.</h1>
+      <div class="date" id="dateLine"></div>
+    </div>
+    <div class="env">
+      <div class="wx" id="wx" style="display:none"><span class="ico" id="wxIco">☀️</span><div><div class="t" id="wxTemp">—</div><div class="c" id="wxCond"></div></div></div>
+      <div class="pray" id="pray"></div>
+    </div>
+  </div>
+
+  <div class="banner" id="banner"></div>
+
+  <div class="summary">
+    <div id="summary"><div class="shimmer" style="width:88%"></div></div>
+  </div>
+
+  <!-- Action first: the only part of the page that claims urgency. -->
+  <div class="needs" id="needs">
+    <div class="sec-head"><h2>Needs you</h2><span class="chip" id="needsCount"></span><span class="rule"></span></div>
+    <div class="card rows" id="needsRows"></div>
+  </div>
+
+  <div class="grid">
+    <div class="col">
+      <section>
+        <div class="sec-head"><h2>Today</h2><span class="chip" id="todayCount"></span><span class="rule"></span></div>
+        <div class="card rows" id="todayRows"></div>
+      </section>
+      <section>
+        <div class="sec-head"><h2>Follow-ups</h2><span class="chip" id="fuCount"></span><span class="rule"></span></div>
+        <div class="card rows" id="followUps"></div>
+      </section>
+    </div>
+
+    <div class="col">
+      <section>
+        <div class="sec-head"><h2>Pipeline</h2><span class="chip" id="jobsChip"></span><span class="rule"></span></div>
+        <div class="stat-row" id="jobStats"></div>
+        <div class="card rows" id="newJobs"></div>
+      </section>
+      <section>
+        <div class="sec-head"><h2>Digest</h2><span class="chip quiet" id="mktChip"></span><span class="rule"></span></div>
+        <div class="card" id="digestCard"></div>
+      </section>
+    </div>
+  </div>
+
+  <div class="focus" id="focus" style="display:none">
+    <span class="ic">🎯</span>
+    <div><div class="lbl">Focus for today</div><div class="txt" id="focusTxt"></div></div>
+  </div>
+</div>
+
+<script>
+const $=s=>document.querySelector(s);
+function esc(s){const d=document.createElement('div');d.textContent=(s==null?'':String(s));return d.innerHTML;}
+function tickClock(){const e=$('#clock');if(e)e.textContent=new Date().toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});}
+tickClock();setInterval(tickClock,1000);
+function wxIcon(cond,day){cond=(cond||'').toLowerCase();if(cond.includes('rain'))return'🌧️';if(cond.includes('cloud'))return day?'⛅':'☁️';if(cond.includes('snow'))return'❄️';if(cond.includes('storm')||cond.includes('thunder'))return'⛈️';if(cond.includes('fog')||cond.includes('mist'))return'🌫️';if(cond.includes('clear'))return day?'☀️':'🌙';return day?'☀️':'🌙';}
+
+function rowHTML(r){
+  const title = r.href
+    ? `<a class="t" href="${esc(r.href)}" target="_blank" rel="noopener">${esc(r.text)}</a>`
+    : `<span class="t">${esc(r.text)}</span>`;
+  return `<div class="row"><div class="ic">${r.icon||'•'}</div><div class="main">${title}`
+       + `${r.sub?`<div class="s">${esc(r.sub)}</div>`:''}</div>`
+       + `${r.tag?`<span class="tag ${r.tagClass||'violet'}">${esc(r.tag)}</span>`:''}</div>`;
+}
+// Every card renders in both states. An empty section keeps its slot and says
+// why it's empty, rather than vanishing and reshuffling the page.
+// An empty chip still paints its pill border, which left a stray 12px capsule
+// floating next to "Digest" on a quiet day.
+function chip(id,text,quiet){
+  const el=$('#'+id); if(!el) return;
+  el.textContent=text||'';
+  el.className='chip'+(quiet?' quiet':'');
+  el.style.display=text?'':'none';
+}
+function fillRows(id,rows,emptyMsg){
+  const el=$('#'+id);
+  if(!rows||!rows.length){el.innerHTML=`<div class="empty">${esc(emptyMsg||'Nothing here.')}</div>`;return;}
+  el.innerHTML=rows.map(rowHTML).join('');
+}
+
+function render(d){
+  d=d||{};
+  $('#greeting').textContent=d.greeting||'Good morning.';
+  $('#dateLine').textContent=d.date_line||'';
+  $('#summary').innerHTML=`<p>${esc(d.summary||'Here is your brief.')}</p>`;
+
+  const w=d.weather||{};
+  if(w && (w.temperature_c!=null||w.temp!=null)){
+    const t=Math.round(w.temperature_c!=null?w.temperature_c:w.temp);
+    $('#wx').style.display='flex';
+    $('#wxIco').textContent=wxIcon(w.condition,w.is_day!==false);
+    $('#wxTemp').textContent=t+'°';
+    $('#wxCond').textContent=(w.condition||'')+(w.feels_like_c!=null?` · feels ${Math.round(w.feels_like_c)}°`:'');
+  }
+
+  const sched=((d.prayer||{}).schedule)||[];
+  $('#pray').innerHTML=sched.map(p=>
+    `<div class="p${p.next?' next':''}${p.past&&!p.next?' past':''}"><div class="n">${esc(p.name)}</div><div class="v">${esc(p.time)}</div></div>`
+  ).join('');
+
+  const off=[]; const c=d.connected||{};
+  if(c.gmail===false)off.push('Gmail'); if(c.calendar===false)off.push('Calendar'); if(c.jams===false)off.push('JAMS');
+  if(off.length){$('#banner').classList.add('show');
+    $('#banner').innerHTML=`Some sources are offline (${off.map(esc).join(', ')}), so parts of this brief may be thin. Check <code>/health</code>.`;}
+
+  // needs you
+  const ny=d.needs_you||d.action_queue||[];
+  $('#needs').classList.toggle('clear',!ny.length);
+  chip('needsCount', ny.length?String(ny.length):'clear', !ny.length);
+  if(ny.length){ fillRows('needsRows',ny); }
+  else { $('#needsRows').innerHTML='<div class="empty"><span class="big">✓</span><span>Nothing needs a decision today.</span></div>'; }
+
+  // today
+  const ev=(d.today||{}).events||[];
+  chip('todayCount', ev.length?String(ev.length):'clear', !ev.length);
+  fillRows('todayRows', ev.map(e=>({icon:'📅',text:e.title,sub:[e.time,e.location].filter(Boolean).join(' · ')})),
+           'No events scheduled.');
+
+  // pipeline
+  const j=d.jobs||{}, ct=j.counts||{};
+  chip('jobsChip', j.total_pipeline!=null?j.total_pipeline+' active':'', !j.total_pipeline);
+  const stat=(cls,v,k)=>`<div class="stat ${cls}${(v===0||v==null)?' zero':''}"><div class="v">${v!=null?v:'—'}</div><div class="k">${k}</div></div>`;
+  $('#jobStats').innerHTML=stat('disc',j.discovered,'Live roles')+stat('applied',ct.applied,'Applied')
+                          +stat('int',ct.interview,'Interviews')+stat('off',ct.offer,'Offers');
+  fillRows('newJobs',(j.new_high_fit||[]).map(g=>({icon:'✨',text:g.title,
+      sub:[g.company,g.location].filter(Boolean).join(' · '),href:g.url,
+      tag:(g.score!=null?g.score+' fit':null),tagClass:'green'})),
+      'No new high-fit roles. Run discovery from JAMS to pull more in.');
+
+  // follow-ups
+  const fu=j.follow_ups||[];
+  chip('fuCount', fu.length?String(fu.length):'clear', !fu.length);
+  fillRows('followUps',fu.map(f=>({icon:'⏰',text:f.text,sub:f.sub,
+      tag:f.days!=null?f.days+'d':null,tagClass:'amber'})),
+      'Nothing has gone quiet — every application has had a reply or is still fresh.');
+
+  // digest
+  const dg=d.digest||{}, news=dg.news||[], mkt=dg.markets||[];
+  chip('mktChip', mkt.length?'markets':'', true);
+  let dh=`<div class="rows">`+(news.length
+      ? news.map(n=>rowHTML({icon:'📰',text:n.title,sub:n.source,href:n.url})).join('')
+      : '<div class="empty">No headlines available.</div>')+`</div>`;
+  dh+=mkt.map(m=>{
+    const v=m.change_pct;
+    // null means the feed didn't give us a change, which is not the same as
+    // no movement. Showing +0.00% for a missing field is a quiet lie.
+    const cls=v==null?'flat':(v>=0?'up':'dn');
+    const txt=v==null?'—':`${v>=0?'+':''}${v.toFixed(2)}%`;
+    return `<div class="mkt"><span class="nm">${esc(m.name||m.symbol)}</span>`
+         + `<span><span class="pr">${esc(m.price)}</span> <span class="${cls}">${txt}</span></span></div>`;
+  }).join('');
+  $('#digestCard').innerHTML=dh;
+
+  if(d.focus){$('#focus').style.display='flex';$('#focusTxt').textContent=d.focus;}
+}
+
+async function load(){
+  $('#summary').innerHTML='<div class="shimmer" style="width:88%"></div>';
+  try{
+    const r=await fetch('/brief/data',{headers:{'cache-control':'no-cache'}});
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    render(await r.json());
+  }catch(e){ $('#summary').innerHTML=`<p>Couldn't build the brief: ${esc(e.message||e)}. Is JARVIS running?</p>`; }
+}
+load();
+</script>
+</body>
+</html>

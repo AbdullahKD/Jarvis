@@ -41,7 +41,7 @@ class EvaluatorAgent:
 
     # ── Evaluation ─────────────────────────────────────────────────────────
 
-    def evaluate(
+    def _score(
         self,
         plan: TaskPlan,
         results: Dict[str, Any],
@@ -94,8 +94,40 @@ class EvaluatorAgent:
             replan_count=plan.replan_count,
             feedback=feedback,
         )
+        return result
 
+    def evaluate(
+        self,
+        plan: TaskPlan,
+        results: Dict[str, Any],
+        start_time: float,
+        planning_score: float = 1.0,
+    ) -> EvaluationResult:
+        """Synchronous score-and-persist. Prefer evaluate_async() from async
+        code — this blocks the event loop on the SQLite write."""
+        result = self._score(plan, results, start_time, planning_score)
         self._store(result)
+        self._print(result)
+        return result
+
+
+
+    async def evaluate_async(
+        self,
+        plan: TaskPlan,
+        results: Dict[str, Any],
+        start_time: float,
+        planning_score: float = 1.0,
+    ) -> EvaluationResult:
+        """Score and persist without blocking the event loop.
+
+        evaluate() writes to SQLite inline, and it is called from the async
+        request path — so every turn stalled the loop for the write, and for
+        the whole busy_timeout whenever the reminder scheduler held the file.
+        """
+        import asyncio as _asyncio
+        result = self._score(plan, results, start_time, planning_score)
+        await _asyncio.to_thread(self._store, result)
         self._print(result)
         return result
 
@@ -103,7 +135,7 @@ class EvaluatorAgent:
 
     def get_all_results(self) -> List[Dict[str, Any]]:
         """Return all evaluation results as a list of dicts."""
-        with sqlite3.connect(SQLITE_PATH) as conn:
+        with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 "SELECT * FROM evaluations ORDER BY timestamp DESC"
@@ -115,7 +147,7 @@ class EvaluatorAgent:
         Return per-model aggregate stats.
         Perfect for a benchmark comparison table.
         """
-        with sqlite3.connect(SQLITE_PATH) as conn:
+        with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute("""
                 SELECT
@@ -159,10 +191,36 @@ class EvaluatorAgent:
         print(f"📊 CSV exported → {out}")
         return out
 
+    async def store_async(self, r: EvaluationResult) -> None:
+        """Persist off the event loop.
+
+        _store() is called from the async request path. sqlite3 is blocking, so
+        every evaluation stalled the loop for the duration of the write — and
+        under contention, for the whole busy_timeout.
+        """
+        import asyncio as _asyncio
+        await _asyncio.to_thread(self._store, r)
+
     # ── Internals ──────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _connect():
+        """Open a connection with the pragmas this database needs.
+
+        WAL lets the reminder scheduler read while an evaluation is written,
+        instead of both contending for a whole-file lock; busy_timeout turns a
+        collision into a short wait rather than an immediate
+        "database is locked". ReminderStore already sets WAL on the same file —
+        this connection was still opening in the default rollback-journal mode.
+        """
+        conn = sqlite3.connect(SQLITE_PATH, timeout=10.0)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+        return conn
+
     def _init_db(self) -> None:
-        with sqlite3.connect(SQLITE_PATH) as conn:
+        with self._connect() as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS evaluations (
                     task_id TEXT PRIMARY KEY,
@@ -181,10 +239,15 @@ class EvaluatorAgent:
             """)
 
     def _store(self, r: EvaluationResult) -> None:
-        with sqlite3.connect(SQLITE_PATH) as conn:
+        with self._connect() as conn:
+            # Columns named explicitly: positional VALUES silently writes into
+            # the wrong fields the moment a column is added to the schema.
             conn.execute("""
-                INSERT OR REPLACE INTO evaluations VALUES
-                (?,?,?,?,?,?,?,?,?,?,?,?)
+                INSERT OR REPLACE INTO evaluations (
+                    task_id, model, intent, success, score,
+                    planning_score, execution_score, latency_ms,
+                    subtask_count, replan_count, feedback, timestamp
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 r.task_id, r.model, r.intent, int(r.success),
                 r.score, r.planning_score, r.execution_score,

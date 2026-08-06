@@ -7,12 +7,14 @@ Falls back to mock mode if credentials not configured.
 
 from __future__ import annotations
 
+import asyncio
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from config.settings import GOOGLE_CREDENTIALS_PATH, GOOGLE_TOKEN_PATH, GOOGLE_SCOPES
+from config.settings import google_call
 
 # Google API imports with graceful fallback
 try:
@@ -24,6 +26,42 @@ try:
     GOOGLE_AVAILABLE = True
 except ImportError:
     GOOGLE_AVAILABLE = False
+
+
+
+# Interactive OAuth opens a browser and blocks until a human finishes the
+# consent screen. Both agents are built lazily, from a property first touched
+# inside an async request handler — so running the flow there froze the entire
+# event loop (every request, every WebSocket, the reminder scheduler) until
+# someone clicked, and never returned at all on a headless deploy.
+#
+# It is now opt-in: the CLI and POST /google/reauth set this, the server does
+# not. Without it a missing token means mock mode and a clear auth_error,
+# which the adapters surface as DEGRADED rather than silently pretending.
+import os as _os_oauth
+
+def _rfc3339(dt: datetime) -> str:
+    """RFC-3339 with a trailing Z, as timeMin/timeMax want."""
+    return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _interactive_oauth_allowed() -> bool:
+    return _os_oauth.getenv("JARVIS_INTERACTIVE_OAUTH", "").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+def _persist_token(path, creds) -> None:
+    """Write the token with owner-only permissions.
+
+    It carries a refresh token for the user's mail and calendar; the default
+    umask leaves it world-readable (0644).
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(creds.to_json())
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass  # non-POSIX filesystem — content is written either way
 
 
 class CalendarAgent:
@@ -77,8 +115,7 @@ class CalendarAgent:
                     try:
                         creds.refresh(Request())
                         print("📅 CalendarAgent: refreshed expired token")
-                        GOOGLE_TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
-                        GOOGLE_TOKEN_PATH.write_text(creds.to_json())
+                        _persist_token(GOOGLE_TOKEN_PATH, creds)
                     except Exception as refresh_exc:
                         # Refresh tokens for Google "Testing" mode apps
                         # expire after 7 days. Surface this so the user
@@ -92,16 +129,23 @@ class CalendarAgent:
                         )
                         print(f"📅 CalendarAgent: {self.auth_error}")
                         return
+                elif not _interactive_oauth_allowed():
+                    self.auth_error = (
+                        "no valid token and interactive OAuth is disabled here. "
+                        "Run the CLI (python3 main.py) or POST /google/reauth to "
+                        "authorise; set JARVIS_INTERACTIVE_OAUTH=true to allow the "
+                        "browser flow from this process."
+                    )
+                    print(f"📅 CalendarAgent: {self.auth_error}")
+                    return
                 else:
-                    # No valid creds at all — interactive OAuth. Only works
-                    # if the user can see a browser open on the host running
-                    # the server.
+                    # No valid creds at all — interactive OAuth. Only reached
+                    # when explicitly permitted, because it blocks on a human.
                     flow = InstalledAppFlow.from_client_secrets_file(
                         str(GOOGLE_CREDENTIALS_PATH), GOOGLE_SCOPES
                     )
                     creds = flow.run_local_server(port=0)
-                    GOOGLE_TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
-                    GOOGLE_TOKEN_PATH.write_text(creds.to_json())
+                    _persist_token(GOOGLE_TOKEN_PATH, creds)
                     print("📅 CalendarAgent: completed fresh OAuth flow")
 
             self.service = build("calendar", "v3", credentials=creds)
@@ -146,11 +190,11 @@ class CalendarAgent:
             if attendees:
                 body["attendees"] = [{"email": e} for e in attendees]
 
-            event = self.service.events().insert(
+            event = await google_call(lambda: self.service.events().insert(
                 calendarId="primary",
                 body=body,
                 sendUpdates="all" if attendees else "none",
-            ).execute()
+            ).execute())
 
             return {
                 "success": True,
@@ -177,15 +221,19 @@ class CalendarAgent:
     ) -> Dict[str, Any]:
         """Search for calendar events in a date range."""
         # Default to this week if no dates given
-        now = datetime.utcnow()
-        start_date = start_date or now.isoformat() + "Z"
-        end_date   = end_date   or (now + timedelta(days=7)).isoformat() + "Z"
+        # utcnow() is deprecated in 3.12+ and returns a NAIVE datetime.
+        # Note the format helper: an aware datetime's isoformat() already ends
+        # in "+00:00", so the old `+ "Z"` would now emit "...+00:00Z", which
+        # the Calendar API rejects.
+        now = datetime.now(timezone.utc)
+        start_date = start_date or _rfc3339(now)
+        end_date   = end_date   or _rfc3339(now + timedelta(days=7))
 
         if self.is_mock:
             return self._mock_search(start_date, end_date, query)
 
         try:
-            result = self.service.events().list(
+            result = await google_call(lambda: self.service.events().list(
                 calendarId="primary",
                 timeMin=start_date,
                 timeMax=end_date,
@@ -193,7 +241,7 @@ class CalendarAgent:
                 singleEvents=True,
                 orderBy="startTime",
                 q=query,
-            ).execute()
+            ).execute())
 
             events = result.get("items", [])
             items = [
@@ -245,9 +293,9 @@ class CalendarAgent:
             self.mock_events = [e for e in self.mock_events if e["id"] != event_id]
             return {"success": True, "message": f"Deleted event {event_id}"}
         try:
-            self.service.events().delete(
+            await google_call(lambda: self.service.events().delete(
                 calendarId="primary", eventId=event_id
-            ).execute()
+            ).execute())
             return {"success": True, "message": f"Deleted event {event_id}"}
         except Exception as e:
             return {"success": False, "error": str(e)}

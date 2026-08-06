@@ -51,6 +51,7 @@ class SileroEndpointer:
         self._model = load_silero_vad(onnx=True)  # ONNX = faster, no torch eager mode
         self._spillover = np.zeros(0, dtype=np.int16)
         self._silence_ms = 0
+        self._speech_ms = 0
         self._has_seen_speech = False
         # ── Telemetry ──────────────────────────────────────────────────────
         # last_prob: most recent Silero speech probability (0..1) — used by
@@ -65,6 +66,7 @@ class SileroEndpointer:
     def reset(self) -> None:
         self._spillover = np.zeros(0, dtype=np.int16)
         self._silence_ms = 0
+        self._speech_ms = 0
         self._has_seen_speech = False
         self._last_prob = 0.0
         self._max_prob = 0.0
@@ -103,12 +105,17 @@ class SileroEndpointer:
 
             if prob >= self._cfg.vad_threshold:
                 self._silence_ms = 0
+                self._speech_ms += window_ms
                 self._has_seen_speech = True
             else:
                 self._silence_ms += window_ms
 
+            # Only end the turn once we've heard ENOUGH real speech followed by
+            # a clear pause. The min_speech_ms gate means a cough, click, or
+            # one-frame blip can't prematurely end listening — we wait for the
+            # user to actually start, then stop, talking.
             if (
-                self._has_seen_speech
+                self._speech_ms >= self._cfg.min_speech_ms
                 and self._silence_ms >= self._cfg.end_silence_ms
             ):
                 return "stop"
@@ -118,6 +125,11 @@ class SileroEndpointer:
     @property
     def has_seen_speech(self) -> bool:
         return self._has_seen_speech
+
+    @property
+    def speech_ms(self) -> int:
+        """Cumulative milliseconds of detected speech this utterance."""
+        return self._speech_ms
 
     @property
     def last_prob(self) -> float:

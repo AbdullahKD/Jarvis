@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Jarvis · Sentinel</title>
+<style>
+  :root{
+    --accent:#ff8090; --accent-soft:rgba(255,128,144,.10);
+    --high:#ff6b7f; --med:#ffcf6b; --low:#7fb4ff; --ok:#5ee7a8;
+    --glass:rgba(32,18,22,.72); --glass-2:rgba(38,22,26,.55);
+    --stroke:rgba(255,128,144,.14); --stroke-strong:rgba(255,128,144,.30);
+    --text-0:#fdf0f2; --text-1:#e0c8cd; --text-2:#ab8a90; --text-3:#7a5c62;
+    --r-lg:18px; --r-md:13px;
+    --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter",system-ui,sans-serif;
+    --font-mono:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,monospace;
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;margin:0;}
+  body{color:var(--text-0);font-family:var(--font);font-size:14px;
+    background:radial-gradient(1200px 720px at 84% -18%,rgba(255,128,144,.13),transparent 58%),
+      radial-gradient(1000px 640px at -8% 108%,rgba(255,107,127,.06),transparent 56%),
+      linear-gradient(165deg,#180a0e 0%,#120709 46%,#0b0406 100%);}
+  ::selection{background:rgba(255,128,144,.25);}
+
+  .chrome{height:46px;display:flex;align-items:center;gap:10px;padding:0 22px;}
+  .chrome .title{color:var(--text-2);font-size:12px;letter-spacing:.08em;text-transform:uppercase;}
+  .chrome .badge{padding:2px 9px;border-radius:999px;background:var(--accent-soft);color:var(--accent);border:1px solid var(--stroke-strong);font-size:10px;letter-spacing:.08em;text-transform:uppercase;}
+  .chrome .right{margin-left:auto;display:flex;align-items:center;gap:12px;}
+  .chrome-back{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:999px;background:var(--glass-2);border:1px solid var(--stroke);color:var(--text-2);font-size:11px;text-decoration:none;transition:.15s;}
+  .chrome-back:hover{color:var(--text-0);border-color:var(--stroke-strong);}
+
+  .wrap{max-width:1080px;margin:0 auto;padding:10px 22px 70px;}
+  h1{font-size:22px;font-weight:700;margin:14px 0 4px;letter-spacing:-.01em;}
+  .sub{color:var(--text-2);font-size:12.5px;margin-bottom:20px;font-family:var(--font-mono);}
+
+  .btn{font:inherit;font-size:12px;font-weight:600;cursor:pointer;border:1px solid var(--stroke-strong);
+    background:var(--accent-soft);color:var(--accent);border-radius:9px;padding:9px 15px;transition:.15s;
+    display:inline-flex;align-items:center;gap:7px;white-space:nowrap;}
+  .btn:hover{background:rgba(255,128,144,.2);border-color:var(--accent);}
+  .btn:disabled{opacity:.55;cursor:default;}
+
+  /* ── Verdict banner ───────────────────────────────────────────────── */
+  .verdict{display:flex;align-items:center;gap:18px;padding:20px 22px;border-radius:var(--r-lg);margin-bottom:16px;
+    border:1px solid var(--stroke-strong);background:linear-gradient(120deg,rgba(255,128,144,.09),rgba(255,128,144,.02));}
+  .verdict.clean{border-color:rgba(94,231,168,.34);background:linear-gradient(120deg,rgba(94,231,168,.10),rgba(94,231,168,.02));}
+  .shield{width:46px;height:46px;flex:none;border-radius:13px;display:grid;place-items:center;
+    background:rgba(255,128,144,.13);border:1px solid var(--stroke-strong);}
+  .verdict.clean .shield{background:rgba(94,231,168,.13);border-color:rgba(94,231,168,.34);}
+  .shield svg{width:23px;height:23px;stroke:var(--accent);fill:none;stroke-width:1.9;}
+  .verdict.clean .shield svg{stroke:var(--ok);}
+  .verdict .vt{font-size:16.5px;font-weight:700;letter-spacing:-.01em;}
+  .verdict.clean .vt{color:var(--ok);}
+  .verdict .vs{font-size:12px;color:var(--text-2);margin-top:3px;font-family:var(--font-mono);}
+  .verdict .spacer{flex:1;}
+  .counts{display:flex;gap:20px;}
+  .cnt{text-align:center;}
+  .cnt .n{font-size:24px;font-weight:700;font-family:var(--font-mono);line-height:1;}
+  .cnt .l{font-size:9px;letter-spacing:.13em;text-transform:uppercase;color:var(--text-3);margin-top:5px;}
+  .cnt.high .n{color:var(--high);} .cnt.med .n{color:var(--med);} .cnt.low .n{color:var(--low);}
+  .cnt.zero .n{color:var(--text-3);}
+
+  .filters{display:flex;gap:8px;align-items:center;margin-bottom:16px;flex-wrap:wrap;}
+  .chip{font:inherit;font-size:11.5px;font-weight:600;cursor:pointer;border:1px solid var(--stroke);
+    background:transparent;color:var(--text-2);border-radius:999px;padding:6px 13px;transition:.15s;}
+  .chip:hover{color:var(--text-0);border-color:var(--stroke-strong);}
+  .chip.on{background:var(--accent-soft);color:var(--accent);border-color:var(--stroke-strong);}
+  .filters .spacer{flex:1;}
+  .root{font-size:11px;color:var(--text-3);font-family:var(--font-mono);}
+
+  /* ── Findings ─────────────────────────────────────────────────────── */
+  .find{background:var(--glass);border:1px solid var(--stroke);border-left:3px solid var(--med);
+    border-radius:var(--r-md);padding:14px 16px;margin-bottom:10px;transition:border-color .15s,transform .12s;}
+  .find:hover{transform:translateX(2px);}
+  .find.high{border-left-color:var(--high);}
+  .find.medium{border-left-color:var(--med);}
+  .find.low{border-left-color:var(--low);}
+  .find .top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+  .sev{font-size:9px;letter-spacing:.11em;text-transform:uppercase;font-weight:700;padding:3px 8px;border-radius:6px;}
+  .sev.high{background:rgba(255,107,127,.15);color:var(--high);border:1px solid rgba(255,107,127,.35);}
+  .sev.medium{background:rgba(255,207,107,.13);color:var(--med);border:1px solid rgba(255,207,107,.32);}
+  .sev.low{background:rgba(127,180,255,.12);color:var(--low);border:1px solid rgba(127,180,255,.3);}
+  .find .ty{font-weight:650;font-size:14px;}
+  .find .loc{margin-left:auto;font-size:11px;color:var(--text-3);font-family:var(--font-mono);}
+  .find .detail{font-size:12.5px;color:var(--text-1);line-height:1.55;margin-top:8px;}
+  .find .fix{margin-top:10px;display:flex;align-items:center;gap:9px;flex-wrap:wrap;}
+  .cmd{font-family:var(--font-mono);font-size:11.5px;background:rgba(0,0,0,.34);border:1px solid var(--stroke);
+    border-radius:7px;padding:6px 10px;color:var(--text-1);user-select:all;}
+  .copy{font:inherit;font-size:10.5px;cursor:pointer;border:1px solid var(--stroke);background:transparent;
+    color:var(--text-3);border-radius:6px;padding:5px 9px;transition:.15s;}
+  .copy:hover{color:var(--accent);border-color:var(--stroke-strong);}
+
+  .grp{margin:22px 0 10px;font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--text-3);font-weight:700;}
+  .empty{text-align:center;color:var(--text-3);padding:56px 20px;font-size:13px;}
+  .empty .big{font-size:15px;color:var(--text-2);margin-bottom:6px;}
+  .skel{height:64px;border-radius:var(--r-md);margin-bottom:10px;
+    background:linear-gradient(90deg,rgba(255,128,144,.05),rgba(255,128,144,.11),rgba(255,128,144,.05));
+    background-size:200% 100%;animation:sh 1.3s infinite;}
+  @keyframes sh{0%{background-position:200% 0;}100%{background-position:-200% 0;}}
+  .spin{display:inline-block;animation:rot 1s linear infinite;}
+  @keyframes rot{to{transform:rotate(360deg);}}
+</style>
+</head>
+<body>
+  <div class="chrome">
+    <span class="title">Jarvis</span>
+    <span class="badge">Sentinel</span>
+    <div class="right">
+      <span id="clock" class="title"></span>
+      <a class="chrome-back" href="/">&larr; Back to Jarvis</a>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <h1>Sentinel &mdash; Security Scan</h1>
+    <div class="sub">Finds exposed secrets, risky permissions and git leaks in your Jarvis project. Read-only &amp; local.</div>
+
+    <div class="verdict" id="verdict">
+      <div class="shield"><svg viewBox="0 0 24 24"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z"/></svg></div>
+      <div>
+        <div class="vt" id="vTitle">Scanning&hellip;</div>
+        <div class="vs" id="vSub">Walking the project tree</div>
+      </div>
+      <div class="spacer"></div>
+      <div class="counts" id="counts"></div>
+      <button class="btn" id="rescan">&#8635; Rescan</button>
+    </div>
+
+    <div class="filters" id="filters">
+      <button class="chip on" data-f="all">All</button>
+      <button class="chip" data-f="high">High</button>
+      <button class="chip" data-f="medium">Medium</button>
+      <button class="chip" data-f="low">Low</button>
+      <span style="width:1px;height:20px;background:var(--stroke);margin:0 4px"></span>
+      <button class="chip" id="modeTree" data-m="tree">Working tree</button>
+      <button class="chip" id="modeHist" data-m="history">Git history</button>
+      <span class="spacer"></span>
+      <span class="root" id="root"></span>
+    </div>
+
+    <div id="list"><div class="skel"></div><div class="skel"></div><div class="skel"></div></div>
+  </div>
+
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+const esc = s => (s||"").replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+let FINDINGS = [], FILTER = "all", MODE = "tree";
+
+/* The scanner puts a shell command in the detail text for the fixable cases.
+   Pulling it out into its own copyable block is the difference between "here
+   is a problem" and "here is the fix" — the whole point of a scanner you run
+   on your own machine. */
+function splitFix(detail){
+  const m = String(detail||"").match(/(?:Run|Untrack with):\s*(.+?)(?:,\s*then|\.$|$)/);
+  if (!m) return { text: detail, cmd: null };
+  return { text: detail.slice(0, m.index).trim(), cmd: m[1].trim().replace(/\.$/, "") };
+}
+
+async function load(){
+  $("#rescan").disabled = true;
+  $("#rescan").innerHTML = '<span class="spin">&#8635;</span> Scanning…';
+  try{
+    const d = await (await fetch("/sentinel/data?history=" + (MODE === "history"))).json();
+    FINDINGS = d.findings || [];
+    $("#root").textContent = String(d.root||"").replace(/^\/Users\/[^/]+/, "~");
+    renderVerdict(d.summary || {});
+    renderList();
+  }catch(e){
+    $("#list").innerHTML = '<div class="empty"><div class="big">Couldn&rsquo;t reach Jarvis.</div>Is the server running?</div>';
+    $("#vTitle").textContent = "Scan failed";
+    $("#vSub").textContent = "No response from the server";
+  }
+  $("#rescan").disabled = false;
+  $("#rescan").innerHTML = "&#8635; Rescan";
+}
+
+function renderVerdict(sum){
+  const high = sum.high||0, med = sum.medium||0, low = sum.low||0;
+  const total = high + med + low;
+  const v = $("#verdict");
+  v.classList.toggle("clean", total === 0);
+  $("#vTitle").textContent = total === 0 ? "Nothing exposed"
+    : high ? (high + " issue" + (high===1?"":"s") + " needing attention")
+           : "Worth a look";
+  $("#vSub").textContent = total === 0
+    ? (MODE === "history"
+        ? "No credentials found in past commits"
+        : "No secrets, permissions or git leaks found")
+    : total + " finding" + (total===1?"":"s")
+      + (MODE === "history" ? " in git history" : " across the project");
+  $("#counts").innerHTML = [["high","High",high],["med","Medium",med],["low","Low",low]]
+    .map(x => '<div class="cnt ' + x[0] + (x[2] ? "" : " zero") + '"><div class="n">'
+      + x[2] + '</div><div class="l">' + x[1] + '</div></div>').join("");
+}
+
+function renderList(){
+  const items = FILTER === "all" ? FINDINGS : FINDINGS.filter(f => f.severity === FILTER);
+  if (!items.length){
+    $("#list").innerHTML = FINDINGS.length
+      ? '<div class="empty"><div class="big">No ' + esc(FILTER) + ' findings.</div>Try another filter.</div>'
+      : '<div class="empty"><div class="big">Clean.</div>No exposed secrets, loose permissions or committed credentials.</div>';
+    return;
+  }
+  // Grouped by severity so the thing that matters is at the top and stays there.
+  const order = ["high","medium","low"];
+  let html = "";
+  for (const sev of order){
+    const group = items.filter(f => f.severity === sev);
+    if (!group.length) continue;
+    if (FILTER === "all") html += '<div class="grp">' + sev + ' &middot; ' + group.length + '</div>';
+    html += group.map(f => {
+      const fix = splitFix(f.detail);
+      return '<div class="find ' + esc(f.severity) + '">'
+        + '<div class="top"><span class="sev ' + esc(f.severity) + '">' + esc(f.severity) + '</span>'
+        + '<span class="ty">' + esc(f.type) + '</span>'
+        + '<span class="loc">' + esc(f.file) + (f.line ? ":" + f.line : "") + '</span></div>'
+        + '<div class="detail">' + esc(fix.text) + '</div>'
+        + (fix.cmd ? '<div class="fix"><code class="cmd">' + esc(fix.cmd) + '</code>'
+            + '<button class="copy" data-cmd="' + esc(fix.cmd) + '">Copy</button></div>' : "")
+        + '</div>';
+    }).join("");
+  }
+  $("#list").innerHTML = html;
+  $("#list").querySelectorAll(".copy").forEach(b => {
+    b.onclick = async () => {
+      try{ await navigator.clipboard.writeText(b.dataset.cmd); b.textContent = "Copied"; }
+      catch(e){ b.textContent = "Select it"; }
+      setTimeout(() => { b.textContent = "Copy"; }, 1400);
+    };
+  });
+}
+
+$("#filters").addEventListener("click", e => {
+  const b = e.target.closest(".chip"); if (!b) return;
+  if (b.dataset.m){
+    MODE = b.dataset.m;
+    $("#modeTree").classList.toggle("on", MODE === "tree");
+    $("#modeHist").classList.toggle("on", MODE === "history");
+    load();
+    return;
+  }
+  $("#filters").querySelectorAll(".chip[data-f]").forEach(x => x.classList.toggle("on", x === b));
+  FILTER = b.dataset.f;
+  renderList();
+});
+$("#rescan").addEventListener("click", load);
+
+function tick(){ $("#clock").textContent = new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}); }
+tick(); setInterval(tick, 30000);
+load();
+</script>
+</body>
+</html>

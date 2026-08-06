@@ -14,18 +14,8 @@ _POOL_MAX  = int(os.environ.get("FINEX_PG_POOL_MAX", "8"))
 
 
 def _build_pool():
-    """Construct the pool lazily using the same DSN as db_insert.get_connection.
-
-    Honours DATABASE_URL (Fly.io / Neon / etc) when set, else falls back to
-    the local-dev defaults — kept in sync with db_insert.get_connection.
-    """
-    dsn = os.environ.get("DATABASE_URL")
-    if dsn:
-        return _pg_pool.ThreadedConnectionPool(
-            minconn=_POOL_MIN,
-            maxconn=_POOL_MAX,
-            dsn=dsn,
-        )
+    """Construct the pool lazily against the same local Postgres instance as
+    db_insert.get_connection — keep the two in sync."""
     return _pg_pool.ThreadedConnectionPool(
         minconn=_POOL_MIN,
         maxconn=_POOL_MAX,

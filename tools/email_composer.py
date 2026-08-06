@@ -91,8 +91,92 @@ CRITICAL IDENTITY RULES:
 - Sign off as "Jarvis" (optionally "Jarvis, on behalf of Abdullah").
 
 Format rules: no subject line, 1-3 short paragraphs, end with sign-off then "Jarvis".
+This is a legitimate reply that Abdullah has approved — write it, do not refuse.
 
 Reply body:"""
+
+
+def _looks_like_refusal(text: str) -> bool:
+    """
+    True if the model declined or returned nothing usable. Small local models
+    (e.g. the 1B router) sometimes answer a reply request with "I can't fulfill
+    this request." — which must never become the email body.
+    """
+    if not text or len(text.strip()) < 3:
+        return True
+    low = text.strip().lower()
+    markers = (
+        "i can't", "i cannot", "i can not", "i'm unable", "i am unable",
+        "i won't", "i will not", "can't fulfill", "cannot fulfill",
+        "unable to fulfill", "as an ai", "i'm sorry, but", "i am sorry, but",
+        "i'm not able", "i am not able", "i'm just an ai",
+    )
+    return any(m in low for m in markers)
+
+
+# Named emoji → character, for instructions like "reply with a heart emoji".
+_EMOJI_NAME_MAP = {
+    "red heart": "❤️", "heart": "❤️", "hearts": "❤️", "love heart": "❤️",
+    "thumbs up": "👍", "thumbs-up": "👍", "thumb up": "👍",
+    "thumbs down": "👎", "thumbs-down": "👎",
+    "smiley": "🙂", "smile": "🙂", "smiling": "🙂",
+    "laughing": "😂", "laugh": "😂", "crying laughing": "😂",
+    "winking": "😉", "wink": "😉", "cool": "😎",
+    "fire": "🔥", "wave": "👋", "waving": "👋",
+    "clapping": "👏", "clap": "👏", "praying": "🙏", "pray": "🙏",
+    "folded hands": "🙏", "thank you": "🙏", "thankyou": "🙏", "thanks": "🙏",
+    "checkmark": "✅", "check mark": "✅",
+    "tick": "✅", "check": "✅", "star": "⭐", "sparkles": "✨",
+    "thinking": "🤔", "crying": "😢", "cry": "😢",
+    "party": "🎉", "tada": "🎉", "celebration": "🎉",
+    "rocket": "🚀", "eyes": "👀", "ok hand": "👌", "okay hand": "👌",
+    "hundred": "💯", "raised hands": "🙌",
+}
+
+# Emoji codepoint ranges (all ≥ U+2190, so ASCII text never matches).
+_EMOJI_CHAR_RE = re.compile(
+    "["
+    "\U0001F300-\U0001FAFF"   # symbols, pictographs, supplemental, faces
+    "\U00002600-\U000027BF"   # misc symbols + dingbats
+    "\U0001F1E6-\U0001F1FF"   # regional indicators (flags)
+    "\U00002190-\U000021FF"   # arrows
+    "\U00002B00-\U00002BFF"   # misc symbols & arrows
+    "\U0000FE00-\U0000FE0F"   # variation selectors
+    "\U0001F000-\U0001F0FF"   # mahjong/dominoes/cards
+    "]"
+)
+
+
+def literal_emoji_reply(instruction: str) -> Optional[str]:
+    """
+    If the reply instruction is essentially "send this emoji", return the emoji
+    string to use verbatim as the body; otherwise None (use the normal LLM path).
+
+    Two cases:
+      1. The instruction already contains emoji characters and is short
+         (e.g. "❤️", "reply 👍") → use those characters directly.
+      2. The instruction names an emoji AND says "emoji" (e.g. "a heart emoji",
+         "thumbs up emoji") → map the name to the character. Requiring the word
+         "emoji" keeps common words like "thanks" or "like" from being hijacked
+         into 🙏/👍 when the user actually wants those words in the reply.
+    """
+    if not instruction:
+        return None
+    text = instruction.strip()
+    words = re.findall(r"[A-Za-z']+", text)
+
+    found = _EMOJI_CHAR_RE.findall(text)
+    if found and len(words) <= 4:
+        return "".join(found)
+
+    low = text.lower()
+    if "emoji" not in low:
+        return None
+    # Longest names first so "thumbs up" wins over "up".
+    for name, ch in sorted(_EMOJI_NAME_MAP.items(), key=lambda kv: -len(kv[0])):
+        if name in low:
+            return ch
+    return None
 
 _EDIT_SYSTEM_PROMPT = (
     "You are an email-editing tool. Your only job is to take an existing "
@@ -137,6 +221,12 @@ class EmailDraft:
     intent: str
     contact_found: bool = False
     needs_email: bool = False
+    # ── Reply support ──────────────────────────────────────────────────────
+    # When is_reply is True the draft is a reply to original_email, and the
+    # confirm step must send it via GmailAgent.reply_to_email (in-thread,
+    # preserving threadId / In-Reply-To) rather than send_email (new message).
+    is_reply: bool = False
+    original_email: Optional[Dict[str, Any]] = None
 
 
 # ── Zero-LLM templates ────────────────────────────────────────────────────────
@@ -253,6 +343,9 @@ class EmailComposer:
         recipient_name  = self._extract_recipient(raw)
         topic           = self._extract_topic(raw, recipient_name)
         tone            = self._detect_tone(raw, recipient_name, contact_book)
+        # A fast regex-built subject is computed first as an instant fallback.
+        # The LLM-refined subject is generated in Phase 2 (below) once we have
+        # the body for additional context.
         subject         = self._build_subject(topic)
 
         # ── Phase 1b: contact book resolution ────────────────────────────────
@@ -288,6 +381,13 @@ class EmailComposer:
                 tone=tone,
             )
 
+        # ── Phase 2b: LLM-refined subject (2-3 words) ────────────────────────
+        # The regex subject above is a literal restatement of the topic and
+        # often reads awkwardly ("Introducing jarvis and jarvis's capabilities").
+        # Ask the fast model for a tight 2-3 word subject; fall back to the
+        # regex subject if the model is unavailable or returns junk.
+        subject = await self._generate_subject(topic or raw, body, fallback=subject)
+
         return EmailDraft(
             recipient_name=recipient_name,
             recipient_email=recipient_email,
@@ -310,27 +410,46 @@ class EmailComposer:
         subject = original_email.get("subject", "")
         topic = reply_instruction
 
+        # Literal emoji reply — "reply with a heart emoji" should send "❤️",
+        # not a model-written paragraph. Handled before the LLM so it's exact.
+        emoji = literal_emoji_reply(reply_instruction)
+        if emoji:
+            return emoji
+
         # Try template first
         body = self._try_template(name, topic, "professional")
         if body:
             return body
 
         prompt = _REPLY_PROMPT.format(name=name, subject=subject, topic=topic)
-        try:
-            body = await self.llm.chat(
-                [{"role": "user", "content": prompt}],
-                model=OLLAMA_ROUTER_MODEL,
-                inject_system=False,
-                max_tokens=400,
-                num_ctx=512,
-            )
-            return body.strip()
-        except Exception:
-            return (
+
+        async def _attempt(model) -> str:
+            try:
+                out = await self.llm.chat(
+                    [{"role": "user", "content": prompt}],
+                    model=model,
+                    inject_system=False,
+                    max_tokens=400,
+                    num_ctx=512,
+                )
+                return (out or "").strip()
+            except Exception:
+                return ""
+
+        # Fast path: the 1B router model. If it refuses or returns nothing,
+        # retry once on the main chat model (stronger, far less likely to
+        # refuse). Only if BOTH fail do we use the deterministic fallback.
+        body = await _attempt(OLLAMA_ROUTER_MODEL)
+        if _looks_like_refusal(body):
+            body = await _attempt(None)  # None → OllamaClient's default chat model
+        if _looks_like_refusal(body):
+            body = (
                 f"Hi {name},\n\n"
-                f"{reply_instruction}\n\n"
-                f"Best,\nAbdullah"
+                f"Thanks for your email regarding \"{subject}\". "
+                f"Abdullah asked me to reply on his behalf: {reply_instruction}.\n\n"
+                f"Best,\nJarvis (on behalf of Abdullah)"
             )
+        return body
 
     async def edit_body(self, body: str, instruction: str) -> str:
         """Apply an edit instruction to an existing email body."""
@@ -537,6 +656,120 @@ class EmailComposer:
         if len(subject) > 70:
             subject = subject[:67].rsplit(" ", 1)[0] + "..."
         return subject
+
+    # Phrases the small model sometimes wraps around a subject — stripped out
+    # so we keep only the bare 2-3 word line.
+    _SUBJECT_STRIP_PREFIX = re.compile(
+        r'^\s*(subject|re|here(?:\'s| is)?(?: a| the)?(?: suggested)?(?: subject)?'
+        r'(?: line)?|suggested subject|email subject|the subject is)\s*[:\-–]?\s*',
+        re.IGNORECASE,
+    )
+
+    async def _generate_subject(self, topic: str, body: str = "", fallback: str = "") -> str:
+        """
+        Ask the LLM for a concise 2-3 word email subject.
+
+        IMPORTANT: the subject is derived from the email's PURPOSE (the topic
+        the user described), NOT the generated body. Feeding the body in caused
+        the subject to inherit any drift in the body (e.g. a "what are you up to
+        today?" email picking up the word "schedule" and producing
+        "MANAGING ABN'S SCHEDULE"). The body is far more likely to wander than
+        the user's own one-line instruction, so we anchor on the topic.
+
+        Uses the default (warm, more capable) chat model rather than the 1b
+        router model — the 1b model is too unreliable here and the output is
+        tiny (≤12 tokens), so the latency cost is negligible. Few-shot examples
+        steer it toward a clean Title Case phrase.
+        """
+        seed = (topic or body or "").strip()
+        if not seed:
+            return fallback or self._build_subject(topic)
+
+        prompt = (
+            "You write short email subject lines.\n"
+            "Given the PURPOSE of an email, output ONLY a subject of 2-4 words "
+            "in Title Case. No quotes, no 'Subject:' prefix, no ALL CAPS, no "
+            "abbreviations, no end punctuation. Describe the purpose; never "
+            "greet the recipient.\n\n"
+            "Purpose: asking her what she has going on today\n"
+            "Subject: Your Plans Today\n\n"
+            "Purpose: introducing yourself and your capabilities\n"
+            "Subject: Quick Introduction\n\n"
+            "Purpose: following up on the invoice from last week\n"
+            "Subject: Invoice Follow-Up\n\n"
+            "Purpose: thanking the team for the product launch\n"
+            "Subject: Thank You\n\n"
+            f"Purpose: {seed[:200]}\n"
+            "Subject:"
+        )
+        try:
+            raw = await self.llm.chat(
+                [{"role": "user", "content": prompt}],
+                inject_system=False,   # default chat model, no Jarvis persona
+                max_tokens=12,
+            )
+        except Exception as exc:
+            print(f"⚠️  Subject generation failed: {exc} — using regex subject")
+            return fallback or self._build_subject(topic)
+
+        return self._clean_subject(raw, fallback or self._build_subject(topic))
+
+    def _clean_subject(self, raw: str, fallback: str) -> str:
+        """Sanitise raw LLM output into a clean 2-4 word subject line."""
+        if not raw:
+            return fallback
+        # First non-empty line only — the model occasionally adds commentary.
+        line = next((l.strip() for l in raw.splitlines() if l.strip()), "")
+        # Strip wrapping quotes and a leading "Subject:"/"Here's a subject:" etc.
+        line = line.strip().strip('"\'`').strip()
+        line = self._SUBJECT_STRIP_PREFIX.sub("", line).strip().strip('"\'`').strip()
+        # Drop trailing punctuation.
+        line = line.rstrip(".!?,;:—- ").strip()
+        if not line:
+            return fallback
+        # Clamp to at most 4 words so a runaway sentence can't become the subject.
+        words = line.split()
+        if len(words) > 4:
+            words = words[:4]
+        # Drop trailing connector words left dangling by the clamp
+        # ("A Message From The" → "A Message").
+        while len(words) > 2 and words[-1].lower() in self._TITLE_LOWER:
+            words.pop()
+        line = " ".join(words)
+        # Reject degenerate one-character / refusal-ish output.
+        if len(line) < 2 or line.lower() in {"subject", "email", "n/a", "none"}:
+            return fallback
+        return self._titlecase_subject(line)
+
+    # Small words kept lowercase in a title (unless they're the first word).
+    _TITLE_LOWER = {
+        "a", "an", "the", "and", "or", "but", "for", "nor", "of", "on",
+        "in", "to", "with", "at", "by", "from", "as", "per",
+    }
+
+    def _titlecase_subject(self, line: str) -> str:
+        """Normalise a subject to clean Title Case.
+
+        Fixes ALL-CAPS model output ("MANAGING ABN'S SCHEDULE" →
+        "Managing Abn's Schedule") while keeping short connector words lower.
+        Handles hyphenated words ("follow-up" → "Follow-Up").
+        """
+        def cap_word(w: str) -> str:
+            # Capitalise each hyphen-separated part so "follow-up" → "Follow-Up".
+            return "-".join(
+                (p[0].upper() + p[1:].lower()) if p else p
+                for p in w.split("-")
+            )
+
+        words = line.split()
+        out = []
+        for i, w in enumerate(words):
+            lw = w.lower()
+            if i != 0 and lw in self._TITLE_LOWER:
+                out.append(lw)
+            else:
+                out.append(cap_word(w))
+        return " ".join(out)
 
     def _parse_name_from_address(self, address: str) -> str:
         """Extract display name from 'Name <email>' format."""

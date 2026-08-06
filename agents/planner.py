@@ -33,7 +33,7 @@ Available agents and their actions:
 - research:   deep_research, summarise_research
 - news:       get_headlines, search_news
 - weather:    get_current, get_forecast
-- mac:        open_app, set_volume, set_brightness, get_clipboard, send_notification
+- mac:        open_app, set_volume (level 0-100), set_brightness (level 0-100), get_clipboard, send_notification
 - spotify:    play_track, pause, skip, search_tracks, get_now_playing
 - file:       find_file, read_file, move_file
 - document:   extract_text, summarise_document

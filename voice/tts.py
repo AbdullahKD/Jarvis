@@ -56,6 +56,30 @@ class StreamingTTS:
         self._cfg = config
         self._client = ElevenLabs(api_key=config.elevenlabs_api_key)
 
+        # Build the expressive voice settings once. Wrapped so an older SDK
+        # without one of these fields still works (we just drop the extras).
+        self._voice_settings = None
+        try:
+            from elevenlabs import VoiceSettings
+            try:
+                self._voice_settings = VoiceSettings(
+                    stability=config.elevenlabs_stability,
+                    similarity_boost=config.elevenlabs_similarity,
+                    style=config.elevenlabs_style,
+                    use_speaker_boost=config.elevenlabs_speaker_boost,
+                    speed=config.elevenlabs_speed,
+                )
+            except TypeError:
+                # Older SDK without `speed`.
+                self._voice_settings = VoiceSettings(
+                    stability=config.elevenlabs_stability,
+                    similarity_boost=config.elevenlabs_similarity,
+                    style=config.elevenlabs_style,
+                    use_speaker_boost=config.elevenlabs_speaker_boost,
+                )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Could not build VoiceSettings (%s) — using voice defaults", exc)
+
         self._stop = threading.Event()
         self._done = threading.Event()
         self._done.set()
@@ -115,39 +139,89 @@ class StreamingTTS:
         `on_first_audio` (optional, no-args) fires once the first sentence
         begins playing — used by VoiceSession to flip state from
         "thinking" → "speaking" so the UI orb updates the moment the user
-        starts hearing audio (typically within ~150 ms of the first
-        sentence being enqueued).
+        starts hearing audio.
+
+        Pipelined design (eliminates the inter-sentence lag)
+        ----------------------------------------------------
+        A background *producer* thread pulls sentences off ``sentence_queue``,
+        synthesises each via ElevenLabs, and pushes the raw PCM chunks onto an
+        internal ``pcm_q``. THIS thread plays ``pcm_q`` as ONE continuous
+        output stream.
+
+        The win: synthesis of sentence N+1 runs *while* sentence N is still
+        playing (the player consumes at real-time playback rate and
+        back-pressures the producer through blocking writes), so there are no
+        dead gaps between sentences and no per-sentence stream open/close
+        clicks. The first sentence uses the fast/low-latency model for a
+        snappy start; later sentences use the natural model, synthesised ahead
+        of time so the extra latency is hidden behind earlier playback.
         """
-        first = True
-        while True:
-            sentence = sentence_queue.get()
-            if sentence is None:
-                return
-            if not sentence or not sentence.strip():
-                continue
-            if self._stop.is_set():
-                return
-            if first and on_first_audio is not None:
-                try:
-                    on_first_audio()
-                except Exception:
-                    pass
-                first = False
+        import queue as _queue
+        import threading as _threading
+
+        from .audio import play_pcm_stream as _play
+
+        pcm_q: "_queue.Queue" = _queue.Queue()
+        _SENTINEL = object()
+
+        def _producer() -> None:
+            first = True
             try:
-                pcm = self._elevenlabs_stream(sentence.strip())
-                # play_pcm_stream blocks for the duration of this sentence,
-                # which is exactly what we want — sentences play in order.
-                from .audio import play_pcm_stream as _play
-                _play(
-                    pcm,
-                    sample_rate=ELEVENLABS_SAMPLE_RATE,
-                    stop_event=self._stop,
-                )
-            except Exception as exc:  # noqa: BLE001
-                log.warning("speak_sentence_stream: sentence skipped: %s", exc)
-                # Best-effort: keep draining the queue even if one sentence
-                # fails — a single 429 shouldn't kill the whole turn.
-                continue
+                while True:
+                    sentence = sentence_queue.get()
+                    if sentence is None:
+                        break
+                    if not sentence or not sentence.strip():
+                        continue
+                    if self._stop.is_set():
+                        break
+                    # First sentence → fast model (snappy time-to-first-word);
+                    # subsequent sentences → natural model, pre-synthesised
+                    # while earlier audio is still playing so their higher
+                    # latency never reaches the listener as a gap.
+                    model = (
+                        self._cfg.elevenlabs_fast_model if first
+                        else self._cfg.elevenlabs_model
+                    )
+                    first = False
+                    try:
+                        for chunk in self._elevenlabs_stream(
+                            sentence.strip(), model_override=model
+                        ):
+                            if self._stop.is_set():
+                                break
+                            if chunk:
+                                pcm_q.put(chunk)
+                    except Exception as exc:  # noqa: BLE001
+                        # A single 429 / transient error shouldn't kill the
+                        # whole turn — skip this sentence and keep going.
+                        log.warning(
+                            "speak_sentence_stream: sentence skipped: %s", exc
+                        )
+                        continue
+            finally:
+                pcm_q.put(_SENTINEL)
+
+        producer = _threading.Thread(
+            target=_producer, name="tts-synth-producer", daemon=True
+        )
+        producer.start()
+
+        def _pcm_iter():
+            while True:
+                item = pcm_q.get()
+                if item is _SENTINEL:
+                    return
+                yield item
+
+        # One continuous stream for the whole answer: a single pre-roll at the
+        # very start, then gap-free playback as sentences stream in.
+        _play(
+            _pcm_iter(),
+            sample_rate=ELEVENLABS_SAMPLE_RATE,
+            stop_event=self._stop,
+            on_first_audio=on_first_audio,
+        )
 
     # ── Internals ──────────────────────────────────────────────────────────
 
@@ -165,20 +239,43 @@ class StreamingTTS:
         finally:
             self._done.set()
 
-    def _elevenlabs_stream(self, text: str) -> Iterator[bytes]:
+    def _pick_model(self, text: str, model_override: Optional[str]) -> str:
+        """
+        Choose the synthesis model. Short, quick replies use the fast/low-
+        latency model so the answer is spoken almost immediately; longer text
+        uses the natural model. Callers can force a model via model_override.
+        """
+        if model_override:
+            return model_override
+        if len(text.strip()) <= self._cfg.elevenlabs_fast_max_chars:
+            return self._cfg.elevenlabs_fast_model
+        return self._cfg.elevenlabs_model
+
+    def _elevenlabs_stream(
+        self, text: str, model_override: Optional[str] = None
+    ) -> Iterator[bytes]:
         """Yield raw PCM int16 bytes from the ElevenLabs streaming endpoint."""
+        model_id = self._pick_model(text, model_override)
         log.debug(
             "tts.elevenlabs: voice=%s model=%s len=%d",
             self._cfg.elevenlabs_voice_id,
-            self._cfg.elevenlabs_model,
+            model_id,
             len(text),
         )
-        stream = self._client.text_to_speech.stream(
+        kwargs = dict(
             voice_id=self._cfg.elevenlabs_voice_id,
-            model_id=self._cfg.elevenlabs_model,
+            model_id=model_id,
             text=text,
             output_format=ELEVENLABS_OUTPUT_FORMAT,
         )
+        if self._voice_settings is not None:
+            kwargs["voice_settings"] = self._voice_settings
+        try:
+            stream = self._client.text_to_speech.stream(**kwargs)
+        except TypeError:
+            # SDK doesn't accept voice_settings on stream() — retry without it.
+            kwargs.pop("voice_settings", None)
+            stream = self._client.text_to_speech.stream(**kwargs)
         for chunk in stream:
             if self._stop.is_set():
                 break

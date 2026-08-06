@@ -10,9 +10,12 @@ Cannot run Postgres or Ollama from this sandbox, so we:
 
 from __future__ import annotations
 import os, sys, types, time, json, re
+from pathlib import Path
 
 # Stub psycopg2 (already installed) — also stub the connection function so import-time db_query works
-ROOT = "/sessions/eloquent-affectionate-volta/mnt/Jarvis"
+# Resolve the project root relative to this file so the test runs on any
+# machine (the previous hardcoded sandbox path broke `python tests/...`).
+ROOT = str(Path(__file__).resolve().parent.parent)
 sys.path.insert(0, ROOT)
 
 # --- Monkeypatch db_insert.get_connection so importing db_query doesn't try to connect ---

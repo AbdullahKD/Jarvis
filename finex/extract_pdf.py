@@ -1078,7 +1078,7 @@ _STMT_NAMES = {
 
 
 def _llm_available() -> bool:
-    """Probe the active LLM backend (Groq in cloud, Ollama locally)."""
+    """Probe the local Ollama server."""
     try:
         from finex._llm_helper import health_check
         return health_check()

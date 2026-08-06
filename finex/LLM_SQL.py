@@ -13,6 +13,7 @@ All 8 improvements implemented:
 
 import re
 import requests
+from typing import Optional
 from finex.db_query import run_query, get_financial_context, get_all_years, format_result
 from finex.chroma_store import pdf_store
 
@@ -65,7 +66,7 @@ _session = requests.Session()
 
 def ask_llm(prompt: str, system: str = "", num_ctx: int = 4096) -> str:
     """
-    Send a prompt to the active LLM backend (Groq in cloud, Ollama locally).
+    Send a prompt to the local Ollama server.
     Returns the assistant content or an "[LLM error: ...]" string on failure.
     """
     from finex._llm_helper import chat_sync
@@ -84,11 +85,8 @@ def ask_llm(prompt: str, system: str = "", num_ctx: int = 4096) -> str:
 
 def warm_model() -> bool:
     """Pre-load the model so the first user question doesn't pay cold-start.
-    On Groq there's nothing to warm — just probe /models. On Ollama we send
-    a 1-token chat to load the model into memory."""
-    from finex._llm_helper import health_check, _backend, chat_sync
-    if _backend() == "groq":
-        return health_check()
+    Sends a 1-token chat to load the model into Ollama's memory."""
+    from finex._llm_helper import chat_sync
     try:
         # 1-token Ollama warm-up
         chat_sync(
@@ -392,35 +390,72 @@ L1_WORDS = [
 
 _INTERROGATIVE_RX = re.compile(r"\b(why|how|what causes|what drove|what is driving|what's driving)\b")
 
+# Qualitative / narrative questions about the business that live in the report's
+# MD&A and directors' review, NOT in the numeric tables. These must NOT be
+# treated as ratio (L3) or retrieval (L1) questions — they route to TEXT, which
+# does semantic retrieval over the report narrative.
+NARRATIVE_PHRASES = [
+    "rundown", "overview", "operational improvement", "operational improvements",
+    "operational highlight", "operational highlights", "operating highlights",
+    "business highlights", "key highlights", "highlights of", "key developments",
+    "major developments", "business review", "operational review", "milestones",
+    "achievements", "summary of operations", "what happened", "key events",
+    "operational change", "operational changes", "initiatives",
+]
+
+
+def _term_rx(term: str) -> "re.Pattern":
+    # Word-boundary match that treats the term atomically. Stops the classic
+    # substring false-positives, e.g. "ratio" inside "ope-ratio-nal" or
+    # "vs" inside "vsomething". Cached on the function attribute.
+    cache = _term_rx.__dict__
+    rx = cache.get(term)
+    if rx is None:
+        rx = re.compile(r"(?<![a-z0-9])" + re.escape(term) + r"(?![a-z0-9])")
+        cache[term] = rx
+    return rx
+
+
+def _matches(q: str, terms) -> bool:
+    """True if any term appears in q as a whole word/phrase (boundary-aware)."""
+    return any(_term_rx(t).search(q) for t in terms)
+
 
 def route_question(question: str, history: str = "") -> str:
     q = question.lower().strip()
 
-    if any(p in q for p in DETAIL_PHRASES):
+    if _matches(q, DETAIL_PHRASES):
         return "DETAIL"
 
-    if any(w in q for w in OFF_TOPIC_WORDS):
+    if _matches(q, OFF_TOPIC_WORDS):
         financial_words = ["revenue", "profit", "asset", "liability", "cash", "cement",
                            "company", "financial", "report", "turnover", "margin",
                            "equity", "debt", "income", "expense", "earnings", "ratio"]
-        if not any(fw in q for fw in financial_words):
+        if not _matches(q, financial_words):
             return "OFF_TOPIC"
 
     # Disambiguator: "compare ROE 2024 vs 2025" — has L2 + L3 cues; ratio wins.
-    has_l3 = any(p in q for p in L3_PHRASES) or any(w in q for w in L3_WORDS)
-    has_l2 = any(p in q for p in L2_PHRASES) or any(w in q for w in L2_WORDS)
+    has_l3 = _matches(q, L3_PHRASES) or _matches(q, L3_WORDS)
+    has_l2 = _matches(q, L2_PHRASES) or _matches(q, L2_WORDS)
 
-    if any(p in q for p in L6_PHRASES):
+    if _matches(q, L6_PHRASES):
         return "L6"
 
-    if any(p in q for p in L5_PHRASES):
+    if _matches(q, L5_PHRASES):
         return "L5"
-    if any(w in q for w in L5_WORDS) and any(w in q for w in ["investor", "invest", "attractive", "health", "healthy"]):
+    if _matches(q, L5_WORDS) and _matches(q, ["investor", "invest", "attractive", "health", "healthy"]):
         return "L5"
 
-    if any(p in q for p in L4_PHRASES):
+    # Narrative/qualitative business questions → report-text retrieval, but only
+    # when there is no explicit ratio/metric cue (so "operating margin overview"
+    # still goes to L3). Placed above L4/L3/L2 so "operational improvements"
+    # no longer falls through to a ratio calculation.
+    if _matches(q, NARRATIVE_PHRASES) and not has_l3:
+        return "TEXT"
+
+    if _matches(q, L4_PHRASES):
         return "L4"
-    if any(w in q for w in L4_WORDS):
+    if _matches(q, L4_WORDS):
         return "L4"
 
     # L3 wins over L2 when both fire
@@ -433,12 +468,12 @@ def route_question(question: str, history: str = "") -> str:
     if len(year_matches) >= 2:
         return "L2"
 
-    if any(p in q for p in TEXT_PHRASES):
+    if _matches(q, TEXT_PHRASES):
         return "TEXT"
 
-    if any(p in q for p in L1_PHRASES):
+    if _matches(q, L1_PHRASES):
         return "L1"
-    if any(w in q for w in L1_WORDS):
+    if _matches(q, L1_WORDS):
         return "L1"
 
     if re.search(r"\b20\d{2}\b", q):
@@ -863,9 +898,35 @@ LEVEL_NUMBERS = {
 }
 
 
-def answer(question: str, company: str = "Bestway Cement", history: str = "") -> tuple:
-    category = route_question(question, history)
-    print(f"  [Routed to: {category}]")
+# Map an explicit user-selected level to a router category. Used when the FinEx
+# UI forces a level (L1–L6) instead of leaving it on "Auto".
+_FORCED_CATEGORY = {
+    1: "L1", 2: "L2", 3: "L3", 4: "L4", 5: "L5", 6: "L6",
+    "1": "L1", "2": "L2", "3": "L3", "4": "L4", "5": "L5", "6": "L6",
+    "l1": "L1", "l2": "L2", "l3": "L3", "l4": "L4", "l5": "L5", "l6": "L6",
+}
+
+
+def _normalize_level(level) -> Optional[str]:
+    """Return a forced category for an explicit level, or None for auto-routing."""
+    if level is None:
+        return None
+    if isinstance(level, str) and level.strip().lower() in ("auto", "", "0"):
+        return None
+    return _FORCED_CATEGORY.get(level) or _FORCED_CATEGORY.get(str(level).strip().lower())
+
+
+def answer(question: str, company: str = "Bestway Cement", history: str = "", level=None) -> tuple:
+    forced = _normalize_level(level)
+    if forced:
+        # User explicitly picked a level — respect it, but never override the
+        # DETAIL follow-up or off-topic guard, which are about intent not depth.
+        auto = route_question(question, history)
+        category = auto if auto in ("DETAIL", "OFF_TOPIC") else forced
+        print(f"  [Level forced: {forced}  (auto would be {auto}) -> {category}]")
+    else:
+        category = route_question(question, history)
+        print(f"  [Routed to: {category}]")
 
     if category == "OFF_TOPIC":
         return handle_off_topic(), 1, LEVEL_LABELS["OFF_TOPIC"]

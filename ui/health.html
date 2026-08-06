@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Jarvis · Connections</title>
+<style>
+  :root{
+    --bg-0:#0b0a16; --glass:rgba(26,23,44,.86); --glass-2:rgba(30,27,50,.6); --glass-3:rgba(36,32,60,.5);
+    --stroke:rgba(255,209,102,.14); --stroke-strong:rgba(255,209,102,.30);
+    --text-0:#f2f0fb; --text-1:#cdc7e6; --text-2:#8f88ad; --text-3:#57506f;
+    --accent:#ffd166; --accent-soft:rgba(255,209,102,.12);
+    --green:#34d399; --red:#ff7a8a; --yellow:#ffd166; --cyan:#7fe7ff;
+    --r-lg:18px; --r-md:13px; --r-sm:10px;
+    --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter",system-ui,sans-serif;
+    --font-mono:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,monospace;
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;margin:0;}
+  body{
+    color:var(--text-0);font-family:var(--font);font-size:14px;
+    background:
+      radial-gradient(1100px 700px at 82% -14%,rgba(139,92,246,.16),transparent 56%),
+      radial-gradient(900px 620px at -6% 112%,rgba(124,58,237,.12),transparent 56%),
+      linear-gradient(165deg,#0d0b1c 0%,#0b0a17 46%,#080610 100%);
+    min-height:100%;
+  }
+  body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
+    background-image:linear-gradient(rgba(255,255,255,.012) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.012) 1px,transparent 1px);
+    background-size:60px 60px;mask-image:radial-gradient(ellipse at 50% 20%,rgba(0,0,0,.5),transparent 72%);}
+  .chrome{position:relative;z-index:5;height:46px;display:flex;align-items:center;gap:10px;padding:0 22px;}
+  .chrome .title{color:var(--text-2);font-size:12px;letter-spacing:.08em;text-transform:uppercase;}
+  .chrome .badge{padding:2px 9px;border-radius:999px;background:var(--accent-soft);color:var(--accent);border:1px solid rgba(255,209,102,.26);font-size:10px;letter-spacing:.08em;text-transform:uppercase;}
+  .chrome .right{margin-left:auto;display:flex;align-items:center;gap:12px;color:var(--text-2);font-size:12px;}
+  .chrome-back{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:999px;background:var(--glass-3);border:1px solid var(--stroke);color:var(--text-2);font-size:11px;text-decoration:none;transition:all .15s;cursor:pointer;}
+  .chrome-back:hover{color:var(--text-0);border-color:var(--stroke-strong);}
+  .meta{font-family:var(--font-mono);font-size:11px;color:var(--text-2);}
+
+  .wrap{position:relative;z-index:1;max-width:1120px;margin:0 auto;padding:14px 22px 56px;}
+  h1{font-size:21px;font-weight:700;letter-spacing:-.01em;margin:16px 0 5px;}
+  .sub{color:var(--text-2);font-size:12.5px;margin-bottom:8px;font-family:var(--font-mono);}
+
+  .section{margin-top:26px;}
+  .sec-head{display:flex;align-items:center;gap:12px;margin-bottom:14px;}
+  .sec-head h2{font-size:12px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;color:var(--text-1);margin:0;white-space:nowrap;}
+  .sec-head .chip{font-family:var(--font-mono);font-size:10.5px;color:var(--accent);background:var(--accent-soft);border:1px solid rgba(255,209,102,.24);border-radius:999px;padding:2px 9px;}
+  .sec-head .rule{flex:1;height:1px;background:linear-gradient(90deg,var(--stroke-strong),transparent);}
+
+  .grid{display:grid;gap:13px;}
+  .grid-2{grid-template-columns:repeat(2,1fr);}
+  .grid-tiles{grid-template-columns:repeat(auto-fill,minmax(232px,1fr));}
+  @media(max-width:760px){.grid-2{grid-template-columns:1fr;}}
+
+  /* ── connection cards (detailed) ── */
+  .card{position:relative;background:var(--glass);border:1px solid var(--stroke);border-radius:var(--r-lg);
+    padding:16px 18px;backdrop-filter:blur(26px) saturate(140%);
+    box-shadow:0 1px 0 rgba(255,255,255,.05) inset,0 14px 30px -14px rgba(0,0,0,.6);
+    display:flex;flex-direction:column;gap:10px;min-height:132px;transition:border-color .25s,transform .2s;}
+  .card:hover{border-color:var(--stroke-strong);transform:translateY(-1px);}
+  .card .top{display:flex;align-items:center;gap:11px;}
+  .dot{width:11px;height:11px;border-radius:50%;background:var(--text-3);flex:none;transition:.2s;}
+  .dot.ok{background:var(--green);box-shadow:0 0 0 4px rgba(52,211,153,.12),0 0 10px var(--green);}
+  .dot.bad{background:var(--red);box-shadow:0 0 0 4px rgba(255,122,138,.12),0 0 10px var(--red);}
+  .dot.warn{background:var(--yellow);box-shadow:0 0 0 4px rgba(255,209,102,.12),0 0 10px var(--yellow);}
+  .dot.wait{background:var(--text-3);animation:pulse 1.3s ease infinite;}
+  @keyframes pulse{50%{opacity:.35;}}
+  .card .name{font-size:14.5px;font-weight:600;}
+  .state{margin-left:auto;font-family:var(--font-mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;padding:3px 9px;border-radius:999px;border:1px solid var(--stroke);color:var(--text-2);}
+  .state.ok{color:var(--green);border-color:rgba(52,211,153,.3);background:rgba(52,211,153,.08);}
+  .state.bad{color:var(--red);border-color:rgba(255,122,138,.3);background:rgba(255,122,138,.08);}
+  .state.warn{color:var(--yellow);border-color:rgba(255,209,102,.3);background:rgba(255,209,102,.08);}
+  .detail{font-size:12.5px;color:var(--text-1);line-height:1.5;}
+  .detail .k{color:var(--text-3);font-family:var(--font-mono);font-size:11px;}
+  .metaline{font-family:var(--font-mono);font-size:11px;color:var(--text-2);word-break:break-all;}
+  .err{color:#ffc2ca;font-size:12px;line-height:1.5;background:rgba(255,122,138,.07);border:1px solid rgba(255,122,138,.2);border-radius:10px;padding:8px 10px;}
+  .fix{color:var(--text-2);font-size:11.5px;line-height:1.55;}
+  .fix code{font-family:var(--font-mono);color:var(--text-0);background:rgba(0,0,0,.3);padding:1px 5px;border-radius:5px;}
+  .actions{margin-top:auto;display:flex;gap:8px;flex-wrap:wrap;}
+  .btn{font:inherit;font-size:12px;font-weight:600;cursor:pointer;border:1px solid var(--stroke-strong);
+    background:var(--accent-soft);color:var(--accent);border-radius:9px;padding:7px 13px;transition:.15s;text-decoration:none;display:inline-flex;align-items:center;gap:7px;}
+  .btn:hover{background:rgba(255,209,102,.24);border-color:var(--accent);}
+  .btn.ghost{background:transparent;color:var(--text-2);border-color:var(--stroke);}
+  .btn.ghost:hover{color:var(--text-0);border-color:var(--stroke-strong);}
+  .btn:disabled{opacity:.5;cursor:default;}
+  .pill{display:inline-block;font-family:var(--font-mono);font-size:10.5px;color:var(--text-1);background:rgba(255,255,255,.04);border:1px solid var(--stroke);border-radius:7px;padding:2px 7px;margin:2px 4px 0 0;}
+
+  /* ── compact tiles (agents / tools) ── */
+  .tile{position:relative;background:var(--glass-2);border:1px solid var(--stroke);border-radius:var(--r-md);
+    padding:12px 13px;display:flex;flex-direction:column;gap:6px;min-height:74px;backdrop-filter:blur(18px);transition:border-color .2s,transform .18s,background .2s;}
+  .tile:hover{border-color:var(--stroke-strong);transform:translateY(-1px);background:var(--glass);}
+  .tile .top{display:flex;align-items:center;gap:9px;}
+  .tile .tdot{width:8px;height:8px;border-radius:50%;flex:none;background:var(--text-3);}
+  .tile .tdot.ok{background:var(--green);box-shadow:0 0 7px var(--green);}
+  .tile .tdot.bad{background:var(--red);box-shadow:0 0 7px var(--red);}
+  .tile .tdot.warn{background:var(--yellow);box-shadow:0 0 7px var(--yellow);}
+  .tile .tname{font-size:13px;font-weight:600;color:var(--text-0);}
+  .tile .tbadge{margin-left:auto;font-family:var(--font-mono);font-size:8.5px;letter-spacing:.1em;text-transform:uppercase;padding:2px 7px;border-radius:999px;border:1px solid var(--stroke);color:var(--text-2);white-space:nowrap;}
+  .tile .tbadge.ok{color:var(--green);border-color:rgba(52,211,153,.3);background:rgba(52,211,153,.07);}
+  .tile .tbadge.bad{color:var(--red);border-color:rgba(255,122,138,.3);background:rgba(255,122,138,.07);}
+  .tile .tbadge.warn{color:var(--yellow);border-color:rgba(255,209,102,.3);background:rgba(255,209,102,.07);}
+  .tile .tdesc{font-size:11px;color:var(--text-2);line-height:1.45;}
+
+  .toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:var(--glass);border:1px solid var(--stroke-strong);border-radius:12px;padding:10px 16px;font-size:12.5px;color:var(--text-0);box-shadow:0 12px 30px -12px rgba(0,0,0,.7);opacity:0;pointer-events:none;transition:opacity .2s;max-width:560px;z-index:50;}
+  .toast.show{opacity:1;}
+</style>
+</head>
+<body>
+<div class="chrome">
+  <span class="title">Jarvis</span><span class="badge">Connections</span>
+  <div class="right">
+    <span id="model" class="meta"></span>
+    <span id="clock" class="meta"></span>
+    <button class="chrome-back" onclick="load()" title="Refresh now">↻ Refresh</button>
+    <a href="/" class="chrome-back">← Back to Jarvis</a>
+  </div>
+</div>
+
+<div class="wrap">
+  <h1>Connections &amp; Health</h1>
+  <div class="sub" id="summary">Checking every integration, agent and tool…</div>
+
+  <div class="section">
+    <div class="sec-head"><h2>Connections</h2><span class="chip" id="connCount"></span><span class="rule"></span></div>
+    <div class="grid grid-2" id="connGrid"></div>
+  </div>
+
+  <div class="section">
+    <div class="sec-head"><h2>Agents</h2><span class="chip" id="agentCount"></span><span class="rule"></span></div>
+    <div class="grid grid-tiles" id="agentGrid"></div>
+  </div>
+
+  <div class="section">
+    <div class="sec-head"><h2>Tools</h2><span class="chip" id="toolCount"></span><span class="rule"></span></div>
+    <div class="grid grid-tiles" id="toolGrid"></div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const $=s=>document.querySelector(s);
+function esc(s){const d=document.createElement('div');d.textContent=(s==null?'':String(s));return d.innerHTML;}
+function tickClock(){const e=$('#clock');if(e)e.textContent=new Date().toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',second:'2-digit'});}
+tickClock();setInterval(tickClock,1000);
+function toast(msg,ms=4600){const t=$('#toast');t.innerHTML=msg;t.classList.add('show');clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('show'),ms);}
+function statusText(s){return s==='ok'?'Online':s==='bad'?'Down':s==='warn'?'Attention':'…';}
+
+function expiryNote(tok){
+  if(!tok) return '';
+  if(tok.present===false) return '<div class="fix">No token file yet — re-authenticate to create one.</div>';
+  let s='';
+  if(tok.has_refresh_token===false) s+='<div class="fix">⚠ No refresh token — a fresh consent is needed.</div>';
+  if(tok.expiry){const d=new Date(tok.expiry),now=new Date(),exp=d<now;
+    s+=`<div class="fix">Access token ${exp?'expired':'valid until'} <b>${esc(d.toLocaleString('en-GB',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}))}</b>${exp?' — auto-refresh should renew it.':''}</div>`;}
+  return s;
+}
+
+/* ── connection cards ── */
+const CONN_CARDS=[
+  {key:'google', name:'Google — Gmail & Calendar', render:c=>{
+    const g=c.gmail||{}, cal=c.calendar||{}, tok=c.google_token||{};
+    const ok=g.connected&&cal.connected, errs=[g.error,cal.error].filter(Boolean);
+    let body=`<div class="detail"><span class="k">Gmail</span> ${g.connected?'✅ connected':'❌ off'} &nbsp;·&nbsp; <span class="k">Calendar</span> ${cal.connected?'✅ connected':'❌ off'}</div>`;
+    if(errs.length){const e=errs[0];body+=`<div class="err">${esc(e)}</div>`;
+      if(/invalid_grant/i.test(e)) body+=`<div class="fix">Refresh token is dead. Publish the OAuth app to <b>Production</b>, then re-authenticate.</div>`;}
+    body+=expiryNote(tok);
+    if(tok&&tok.path) body+=`<div class="metaline">token: ${esc(tok.path)}</div>`;
+    return {status:ok?'ok':'bad', body, actions:`<button class="btn" onclick="reauth(this)">Re-authenticate</button><a class="btn ghost" href="/google/status" target="_blank">Raw status</a>`};
+  }},
+  {key:'ollama', name:'Ollama — local LLM', render:c=>{
+    const o=c.ollama||{};
+    let body=`<div class="detail"><span class="k">endpoint</span> ${esc(o.base_url||'')}</div>`;
+    if(o.connected){body+=`<div class="detail">${o.count||0} model(s) pulled</div><div>`+(o.models||[]).slice(0,9).map(m=>`<span class="pill">${esc(m)}</span>`).join('')+`</div>`;}
+    else body+=`<div class="err">Not reachable${o.detail?': '+esc(o.detail):''}</div><div class="fix">Start it with <code>ollama serve</code>.</div>`;
+    return {status:o.connected?'ok':'bad', body, actions:''};
+  }},
+  {key:'jams', name:'JAMS — n8n Job HUD', render:c=>{
+    const j=c.jams||{};
+    let body=`<div class="detail"><span class="k">endpoint</span> ${esc(j.base_url||'')}</div>`;
+    if(j.connected) body+=`<div class="detail">${j.jobs} jobs · ${j.pipeline} in pipeline · ${j.inbox} emails</div>`;
+    else body+=`<div class="err">Not reachable${j.detail?': '+esc(j.detail):''}</div><div class="fix">Start n8n and set the <b>Job HUD — Dashboard</b> workflow Active.</div>`;
+    return {status:j.connected?'ok':'bad', body, actions:`<a class="btn ghost" href="/jams">Open JAMS</a>`};
+  }},
+  {key:'spotify', name:'Spotify', render:c=>{
+    const s=c.spotify||{};
+    let body=`<div class="detail">${s.connected?'✅ '+esc(s.detail||'connected'):'❌ '+esc(s.detail||'not connected')}</div>`;
+    if(!s.connected){
+      if(/invalid_client|not configured|no client/i.test(s.detail||''))
+        body+=`<div class="fix">Not set up. Add <code>SPOTIFY_CLIENT_ID</code> + <code>SPOTIFY_CLIENT_SECRET</code> from developer.spotify.com to <code>.env</code> (redirect <code>http://localhost:8888/callback</code>), then run <code>python spotify_auth.py</code>.</div>`;
+      else body+=`<div class="fix">Re-copy the secret into <code>.env</code>, then run <code>python spotify_auth.py</code>.</div>`;
+    }
+    return {status:s.connected?'ok':'warn', body, actions:''};
+  }},
+];
+
+function renderConnections(c){
+  const grid=$('#connGrid'); grid.innerHTML=''; let up=0;
+  CONN_CARDS.forEach(cd=>{
+    const r=cd.render(c); if(r.status==='ok')up++;
+    const el=document.createElement('div'); el.className='card';
+    el.innerHTML=`<div class="top"><span class="dot ${r.status}"></span><span class="name">${esc(cd.name)}</span><span class="state ${r.status}">${statusText(r.status)}</span></div>${r.body}<div class="actions">${r.actions||''}</div>`;
+    grid.appendChild(el);
+  });
+  $('#connCount').textContent=`${up}/${CONN_CARDS.length} online`;
+  return up;
+}
+
+function tileHTML(item){
+  const st=item.ready?'ok':(item.attention?'warn':'bad');
+  const badge=item.ready?'Ready':(item.attention?'Attention':'Offline');
+  return `<div class="tile"><div class="top"><span class="tdot ${st}"></span><span class="tname">${esc(item.name)}</span><span class="tbadge ${st}">${badge}</span></div><div class="tdesc">${esc(item.desc||'')}</div></div>`;
+}
+function renderTiles(id,items){
+  const el=document.getElementById(id); el.innerHTML=(items||[]).map(tileHTML).join('');
+  const ready=(items||[]).filter(t=>t.ready).length;
+  return {ready,total:(items||[]).length};
+}
+
+function render(d){
+  $('#model').textContent=d.llm_model?('model: '+d.llm_model):'';
+  const connUp=renderConnections(d.connections||{});
+  const a=renderTiles('agentGrid',d.agents); const t=renderTiles('toolGrid',d.tools);
+  $('#agentCount').textContent=`${a.ready}/${a.total} ready`;
+  $('#toolCount').textContent=`${t.ready}/${t.total} ready`;
+  $('#summary').textContent=`${connUp}/${(CONN_CARDS.length)} connections online · ${a.ready}/${a.total} agents · ${t.ready}/${t.total} tools · checked ${new Date().toLocaleTimeString('en-GB')}`;
+}
+
+async function load(){
+  try{
+    const r=await fetch('/health/status',{headers:{'cache-control':'no-cache'}});
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    render(await r.json());
+  }catch(e){ $('#summary').textContent='Could not reach JARVIS /health/status: '+esc(e.message||e); }
+}
+
+async function reauth(btn){
+  if(!confirm('Re-authenticate Google?\n\nThis deletes the current token and opens a Google consent screen in a browser ON THE MACHINE RUNNING JARVIS. Approve it there to reconnect Gmail + Calendar.')) return;
+  const old=btn.innerHTML; btn.disabled=true; btn.innerHTML='Opening consent…';
+  toast('Deleting token and starting OAuth — approve the Google consent window on the JARVIS machine.');
+  try{
+    const r=await fetch('/google/reauth',{method:'POST'}); const d=await r.json();
+    if(d.success) toast('✅ Re-auth complete — Gmail '+(d.gmail_connected?'connected':'still off')+', Calendar '+(d.calendar_connected?'connected':'still off')+'.');
+    else toast('⚠ Re-auth returned: '+esc(d.error||'unknown error'));
+  }catch(e){ toast('⚠ Re-auth request failed (may still be waiting on browser consent): '+esc(e.message||e)); }
+  finally{ btn.disabled=false; btn.innerHTML=old; setTimeout(load,1500); }
+}
+
+load();
+setInterval(load,20000);
+</script>
+</body>
+</html>

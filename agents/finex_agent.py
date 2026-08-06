@@ -89,11 +89,14 @@ class FinExAgent:
         question: str,
         company: str = "Bestway Cement",
         history: Optional[List[Dict[str, str]]] = None,
+        level=None,
     ) -> Dict[str, Any]:
         """
         Answer a financial question about a company.
 
-        Returns dict with keys: answer, level, level_label, question
+        ``level`` is an optional explicit override (1–6, or "auto"/None for the
+        deterministic router). Returns dict with keys:
+        answer, level, level_label, question
         """
         if not self._ready:
             return {
@@ -119,8 +122,8 @@ class FinExAgent:
         answer_fn, _, _, LEVEL_LABELS = _import_engine()
 
         def _run():
-            resp, level, label = answer_fn(question, company, history_str)
-            return resp, level, label
+            resp, lvl, label = answer_fn(question, company, history_str, level)
+            return resp, lvl, label
 
         try:
             resp_text, level, label = await asyncio.wait_for(

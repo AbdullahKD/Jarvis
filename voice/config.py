@@ -54,6 +54,8 @@ class VoiceConfig:
     vad_threshold: float       # speech-probability cutoff
     end_silence_ms: int        # silence before we stop listening
     listen_timeout_s: float    # hard cap on a single utterance
+    min_speech_ms: int         # min real speech before an endpoint can fire
+                               # (ignores coughs/clicks so the turn doesn't end early)
 
     # ── STT (faster-whisper) ───────────────────────────────────────────────
     whisper_model: str         # tiny.en | base.en | small.en | medium.en
@@ -64,6 +66,20 @@ class VoiceConfig:
     elevenlabs_api_key: str
     elevenlabs_voice_id: str
     elevenlabs_model: str
+    # Voice settings — these are what make the difference between "robotic" and
+    # natural. Lower stability = more expressive/varied prosody; style adds
+    # emotion (honoured by turbo/multilingual, ignored by flash); speaker_boost
+    # adds presence; speed < 1.0 is slightly more relaxed.
+    elevenlabs_stability: float
+    elevenlabs_similarity: float
+    elevenlabs_style: float
+    elevenlabs_speaker_boost: bool
+    elevenlabs_speed: float
+    # Quick replies: short one-liners are synthesised with a faster, lower-
+    # latency model so they come back near-instantly; longer answers use the
+    # natural model above. fast_max_chars is the length cut-off.
+    elevenlabs_fast_model: str
+    elevenlabs_fast_max_chars: int
 
 
 def load_config() -> VoiceConfig:
@@ -79,6 +95,7 @@ def load_config() -> VoiceConfig:
         vad_threshold=float(os.getenv("VAD_THRESHOLD", "0.5")),
         end_silence_ms=int(os.getenv("END_SILENCE_MS", "400")),
         listen_timeout_s=float(os.getenv("LISTEN_TIMEOUT_SECONDS", "12")),
+        min_speech_ms=int(os.getenv("MIN_SPEECH_MS", "250")),
         # STT
         whisper_model=os.getenv("WHISPER_MODEL", "tiny.en"),
         whisper_compute_type=os.getenv("WHISPER_COMPUTE_TYPE", "int8"),
@@ -88,7 +105,15 @@ def load_config() -> VoiceConfig:
         elevenlabs_voice_id=os.getenv(
             "ELEVENLABS_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb"  # George (British male)
         ),
-        elevenlabs_model=os.getenv("ELEVENLABS_MODEL", "eleven_flash_v2_5"),
+        elevenlabs_model=os.getenv("ELEVENLABS_MODEL", "eleven_turbo_v2_5"),
+        # Natural-sounding defaults (override per-voice in .env if desired).
+        elevenlabs_stability=float(os.getenv("ELEVENLABS_STABILITY", "0.40")),
+        elevenlabs_similarity=float(os.getenv("ELEVENLABS_SIMILARITY", "0.85")),
+        elevenlabs_style=float(os.getenv("ELEVENLABS_STYLE", "0.45")),
+        elevenlabs_speaker_boost=os.getenv("ELEVENLABS_SPEAKER_BOOST", "true").lower() == "true",
+        elevenlabs_speed=float(os.getenv("ELEVENLABS_SPEED", "1.0")),
+        elevenlabs_fast_model=os.getenv("ELEVENLABS_FAST_MODEL", "eleven_flash_v2_5"),
+        elevenlabs_fast_max_chars=int(os.getenv("ELEVENLABS_FAST_MAX_CHARS", "140")),
     )
 
 

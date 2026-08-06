@@ -100,6 +100,13 @@ class SpotifyTool:
             self._mock = True
             return None
 
+        # Failure backoff: the sidebar polls every 20-60s, and a broken
+        # client secret ("invalid_client") used to spam a refresh attempt +
+        # log line on every single poll. After a hard failure, don't retry
+        # (or log) again for 10 minutes.
+        if getattr(self, "_refresh_failed_until", 0) > time.time():
+            return None
+
         credentials = base64.b64encode(
             f"{SPOTIFY_CLIENT_ID}:{SPOTIFY_CLIENT_SECRET}".encode()
         ).decode()
@@ -119,7 +126,13 @@ class SpotifyTool:
                 ) as resp:
                     if resp.status != 200:
                         text = await resp.text()
-                        print(f"🎵 Token refresh failed: {text}")
+                        self._refresh_failed_until = time.time() + 600
+                        print(f"🎵 Token refresh failed: {text} — "
+                              f"pausing refresh attempts for 10 min. "
+                              f"(invalid_client = the SPOTIFY_CLIENT_SECRET in "
+                              f".env no longer matches your Spotify app; "
+                              f"re-copy it from developer.spotify.com and run "
+                              f"python spotify_auth.py)")
                         return None
                     data = await resp.json()
 

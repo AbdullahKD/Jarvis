@@ -48,6 +48,48 @@ TEXT_EXTENSIONS = {
 MAX_READ_BYTES = 50_000   # 50 KB max for file reads
 MAX_SEARCH_RESULTS = 20
 
+# Plural / colloquial → canonical extension set. Used by `search()` so
+# "find all PDFs" / "list spreadsheets" actually filter by extension
+# instead of searching for a file literally named "PDFs".
+EXTENSION_ALIASES = {
+    "pdf": [".pdf"], "pdfs": [".pdf"],
+    "doc": [".doc", ".docx"], "docs": [".doc", ".docx"],
+    "word": [".doc", ".docx"], "word docs": [".doc", ".docx"],
+    "spreadsheet": [".xls", ".xlsx", ".csv", ".numbers"],
+    "spreadsheets": [".xls", ".xlsx", ".csv", ".numbers"],
+    "excel": [".xls", ".xlsx"], "csv": [".csv"], "csvs": [".csv"],
+    "deck": [".pptx", ".key"], "decks": [".pptx", ".key"],
+    "slides": [".pptx", ".key"], "presentation": [".pptx", ".key"],
+    "presentations": [".pptx", ".key"],
+    "keynote": [".key"], "powerpoint": [".pptx"],
+    "image": [".png", ".jpg", ".jpeg", ".gif", ".heic", ".webp", ".tiff", ".bmp"],
+    "images": [".png", ".jpg", ".jpeg", ".gif", ".heic", ".webp", ".tiff", ".bmp"],
+    "photo": [".png", ".jpg", ".jpeg", ".heic"],
+    "photos": [".png", ".jpg", ".jpeg", ".heic"],
+    "picture": [".png", ".jpg", ".jpeg", ".heic", ".webp"],
+    "pictures": [".png", ".jpg", ".jpeg", ".heic", ".webp"],
+    "screenshot": [".png", ".jpg"], "screenshots": [".png", ".jpg"],
+    "video": [".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi"],
+    "videos": [".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi"],
+    "movie": [".mp4", ".mov", ".mkv", ".avi"],
+    "movies": [".mp4", ".mov", ".mkv", ".avi"],
+    "audio": [".mp3", ".wav", ".m4a", ".aac", ".flac"],
+    "music": [".mp3", ".wav", ".m4a", ".aac", ".flac"],
+    "songs": [".mp3", ".wav", ".m4a", ".aac", ".flac"],
+    "podcast": [".mp3", ".m4a"], "podcasts": [".mp3", ".m4a"],
+    "note": [".txt", ".md", ".markdown"], "notes": [".txt", ".md", ".markdown"],
+    "markdown": [".md", ".markdown"], "text": [".txt"],
+    "python": [".py"], "scripts": [".py", ".sh", ".js", ".ts"],
+    "javascript": [".js", ".jsx", ".mjs"], "typescript": [".ts", ".tsx"],
+    "html": [".html", ".htm"], "css": [".css"],
+    "zip": [".zip"], "archive": [".zip", ".tar", ".gz", ".7z"],
+    "archives": [".zip", ".tar", ".gz", ".7z"],
+}
+
+# Max directory recursion depth — prevents `rglob` from disappearing into
+# deep node_modules / venv trees during a search.
+MAX_SEARCH_DEPTH = 5
+
 
 # ── Pending operation (approval flow) ────────────────────────────────────────
 
@@ -126,11 +168,11 @@ class FileManagerTool:
             if candidate.exists() and self._is_allowed(candidate):
                 return candidate
 
-        # Not found under any root but path is relative — return under desktop as default
-        # (caller will check .exists() themselves)
+        # Not found under any root but path is relative — return under
+        # Desktop as default (caller will check .exists() themselves).
+        # The duplicate `return` below the previous line was dead code.
         candidate = ALLOWED_ROOTS["desktop"] / p
         return candidate if self._is_allowed(candidate) else None
-        return p if self._is_allowed(p) else None
 
     def _is_allowed(self, p: Path) -> bool:
         """Check path is within one of the allowed roots."""
@@ -156,8 +198,24 @@ class FileManagerTool:
 
     # ── List directory ────────────────────────────────────────────────────────
 
-    def list_directory(self, path_str: str = "desktop") -> Dict[str, Any]:
-        """List contents of a folder."""
+    def list_directory(
+        self,
+        path_str: str = "desktop",
+        *,
+        include_hidden: bool = False,
+        sort_by: str = "name",
+        reverse: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        List contents of a folder.
+
+        Args:
+            path_str: Folder path or alias (desktop, documents, downloads).
+            include_hidden: If True, include dotfiles (.env, .gitignore, etc.).
+            sort_by: "name" (default), "size", "modified", "type".
+            reverse: Flip the sort order. Combined with sort_by="modified"
+                     this gives "newest first".
+        """
         p = self.resolve(path_str)
         if p is None:
             return {"success": False, "error": f"Path not found or not allowed: {path_str}"}
@@ -166,21 +224,42 @@ class FileManagerTool:
         if not p.is_dir():
             return {"success": False, "error": f"Not a directory: {path_str}"}
 
-        items = []
+        items: List[Dict[str, Any]] = []
         try:
-            for entry in sorted(p.iterdir(), key=lambda e: (e.is_file(), e.name.lower())):
-                if entry.name.startswith("."):
-                    continue  # Skip hidden files
-                stat = entry.stat()
+            for entry in p.iterdir():
+                name = entry.name
+                # Skip iCloud placeholder files always — they're noise.
+                if name.endswith(".icloud"):
+                    continue
+                # Skip hidden files by default
+                if name.startswith(".") and not include_hidden:
+                    continue
+                try:
+                    stat = entry.stat()
+                except (FileNotFoundError, OSError):
+                    continue
                 items.append({
-                    "name": entry.name,
+                    "name": name,
                     "type": "folder" if entry.is_dir() else "file",
                     "size": stat.st_size if entry.is_file() else None,
+                    "size_human": self._fmt_size(stat.st_size) if entry.is_file() else None,
                     "modified": datetime.fromtimestamp(stat.st_mtime).strftime("%d %b %Y %H:%M"),
+                    "modified_ts": stat.st_mtime,
                     "extension": entry.suffix.lower() if entry.is_file() else None,
+                    "hidden": name.startswith("."),
                 })
         except PermissionError:
             return {"success": False, "error": f"Permission denied: {path_str}"}
+
+        # Sort
+        key_funcs = {
+            "name":     lambda i: (i["type"] == "file", i["name"].lower()),
+            "size":     lambda i: (i.get("size") or 0),
+            "modified": lambda i: i.get("modified_ts", 0.0),
+            "type":     lambda i: (i["type"], i["name"].lower()),
+        }
+        sort_key = key_funcs.get(sort_by, key_funcs["name"])
+        items.sort(key=sort_key, reverse=reverse)
 
         return {
             "success": True,
@@ -190,73 +269,201 @@ class FileManagerTool:
             "count": len(items),
             "folders": sum(1 for i in items if i["type"] == "folder"),
             "files": sum(1 for i in items if i["type"] == "file"),
+            "hidden_count": sum(1 for i in items if i.get("hidden")),
+            "sort_by": sort_by,
+            "reverse": reverse,
+            "include_hidden": include_hidden,
         }
 
     def format_listing(self, data: Dict[str, Any]) -> str:
+        """Text-mode listing — chat-bubble friendly with emoji icons."""
         if not data.get("success"):
             return data.get("error", "Could not list directory.")
         items = data.get("items", [])
         dp = data.get("display_path", "")
-        lines = [f"{dp}  ({data['folders']} folders, {data['files']} files)\n"]
+        folders = data["folders"]
+        files = data["files"]
+
+        header_bits = []
+        if folders:
+            header_bits.append(f"{folders} folder{'s' if folders != 1 else ''}")
+        if files:
+            header_bits.append(f"{files} file{'s' if files != 1 else ''}")
+        if data.get("include_hidden") and data.get("hidden_count"):
+            header_bits.append(f"{data['hidden_count']} hidden")
+        header = ", ".join(header_bits) or "empty"
+
+        lines = [f"**{dp}** — {header}", ""]
+        if not items:
+            lines.append("  (nothing here yet)")
+            return "\n".join(lines)
+
+        # Folders first, then files (when sort is by name)
         for item in items:
-            icon = "📁" if item["type"] == "folder" else self._file_icon(item.get("extension",""))
-            size = f"  {self._fmt_size(item['size'])}" if item["size"] is not None else ""
-            lines.append(f"{icon} {item['name']}{size}  — {item['modified']}")
+            icon = "📁" if item["type"] == "folder" else self._file_icon(item.get("extension", ""))
+            size = f"  {item['size_human']}" if item.get("size_human") else ""
+            hidden_tag = " (hidden)" if item.get("hidden") else ""
+            lines.append(f"{icon} {item['name']}{size}  — {item['modified']}{hidden_tag}")
         return "\n".join(lines)
+
+    def format_listing_voice(self, data: Dict[str, Any]) -> str:
+        """
+        Voice-mode listing — one short sentence summarising the folder.
+        Used when the orchestrator is in voice_mode and TTS will read this.
+        """
+        if not data.get("success"):
+            return data.get("error", "Could not list that folder.")
+        folders = data.get("folders", 0)
+        files = data.get("files", 0)
+        dp = data.get("display_path", "your folder")
+        if folders == 0 and files == 0:
+            return f"{dp} is empty."
+        bits = []
+        if folders:
+            bits.append(f"{folders} folder{'s' if folders != 1 else ''}")
+        if files:
+            bits.append(f"{files} file{'s' if files != 1 else ''}")
+        summary = " and ".join(bits)
+        # Mention the top 3 names if there are few enough
+        items = data.get("items", [])
+        if len(items) <= 4:
+            names = ", ".join(i["name"] for i in items)
+            return f"{dp} has {summary}: {names}."
+        first_three = ", ".join(i["name"] for i in items[:3])
+        return f"{dp} has {summary}, including {first_three}."
 
     # ── Search ────────────────────────────────────────────────────────────────
 
-    def search(self, query: str, location: str = "all", content_search: bool = False) -> Dict[str, Any]:
+    def search(
+        self,
+        query: str,
+        location: str = "all",
+        content_search: bool = False,
+    ) -> Dict[str, Any]:
         """
-        Search for files/folders by name, optionally by content.
-        location: 'all', 'desktop', 'documents', 'downloads'
+        Search for files/folders.
+
+        - If `query` matches an EXTENSION_ALIASES entry (e.g. "pdfs",
+          "images", "spreadsheets", "videos"), filter by extension —
+          NOT by literal filename.
+        - Otherwise, match by substring in filename.
+        - With `content_search=True`, also grep text files.
+        - Always skips iCloud placeholder files (*.icloud), the macOS
+          `.DS_Store` junk, and recursion past MAX_SEARCH_DEPTH so a
+          search through a heavy `~/Documents` doesn't take 30s.
         """
-        query_lower = query.lower()
+        q = query.lower().strip()
         roots = (
             [ALLOWED_ROOTS[location]] if location in ALLOWED_ROOTS
             else list(ALLOWED_ROOTS.values())
         )
 
-        results = []
+        # Detect extension intent. "all my pdfs" → extensions = [".pdf"]
+        ext_filter: Optional[List[str]] = None
+        for alias, exts in EXTENSION_ALIASES.items():
+            # Match alias as a whole word, not a substring (so "scripts"
+            # doesn't match "scriptsystem"). Use word boundaries.
+            import re as _re
+            if _re.search(rf"\b{_re.escape(alias)}\b", q):
+                ext_filter = exts
+                break
+
+        results: List[Dict[str, Any]] = []
+
+        def _walk(base: Path, depth: int):
+            if len(results) >= MAX_SEARCH_RESULTS or depth > MAX_SEARCH_DEPTH:
+                return
+            try:
+                for entry in base.iterdir():
+                    if len(results) >= MAX_SEARCH_RESULTS:
+                        return
+                    name = entry.name
+                    # Skip noise
+                    if name.startswith(".") or name.endswith(".icloud"):
+                        continue
+                    # Skip heavy dev / cache dirs that are never the answer
+                    if entry.is_dir() and name in (
+                        "node_modules", ".git", "venv", ".venv", "__pycache__",
+                        ".cache", "Pods", "DerivedData", ".next", "dist", "build",
+                    ):
+                        continue
+
+                    matched = False
+                    if ext_filter is not None:
+                        # Extension intent — only return matching files
+                        if entry.is_file() and entry.suffix.lower() in ext_filter:
+                            results.append(self._file_info(entry))
+                            matched = True
+                    else:
+                        # Free-text intent — filename substring match
+                        if q in name.lower():
+                            results.append(self._file_info(entry))
+                            matched = True
+                        elif content_search and entry.is_file() and entry.suffix.lower() in TEXT_EXTENSIONS:
+                            try:
+                                text = entry.read_text(errors="ignore")[:10_000]
+                                if q in text.lower():
+                                    results.append({**self._file_info(entry), "content_match": True})
+                                    matched = True
+                            except Exception:
+                                pass
+
+                    if entry.is_dir():
+                        _walk(entry, depth + 1)
+            except (PermissionError, OSError):
+                return
+
         for root in roots:
             if not root.exists():
                 continue
-            for p in root.rglob("*"):
-                if p.name.startswith("."):
-                    continue
-                if len(results) >= MAX_SEARCH_RESULTS:
-                    break
-                # Name match
-                if query_lower in p.name.lower():
-                    results.append(self._file_info(p))
-                    continue
-                # Content match (text files only)
-                if content_search and p.is_file() and p.suffix.lower() in TEXT_EXTENSIONS:
-                    try:
-                        text = p.read_text(errors="ignore")[:10_000]
-                        if query_lower in text.lower():
-                            results.append({**self._file_info(p), "content_match": True})
-                    except Exception:
-                        pass
+            _walk(root, 0)
+
+        # Sort: folders first (alphabetically), then files (by modified desc
+        # when extension filter is in play — newest pictures first, etc.)
+        if ext_filter is not None:
+            results.sort(
+                key=lambda r: -(Path(r["path"]).stat().st_mtime if Path(r["path"]).exists() else 0)
+            )
+        else:
+            results.sort(key=lambda r: (r["type"] == "file", r["name"].lower()))
 
         return {
             "success": True,
             "query": query,
-            "results": results,
-            "count": len(results),
+            "extension_filter": ext_filter,
+            "results": results[:MAX_SEARCH_RESULTS],
+            "count": min(len(results), MAX_SEARCH_RESULTS),
         }
 
     def format_search(self, data: Dict[str, Any]) -> str:
         if not data.get("success"):
             return data.get("error", "Search failed.")
         results = data.get("results", [])
+        query = data.get("query", "")
+        ext_filter = data.get("extension_filter")
+
         if not results:
-            return f"No files found matching \"{data.get('query', '')}\"."
-        lines = [f"Found {len(results)} result(s) for \"{data['query']}\":\n"]
+            if ext_filter:
+                return f"No {query} found in your Desktop / Documents / Downloads."
+            return f'No files found matching "{query}".'
+
+        # Header line tells the user what we actually searched for
+        if ext_filter:
+            header = (
+                f'Found {len(results)} {query} '
+                f'(filter: {", ".join(ext_filter)}):'
+            )
+        else:
+            header = f'Found {len(results)} result{"s" if len(results) != 1 else ""} for "{query}":'
+
+        lines = [header, ""]
         for r in results:
-            icon = "📁" if r["type"] == "folder" else self._file_icon(r.get("extension",""))
+            icon = "📁" if r["type"] == "folder" else self._file_icon(r.get("extension", ""))
             cm = " (content match)" if r.get("content_match") else ""
-            lines.append(f"{icon} {r['display_path']}{cm}")
+            size = ""
+            if r.get("size") is not None and r["type"] == "file":
+                size = f" — {self._fmt_size(r['size'])}"
+            lines.append(f"{icon} {r['display_path']}{size}{cm}")
         return "\n".join(lines)
 
     # ── Read file ─────────────────────────────────────────────────────────────
@@ -486,14 +693,56 @@ class FileManagerTool:
                     break
             return result
 
-        # Create file
+        # Create file. Capture filename AND optional content body.
+        # Patterns supported:
+        #   "create file notes.txt"
+        #   "create a file called notes.txt"
+        #   "create file notes.txt with content hello world"
+        #   "create a file named foo.md saying  '# Hi\n\nNotes here'"
+        #   "make a new note with text 'remember the milk'"
+        #   "write a file called todo.md with the following:\nbullet 1\nbullet 2"
+        #
+        # Body delimiters recognised: with content / with text /
+        # with body / saying / containing / that says / : / -
         file_create_match = re.search(
-            r'(?:create|make|new|write)\s+(?:a\s+)?(?:new\s+)?file\s+(?:called\s+|named\s+)?["\']?([^\s"\']+)["\']?',
-            req, re.IGNORECASE
+            r'(?:create|make|new|write|save)\s+(?:a\s+)?(?:new\s+)?'
+            r'(?:file|note|document|doc|text\s+file|markdown\s+file)\s+'
+            r'(?:called\s+|named\s+|titled\s+)?'
+            r'["\']?([\w][\w\-\.\s]*?)["\']?'
+            r'(?:\s+(?:with\s+(?:content|text|body|the\s+following|the\s+text)|'
+            r'saying|containing|that\s+says|that\s+contains)[\s:\-]*'
+            r'(.+))?$',
+            user_request,
+            re.IGNORECASE | re.DOTALL,
         )
         if file_create_match:
             result["action"] = "create_file"
-            result["name"] = file_create_match.group(1).strip()
+            raw_name = file_create_match.group(1).strip().rstrip(",")
+            # Strip leaked location words
+            raw_name = re.sub(
+                r'\s+(?:on|in|at|to|onto)?\s*(?:my\s+)?(?:desktop|documents|downloads)\s*$',
+                '', raw_name, flags=re.IGNORECASE,
+            ).strip()
+            result["name"] = raw_name
+            body = (file_create_match.group(2) or "").strip()
+            # Strip wrapping quotes if the user wrapped the body
+            if (body.startswith('"') and body.endswith('"')) or \
+               (body.startswith("'") and body.endswith("'")):
+                body = body[1:-1]
+            result["content"] = body
+            return result
+
+        # Save the current conversation / chat to a file.
+        # "save this conversation as foo.md", "save the chat to notes.txt"
+        save_chat_match = re.search(
+            r'(?:save|export|dump)\s+(?:this|the|our)?\s*'
+            r'(?:conversation|chat|discussion|transcript|history)\s+'
+            r'(?:as|to|into)?\s+["\']?([\w][\w\-\.\s]*?)["\']?\s*$',
+            user_request, re.IGNORECASE,
+        )
+        if save_chat_match:
+            result["action"] = "save_conversation"
+            result["name"] = save_chat_match.group(1).strip()
             return result
 
         # Delete

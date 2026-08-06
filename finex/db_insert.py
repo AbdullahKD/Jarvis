@@ -112,19 +112,7 @@ def create_schema(conn=None, force: bool = False):
 
 
 def get_connection():
-    """
-    Open a Postgres connection.
-
-    Priority:
-      1. DATABASE_URL env var (Fly.io / Neon / any hosted Postgres).
-         Format: postgresql://user:pass@host:port/dbname?sslmode=require
-      2. Fall back to local dev defaults so existing local workflows
-         (dbname=finance_db, user=akd, host=localhost) are unchanged.
-    """
-    import os
-    dsn = os.getenv("DATABASE_URL")
-    if dsn:
-        return psycopg2.connect(dsn)
+    """Open a connection to the local Postgres instance backing FinEx."""
     return psycopg2.connect(
         dbname="finance_db",
         user="akd",
