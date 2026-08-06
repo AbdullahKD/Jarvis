@@ -1,0 +1,1035 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Jarvis · Atlas</title>
+<style>
+  :root{
+    --bg-0:#0b0916; --glass:rgba(26,22,44,.82); --glass-2:rgba(30,26,52,.6); --glass-3:rgba(38,32,62,.5);
+    --stroke:rgba(160,140,255,.14); --stroke-strong:rgba(170,150,255,.30);
+    --text-0:#f3f0fc; --text-1:#cec7ea; --text-2:#918ab2; --text-3:#5b5480;
+    --accent:#7fe7ff; --accent-2:#4f8cff; --accent-soft:rgba(127,231,255,.10);
+    --green:#5ee7a8; --red:#ff8090; --amber:#ffcf6b; --violet:#b9a3ff;
+    --r-lg:18px; --r-md:13px; --r-sm:9px;
+    --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter",system-ui,sans-serif;
+    --font-mono:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,monospace;
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;margin:0;overflow:hidden;}
+  body{color:var(--text-0);font-family:var(--font);font-size:14px;
+    background:radial-gradient(1200px 720px at 80% -16%,rgba(79,140,255,.18),transparent 56%),
+      radial-gradient(1000px 640px at -8% 110%,rgba(127,231,255,.08),transparent 56%),
+      linear-gradient(165deg,#0e0b1e 0%,#0b0917 46%,#080510 100%);min-height:100%;}
+  .chrome{height:46px;display:flex;align-items:center;gap:10px;padding:0 22px;position:relative;z-index:10;}
+  .chrome .title{color:var(--text-2);font-size:12px;letter-spacing:.08em;text-transform:uppercase;}
+  .chrome .badge{padding:2px 9px;border-radius:999px;background:var(--accent-soft);color:var(--accent);border:1px solid var(--stroke-strong);font-size:10px;letter-spacing:.08em;text-transform:uppercase;}
+  .chrome .right{margin-left:auto;display:flex;align-items:center;gap:12px;}
+  .chrome-back{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:999px;background:var(--glass-3);border:1px solid var(--stroke);color:var(--text-2);font-size:11px;text-decoration:none;transition:.15s;cursor:pointer;}
+  .chrome-back:hover{color:var(--text-0);border-color:var(--stroke-strong);}
+  .btn{font:inherit;font-size:12px;font-weight:600;cursor:pointer;border:1px solid var(--stroke-strong);background:var(--accent-soft);color:var(--accent);border-radius:9px;padding:8px 14px;transition:.15s;display:inline-flex;align-items:center;gap:7px;text-decoration:none;}
+  .btn:hover{background:rgba(127,231,255,.20);border-color:var(--accent);}
+  .btn:disabled{opacity:.5;cursor:default;}
+  .btn.ghost{background:transparent;color:var(--text-2);border-color:var(--stroke);}
+  .btn.ghost:hover{color:var(--text-0);}
+
+  /* ── Graph stage ───────────────────────────────────────────────────── */
+  #stage{position:fixed;inset:46px 0 0 0;}
+  #graph{display:block;width:100%;height:100%;cursor:grab;}
+  #graph.dragging{cursor:grabbing;}
+
+  /* Floating search, Obsidian-style */
+  .omni{position:absolute;top:18px;left:50%;transform:translateX(-50%);width:min(560px,calc(100% - 40px));z-index:5;}
+  .omni .box{position:relative;}
+  .omni input{width:100%;padding:12px 16px 12px 40px;font-size:14.5px;background:rgba(20,17,36,.86);
+    backdrop-filter:blur(14px);border:1px solid var(--stroke-strong);color:var(--text-0);border-radius:var(--r-md);outline:none;font-family:inherit;
+    box-shadow:0 12px 40px rgba(0,0,0,.45);}
+  .omni input:focus{border-color:var(--accent);}
+  .omni svg{position:absolute;left:14px;top:13px;width:16px;height:16px;stroke:var(--text-3);fill:none;stroke-width:2;}
+  .omni .count{position:absolute;right:14px;top:13px;font-size:11px;color:var(--text-3);font-family:var(--font-mono);}
+
+  .results{margin-top:8px;max-height:min(52vh,520px);overflow-y:auto;border-radius:var(--r-md);
+    background:rgba(18,15,32,.94);backdrop-filter:blur(14px);border:1px solid var(--stroke);display:none;
+    box-shadow:0 20px 60px rgba(0,0,0,.5);}
+  .results.on{display:block;}
+  .res{padding:11px 14px;border-bottom:1px solid rgba(160,140,255,.07);cursor:pointer;transition:background .12s;}
+  .res:last-child{border-bottom:none;}
+  .res:hover,.res.sel{background:rgba(127,231,255,.07);}
+  .res .top{display:flex;align-items:center;gap:9px;}
+  .res .name{font-weight:600;font-size:13.5px;}
+  .res .tag{font-size:9px;letter-spacing:.1em;text-transform:uppercase;padding:2px 6px;border-radius:5px;background:var(--accent-soft);color:var(--accent);border:1px solid var(--stroke-strong);}
+  .res .score{margin-left:auto;font-size:10.5px;color:var(--text-3);font-family:var(--font-mono);}
+  .res .path{font-size:10.5px;color:var(--text-3);font-family:var(--font-mono);margin-top:3px;word-break:break-all;}
+  .res .snip{font-size:12px;color:var(--text-1);line-height:1.45;margin-top:5px;}
+
+  /* Controls */
+  .panel{position:absolute;top:18px;left:18px;z-index:5;background:rgba(18,15,32,.9);backdrop-filter:blur(14px);
+    border:1px solid var(--stroke);border-radius:var(--r-md);padding:13px 15px;width:236px;box-shadow:0 14px 44px rgba(0,0,0,.4);}
+  .panel h3{margin:0 0 10px;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);font-weight:700;}
+  .stats{display:flex;gap:14px;margin-bottom:12px;}
+  .stat .n{font-size:17px;font-weight:700;font-family:var(--font-mono);display:block;line-height:1.1;}
+  .stat .l{font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-3);}
+  .ctl{margin-bottom:11px;}
+  .ctl label{display:flex;justify-content:space-between;font-size:11px;color:var(--text-2);margin-bottom:5px;}
+  .ctl label b{color:var(--accent);font-family:var(--font-mono);font-weight:600;}
+  .ctl input[type=range]{width:100%;accent-color:var(--accent);height:3px;}
+  .chk{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--text-2);cursor:pointer;margin-bottom:7px;}
+  .chk input{accent-color:var(--accent);}
+  .legend{margin-top:11px;padding-top:11px;border-top:1px solid var(--stroke);max-height:150px;overflow-y:auto;}
+  .lg{display:flex;align-items:center;gap:7px;font-size:11px;color:var(--text-2);margin-bottom:5px;cursor:pointer;}
+  .lg .sw{width:9px;height:9px;border-radius:50%;flex:none;}
+  .lg.off{opacity:.35;}
+  .prog{font-size:11px;color:var(--accent);font-family:var(--font-mono);display:none;align-items:center;gap:7px;margin-bottom:10px;}
+  .prog.on{display:flex;}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 7px var(--accent);animation:pulse 1.3s infinite;}
+  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.4;}}
+
+  /* Node detail */
+  .detail{position:absolute;right:18px;top:18px;width:290px;z-index:5;background:rgba(18,15,32,.94);backdrop-filter:blur(14px);
+    border:1px solid var(--stroke-strong);border-radius:var(--r-md);padding:15px;display:none;box-shadow:0 16px 50px rgba(0,0,0,.5);}
+  .detail.on{display:block;}
+  .detail .nm{font-weight:700;font-size:14.5px;margin-bottom:5px;word-break:break-word;}
+  .detail .pth{font-size:10.5px;color:var(--text-3);font-family:var(--font-mono);word-break:break-all;margin-bottom:11px;}
+  .detail .meta{display:flex;gap:12px;font-size:11px;color:var(--text-2);margin-bottom:12px;font-family:var(--font-mono);}
+  .detail .nbrs{margin-top:11px;padding-top:11px;border-top:1px solid var(--stroke);}
+  .detail .nbrs h4{margin:0 0 7px;font-size:9.5px;letter-spacing:.11em;text-transform:uppercase;color:var(--text-3);}
+  .nbr{display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--text-1);padding:4px 0;cursor:pointer;}
+  .nbr:hover{color:var(--accent);}
+  .nbr .w{margin-left:auto;font-size:10px;color:var(--text-3);font-family:var(--font-mono);}
+  .detail .x{position:absolute;top:11px;right:12px;cursor:pointer;color:var(--text-3);font-size:16px;line-height:1;}
+  .detail .x:hover{color:var(--text-0);}
+
+  .tip{position:absolute;pointer-events:none;z-index:8;background:rgba(12,10,24,.96);border:1px solid var(--stroke-strong);
+    border-radius:8px;padding:6px 10px;font-size:11.5px;display:none;max-width:320px;box-shadow:0 8px 24px rgba(0,0,0,.5);}
+  .tip .p{font-size:10px;color:var(--text-3);font-family:var(--font-mono);margin-top:2px;word-break:break-all;}
+
+  .toast{position:absolute;bottom:20px;left:50%;transform:translateX(-50%);z-index:9;background:rgba(18,15,32,.95);
+    border:1px solid var(--stroke-strong);border-radius:10px;padding:10px 16px;font-size:12.5px;color:var(--text-1);
+    display:none;box-shadow:0 10px 30px rgba(0,0,0,.5);max-width:min(620px,calc(100% - 40px));}
+  .toast.on{display:block;}
+  .toast b{color:var(--accent);}
+  .hintbar{position:absolute;bottom:16px;right:18px;z-index:4;font-size:10.5px;color:var(--text-3);font-family:var(--font-mono);text-align:right;line-height:1.7;}
+</style>
+</head>
+<body>
+  <div class="chrome">
+    <span class="title">Jarvis</span>
+    <span class="badge">Atlas</span>
+    <div class="right">
+      <span id="clock" class="title"></span>
+      <a class="chrome-back" href="/">&larr; Back to Jarvis</a>
+    </div>
+  </div>
+
+  <div id="stage">
+    <canvas id="graph"></canvas>
+
+    <div class="panel">
+      <h3>File Brain</h3>
+      <div class="stats">
+        <div class="stat"><span class="n" id="nNodes">&mdash;</span><span class="l">Files</span></div>
+        <div class="stat"><span class="n" id="nEdges">&mdash;</span><span class="l">Links</span></div>
+        <div class="stat"><span class="n" id="nIso">&mdash;</span><span class="l">Loose</span></div>
+      </div>
+      <div class="prog" id="prog"><span class="dot"></span><span id="progText">Indexing&hellip;</span></div>
+
+      <div class="ctl">
+        <label>Link threshold <b id="thVal">auto</b></label>
+        <input type="range" id="th" min="30" max="95" value="72" />
+        <label class="chk" style="margin:6px 0 0"><input type="checkbox" id="autoTh" checked /> Pick automatically</label>
+      </div>
+      <div class="ctl">
+        <label>Links per file <b id="nbVal">6</b></label>
+        <input type="range" id="nb" min="1" max="12" value="6" />
+      </div>
+      <div class="ctl">
+        <label>Grouping <b id="clVal">normal</b></label>
+        <input type="range" id="cluster" min="0" max="120" value="50" />
+      </div>
+      <label class="chk"><input type="checkbox" id="showLabels" checked /> Labels</label>
+      <label class="chk"><input type="checkbox" id="showHulls" checked /> Group regions</label>
+      <label class="chk"><input type="checkbox" id="hideIso" /> Hide unconnected</label>
+
+      <div style="display:flex;gap:7px;margin-top:11px;">
+        <button class="btn ghost" style="flex:1;justify-content:center;" id="refit">Fit</button>
+        <button class="btn ghost" style="flex:1;justify-content:center;" id="reindex">Reindex</button>
+      </div>
+      <div class="legend" id="legend"></div>
+    </div>
+
+    <div class="omni">
+      <div class="box">
+        <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
+        <input id="q" type="text" placeholder="Search your files and notes&hellip;" autocomplete="off" />
+        <span class="count" id="qcount"></span>
+      </div>
+      <div class="results" id="results"></div>
+    </div>
+
+    <div class="detail" id="detail">
+      <span class="x" id="detailClose">&times;</span>
+      <div class="nm" id="dName"></div>
+      <div class="pth" id="dPath"></div>
+      <div class="meta" id="dMeta"></div>
+      <button class="btn" style="width:100%;justify-content:center;" id="dReveal">Reveal in Finder</button>
+      <div class="nbrs" id="dNbrs"></div>
+    </div>
+
+    <div class="tip" id="tip"></div>
+    <div class="toast" id="toast"></div>
+    <div class="hintbar">scroll to zoom · drag to pan · drag a node to pin<br>click a node for detail · ⌘F to search</div>
+  </div>
+
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+const esc = s => (s||"").replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const tilde = p => (p||"").replace(/^\/Users\/[^/]+/, "~");
+
+/* ═══════════════════════════════════════════════════════════════════════
+   State
+   ═══════════════════════════════════════════════════════════════════════ */
+let NODES = [], EDGES = [], BY_ID = new Map(), ADJ = new Map();
+let GROUPS = [], GROUP_COLOR = new Map(), GROUP_OFF = new Set();
+let view = { x: 0, y: 0, k: 1 };
+let hover = null, selected = null, dragNode = null, panning = false;
+let matched = null;                 // Set of ids matching the search, or null
+let alpha = 1;                      // simulation temperature
+let raf = null;
+
+const canvas = $("#graph"), ctx = canvas.getContext("2d");
+
+/* Colours assigned per group. Chosen to stay distinguishable on the dark
+   background and to avoid the red/green pair, which is the hardest for
+   colour-blind viewers. */
+const PALETTE = ["#7fe7ff","#b9a3ff","#5ee7a8","#ffcf6b","#ff8fb1","#8fb4ff",
+                 "#ffb38a","#a8e6cf","#d9a7ff","#7fd4ff","#ffe08a","#9fe8c5"];
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Layout — force simulation
+   ───────────────────────────────────────────────────────────────────────
+   Hand-rolled rather than d3-force because this page has no bundler and no
+   CDN access, and because the repulsion needs a spatial grid to stay usable
+   at a few thousand nodes: naive all-pairs is O(n²) per frame, which stalls
+   the browser above roughly 800 files.
+   ═══════════════════════════════════════════════════════════════════════ */
+const SIM = {
+  repulsion: 2600,     // node-node push
+  springK: 0.030,      // edge stiffness
+  springLen: 78,       // rest length
+  centerK: 0.0011,     // pull toward origin, stops islands drifting away
+  damping: 0.87,
+  cell: 150,           // spatial hash cell size; ~ the repulsion cutoff
+  clusterK: 0.014,     // pull toward own group's centroid
+  groupRepel: 34000,   // push between group centroids
+};
+
+/* Spacing has to scale with the corpus. A repulsion tuned for 50 nodes leaves
+   500 in a solid ball, because every node is pushing against many more
+   neighbours while the centering force stays the same. Scaling by sqrt(n)
+   keeps the *density* roughly constant instead of the absolute size. */
+function rescaleForCount(n){
+  const f = Math.max(1, Math.sqrt(n / 60));
+  SIM.repulsion = 2600 * f;
+  SIM.springLen = 78 * Math.max(1, Math.sqrt(n / 120));
+  SIM.cell = Math.max(150, SIM.springLen * 2.1);
+  SIM.centerK = 0.0011 / f;
+  SIM.groupRepel = 34000 * f * f;
+}
+
+
+
+function seedPositions(){
+  // Seed each group around its own point on a ring, then spiral within it.
+  // Starting from a single blob means the sim has to *untangle* clusters that
+  // began interleaved, which it does slowly and often incompletely; starting
+  // them apart means it only has to refine.
+  const golden = Math.PI * (3 - Math.sqrt(5));
+  const groups = [...new Set(NODES.filter(n => !n.hidden).map(n => n.group))];
+  const ringR = 210 * Math.max(1, Math.sqrt(groups.length / 3))
+              * Math.max(1, Math.sqrt(NODES.length / 120));
+  const centre = new Map(groups.map((g, i) => {
+    const a = (i / Math.max(1, groups.length)) * Math.PI * 2;
+    return [g, { x: ringR * Math.cos(a), y: ringR * Math.sin(a) }];
+  }));
+  const seen = new Map();
+  NODES.forEach(n => {
+    const c = centre.get(n.group) || { x: 0, y: 0 };
+    const k = (seen.get(n.group) || 0); seen.set(n.group, k + 1);
+    const r = 16 * Math.sqrt(k), a = k * golden;
+    n.x = c.x + r * Math.cos(a);
+    n.y = c.y + r * Math.sin(a);
+    n.vx = 0; n.vy = 0; n.pinned = false;
+  });
+}
+
+function step(){
+  if (alpha < 0.0018) return false;
+
+  const grid = new Map();
+  const cs = SIM.cell;
+  for (const n of NODES){
+    if (n.hidden) continue;
+    const key = ((n.x/cs)|0) + "," + ((n.y/cs)|0);
+    let cell = grid.get(key);
+    if (!cell) grid.set(key, cell = []);
+    cell.push(n);
+  }
+
+  // Repulsion, but only against the 9 neighbouring cells. Beyond ~2 cells the
+  // 1/d² force is smaller than the rounding error on a pixel, so ignoring it
+  // costs nothing visually and turns O(n²) into roughly O(n).
+  for (const n of NODES){
+    if (n.hidden) continue;
+    const cx = (n.x/cs)|0, cy = (n.y/cs)|0;
+    for (let gx = cx-1; gx <= cx+1; gx++){
+      for (let gy = cy-1; gy <= cy+1; gy++){
+        const cell = grid.get(gx + "," + gy);
+        if (!cell) continue;
+        for (const m of cell){
+          if (m === n) continue;
+          let dx = n.x - m.x, dy = n.y - m.y;
+          let d2 = dx*dx + dy*dy;
+          if (d2 < 0.01){          // exactly coincident: nudge deterministically
+            dx = (n.i - m.i) * 0.01 + 0.01; dy = 0.01; d2 = dx*dx + dy*dy;
+          }
+          if (d2 > cs*cs*4) continue;
+          const f = SIM.repulsion / d2;
+          const d = Math.sqrt(d2);
+          n.vx += (dx/d) * f * alpha;
+          n.vy += (dy/d) * f * alpha;
+        }
+      }
+    }
+  }
+
+  // Springs. Stronger edges pull harder, so tight clusters read as tight.
+  for (const e of EDGES){
+    const a = e.a, b = e.b;
+    if (!a || !b || a.hidden || b.hidden) continue;
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const d = Math.max(0.5, Math.hypot(dx, dy));
+    const target = SIM.springLen / Math.max(0.35, e.weight);
+    const f = (d - target) * SIM.springK * e.weight * alpha;
+    const ux = dx/d, uy = dy/d;
+    a.vx += ux*f; a.vy += uy*f;
+    b.vx -= ux*f; b.vy -= uy*f;
+  }
+
+  // Group cohesion + separation, via territories rather than raw centroids.
+  computeTerritories();
+  for (const t of TERRITORIES){ t.ox = 0; t.oy = 0; }
+  separateTerritories(alpha);
+  const TER = new Map(TERRITORIES.map(t => [t.g, t]));
+
+  for (const n of NODES){
+    if (n.hidden) continue;
+    if (n === dragNode || n.pinned){ n.vx = n.vy = 0; continue; }
+    const t = TER.get(n.group);
+    if (t){
+      // Pull toward the territory's post-separation position, so members
+      // follow their region as it is pushed clear of its neighbours.
+      const tx = t.x + (t.ox||0), ty = t.y + (t.oy||0);
+      n.vx += (tx - n.x) * clusterStrength() * alpha;
+      n.vy += (ty - n.y) * clusterStrength() * alpha;
+    }
+    n.vx -= n.x * SIM.centerK * alpha;
+    n.vy -= n.y * SIM.centerK * alpha;
+    n.vx *= SIM.damping; n.vy *= SIM.damping;
+    // Clamp: a pathological config can otherwise fling a node to infinity,
+    // which takes the auto-fit with it.
+    const sp = Math.hypot(n.vx, n.vy);
+    if (sp > 40){ n.vx = n.vx/sp*40; n.vy = n.vy/sp*40; }
+    n.x += n.vx; n.y += n.vy;
+  }
+
+  alpha *= 0.988;
+  return true;
+}
+
+function clusterStrength(){ return SIM.clusterK * (+$("#cluster").value / 50); }
+function reheat(a = 0.55){ alpha = Math.max(alpha, a); loop(); }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Rendering
+   ═══════════════════════════════════════════════════════════════════════ */
+function resize(){
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const r = canvas.getBoundingClientRect();
+  canvas.width = Math.max(1, r.width * dpr);
+  canvas.height = Math.max(1, r.height * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  draw();
+}
+
+function radiusOf(n){ return 2.6 + Math.min(9, Math.sqrt(n.degree) * 2.1); }
+
+function draw(){
+  const r = canvas.getBoundingClientRect();
+  ctx.clearRect(0, 0, r.width, r.height);
+  ctx.save();
+  ctx.translate(r.width/2 + view.x, r.height/2 + view.y);
+  ctx.scale(view.k, view.k);
+
+  const focusSet = hoverOrSelectedNeighbourhood();
+
+  // ── group territories ──
+  // Drawn under everything. Uniform circles rather than per-group hulls: the
+  // shape carries no information, so varying it was pure noise.
+  if ($("#showHulls").checked && !matched && !focusSet){
+    for (const t of TERRITORIES){
+      const x = t.x + (t.ox||0), y = t.y + (t.oy||0);
+      const grad = ctx.createRadialGradient(x, y, t.r * 0.15, x, y, t.r);
+      grad.addColorStop(0, hexA(t.color, 0.085));
+      grad.addColorStop(1, hexA(t.color, 0.012));
+      ctx.fillStyle = grad;
+      ctx.beginPath(); ctx.arc(x, y, t.r, 0, 6.2832); ctx.fill();
+      ctx.strokeStyle = hexA(t.color, 0.20);
+      ctx.lineWidth = 1.1 / view.k;
+      ctx.setLineDash([5 / view.k, 5 / view.k]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
+
+  // ── edges ──
+  ctx.lineWidth = 1 / view.k;
+  for (const e of EDGES){
+    const a = e.a, b = e.b;
+    if (!a || !b || a.hidden || b.hidden) continue;
+    let alphaLine = 0.06 + (e.weight - 0.5) * 0.34;
+    if (focusSet){
+      const on = focusSet.has(a.id) && focusSet.has(b.id);
+      alphaLine = on ? 0.75 : 0.02;
+    } else if (matched){
+      alphaLine = (matched.has(a.id) && matched.has(b.id)) ? 0.55 : 0.025;
+    }
+    ctx.strokeStyle = "rgba(150,170,255," + alphaLine.toFixed(3) + ")";
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+  }
+
+  // ── nodes ──
+  for (const n of NODES){
+    if (n.hidden) continue;
+    const rad = radiusOf(n);
+    let a = 1;
+    if (focusSet) a = focusSet.has(n.id) ? 1 : 0.14;
+    else if (matched) a = matched.has(n.id) ? 1 : 0.12;
+
+    ctx.globalAlpha = a;
+    ctx.fillStyle = n.color;
+    ctx.beginPath(); ctx.arc(n.x, n.y, rad, 0, 6.2832); ctx.fill();
+
+    if (n === selected || n === hover){
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.6 / view.k;
+      ctx.beginPath(); ctx.arc(n.x, n.y, rad + 2.4/view.k, 0, 6.2832); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // ── labels ──
+  // Only when they'd be legible and not overlapping into mush: past a zoom
+  // threshold, or for the hubs, or for whatever the search matched.
+  if ($("#showLabels").checked){
+    ctx.font = (11/view.k).toFixed(2) + "px -apple-system,system-ui,sans-serif";
+    ctx.textAlign = "center"; ctx.textBaseline = "top";
+
+    // Screen-space occupancy grid. Drawing every eligible label produced the
+    // unreadable pile-up in the middle of the map: at 478 nodes the labels
+    // overlap into a smear and none of them can be read. Highest-degree first,
+    // then skip anything whose cell is already taken — so what survives is the
+    // most informative label in each region, and it stays legible at any zoom.
+    const rect = canvas.getBoundingClientRect();
+    const taken = new Set();
+    const CW = 78, CH = 15;              // approximate label footprint, px
+    const zoomedIn = view.k > 0.62;
+
+    const candidates = NODES.filter(n => !n.hidden).sort((a, b) => {
+      const pri = x => (x === hover || x === selected) ? 1e6
+                     : (matched && matched.has(x.id)) ? 1e5 : x.degree;
+      return pri(b) - pri(a);
+    });
+
+    for (const n of candidates){
+      const always = n === hover || n === selected || (matched && matched.has(n.id));
+      // At overview zoom the group names carry the map; file names at that
+      // scale were the smear in the middle. They fade in as you zoom.
+      if (!always && !zoomedIn) continue;
+
+      const sx = rect.width/2 + view.x + n.x * view.k;
+      const sy = rect.height/2 + view.y + n.y * view.k;
+      if (sx < -80 || sy < -30 || sx > rect.width + 80 || sy > rect.height + 30) continue;
+
+      const label0 = n.label.length > 24 ? n.label.slice(0, 23) + "…" : n.label;
+      // Reserve every cell the label actually covers, not just the one its
+      // centre lands in — a name wider than one cell overlapped its neighbour,
+      // which is where the remaining collisions were coming from.
+      const wpx = ctx.measureText(label0).width * view.k;
+      const span = Math.max(1, Math.ceil(wpx / CW));
+      const c0 = Math.floor((sx - wpx/2) / CW), row = Math.floor(sy / CH);
+      let free = true;
+      for (let c = c0; c <= c0 + span && free; c++){
+        if (taken.has(c + ":" + row)) free = false;
+      }
+      if (!always && !free) continue;
+      for (let c = c0; c <= c0 + span; c++) taken.add(c + ":" + row);
+
+      let a = 1;
+      if (focusSet) a = focusSet.has(n.id) ? 1 : 0.07;
+      else if (matched) a = matched.has(n.id) ? 1 : 0.06;
+      else a = zoomedIn ? 0.78 : 0.55;
+      ctx.globalAlpha = a;
+      ctx.fillStyle = "#cec7ea";
+      ctx.fillText(label0, n.x, n.y + radiusOf(n) + 3/view.k);
+    }
+    ctx.globalAlpha = 1;
+  }
+  // ── group names ──
+  // The map's primary labels. Like a real map: region names at overview zoom,
+  // place names only once you're in close. Drawn at constant SCREEN size so
+  // they stay readable however far out you are.
+  if ($("#showHulls").checked && !focusSet){
+    const px = 1 / view.k;
+
+    // Anchor each label on the side of its circle facing AWAY from the middle
+    // of the map. Always-on-top put the two central groups' labels squarely
+    // over their neighbours, which is exactly where a label is least readable.
+    let gx = 0, gy = 0;
+    for (const t of TERRITORIES){ gx += t.x + (t.ox||0); gy += t.y + (t.oy||0); }
+    gx /= Math.max(1, TERRITORIES.length); gy /= Math.max(1, TERRITORIES.length);
+
+    for (const t of TERRITORIES){
+      const x = t.x + (t.ox||0), y = t.y + (t.oy||0);
+      let dx = x - gx, dy = y - gy;
+      const d = Math.hypot(dx, dy);
+      // A group sitting at the centre has no meaningful outward direction;
+      // put its label above, where there is at least a consistent convention.
+      if (d < t.r * 0.35){ dx = 0; dy = -1; }
+      else { dx /= d; dy /= d; }
+      const lx = x + dx * (t.r + 16 * px);
+      const ly = y + dy * (t.r + 16 * px);
+      const name = t.g.includes("/") ? t.g.split("/").slice(-1)[0] : t.g;
+      ctx.save();
+      ctx.translate(lx, ly);
+      ctx.scale(px, px);                      // cancel zoom: fixed pt size
+      ctx.font = "700 12px -apple-system,system-ui,sans-serif";
+      ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+      ctx.letterSpacing = "1.4px";
+      const w = ctx.measureText(name.toUpperCase()).width;
+      ctx.fillStyle = "rgba(10,8,20,.78)";
+      ctx.beginPath();
+      // roundRect is recent; a missing method would throw inside the render
+      // loop and take the whole canvas down, so fall back to a plain rect.
+      if (ctx.roundRect) ctx.roundRect(-w/2 - 9, -11, w + 18, 21, 10);
+      else ctx.rect(-w/2 - 9, -11, w + 18, 21);
+      ctx.fill();
+      ctx.strokeStyle = hexA(t.color, 0.42); ctx.lineWidth = 1; ctx.stroke();
+      ctx.fillStyle = t.color;
+      ctx.textBaseline = "middle";
+      ctx.fillText(name.toUpperCase(), 0, 0);
+      ctx.letterSpacing = "0px";
+      ctx.fillStyle = "rgba(200,195,230,.52)";
+      ctx.font = "500 9.5px -apple-system,system-ui,sans-serif";
+      ctx.fillText(t.n + " files", 0, 19);
+      ctx.restore();
+    }
+  }
+
+  ctx.restore();
+}
+
+function hexA(hex, a){
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`;
+}
+
+/* Group territories.
+   ─────────────────────────────────────────────────────────────────────────
+   The first version drew a convex hull around each group's members. Hulls of
+   scattered points are inherently jagged and every group produced a different
+   irregular shape, so eight of them overlapping read as visual noise rather
+   than structure.
+
+   A circle per group is uniform by construction: same shape every time, one
+   number (the radius) carrying the only information that matters — how much
+   room that group needs. Radius is the RMS spread of its members rather than
+   the max, so one far-flung outlier doesn't inflate the whole territory. */
+let TERRITORIES = [];
+
+function computeTerritories(){
+  const pts = groupPoints();
+  TERRITORIES = [];
+  for (const [g, members] of pts){
+    if (!members.length) continue;
+    let cx = 0, cy = 0;
+    for (const m of members){ cx += m.x; cy += m.y; }
+    cx /= members.length; cy /= members.length;
+    let sum = 0;
+    for (const m of members) sum += (m.x-cx)**2 + (m.y-cy)**2;
+    const rms = Math.sqrt(sum / members.length);
+    TERRITORIES.push({
+      g, x: cx, y: cy,
+      r: Math.max(42, rms * 1.32 + 20),
+      n: members.length,
+      color: GROUP_COLOR.get(g) || "#8fb4ff",
+    });
+  }
+  TERRITORIES.sort((a, b) => b.r - a.r);   // draw big ones first, under
+}
+
+/* Push overlapping territories apart.
+   Inverse-square repulsion between centroids never actually resolves overlap —
+   it just weakens as they separate, so blobs sit on top of each other forever.
+   Solving the overlap directly does converge: if two circles intersect, move
+   each out along the centre line by half the intersection depth. */
+function separateTerritories(strength){
+  const PAD = 46;
+  // More passes than feels necessary: one pass resolves each pair in
+  // isolation, but moving A out of B can push it into C. Iterating lets the
+  // whole arrangement settle instead of leaving a few stubborn overlaps.
+  for (let iter = 0; iter < 8; iter++){
+    for (let i = 0; i < TERRITORIES.length; i++){
+      for (let j = i + 1; j < TERRITORIES.length; j++){
+        const A = TERRITORIES[i], B = TERRITORIES[j];
+        let dx = B.x - A.x, dy = B.y - A.y;
+        let d = Math.hypot(dx, dy);
+        const want = A.r + B.r + PAD;
+        if (d >= want) continue;
+        if (d < 0.01){ dx = (i - j) || 1; dy = 1; d = Math.hypot(dx, dy); }
+        const push = (want - d) * 0.5 * Math.max(strength, 0.35);
+        const ux = dx/d, uy = dy/d;
+        // Heavier groups move less, so a big cluster stays put and the small
+        // ones arrange around it instead of everything jittering.
+        const total = A.n + B.n;
+        A.ox = (A.ox||0) - ux * push * (B.n/total) * 2;
+        A.oy = (A.oy||0) - uy * push * (B.n/total) * 2;
+        B.ox = (B.ox||0) + ux * push * (A.n/total) * 2;
+        B.oy = (B.oy||0) + uy * push * (A.n/total) * 2;
+      }
+    }
+  }
+}
+
+function groupPoints(){
+  const m = new Map();
+  for (const n of NODES){
+    if (n.hidden) continue;
+    let arr = m.get(n.group);
+    if (!arr) m.set(n.group, arr = []);
+    arr.push(n);
+  }
+  return m;
+}
+
+function hoverOrSelectedNeighbourhood(){
+  const n = hover || selected;
+  if (!n) return null;
+  const s = new Set([n.id]);
+  for (const nb of (ADJ.get(n.id) || [])) s.add(nb.id);
+  return s;
+}
+
+let pendingFit = false;
+function loop(){
+  if (raf) return;
+  const tick = () => {
+    raf = null;
+    const moving = step();
+    draw();
+    if (moving) raf = requestAnimationFrame(tick);
+    else if (pendingFit){
+      // Frame it once the layout has actually settled. Fitting on a timer
+      // caught the transient blob — groups were still being pushed apart, so
+      // the last ones to move ended up outside the frame.
+      pendingFit = false;
+      fit();
+    }
+  };
+  raf = requestAnimationFrame(tick);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Fit / coordinate helpers
+   ═══════════════════════════════════════════════════════════════════════ */
+function fit(){
+  const vis = NODES.filter(n => !n.hidden);
+  if (!vis.length) return;
+  let minX=1e9, maxX=-1e9, minY=1e9, maxY=-1e9;
+
+  // Frame the TERRITORIES, not the raw node positions. A circle extends past
+  // its outermost member, and its name label sits above that again — fitting
+  // to nodes alone clipped both off the top of the screen.
+  const boxes = TERRITORIES.length
+    ? TERRITORIES.map(t => ({ x: t.x + (t.ox||0), y: t.y + (t.oy||0), r: t.r }))
+    : vis.map(n => ({ x: n.x, y: n.y, r: 0 }));
+  for (const b of boxes){
+    if (b.x-b.r < minX) minX = b.x-b.r;
+    if (b.x+b.r > maxX) maxX = b.x+b.r;
+    if (b.y-b.r < minY) minY = b.y-b.r;
+    if (b.y+b.r > maxY) maxY = b.y+b.r;
+  }
+  for (const n of vis){                       // stragglers outside any circle
+    if (n.x < minX) minX = n.x; if (n.x > maxX) maxX = n.x;
+    if (n.y < minY) minY = n.y; if (n.y > maxY) maxY = n.y;
+  }
+
+  const r = canvas.getBoundingClientRect();
+  const w = Math.max(1, maxX-minX), h = Math.max(1, maxY-minY);
+  // Asymmetric margins: the floating search bar occupies the top centre and
+  // the control panel the left, so leave more room on those sides.
+  const padX = 300, padTop = 130, padBottom = 70;
+  view.k = Math.max(0.05, Math.min(2.4,
+    Math.min((r.width - padX) / w, (r.height - padTop - padBottom) / h)));
+  view.x = -((minX+maxX)/2) * view.k + 90;
+  view.y = -((minY+maxY)/2) * view.k + (padTop - padBottom) / 2;
+  draw();
+}
+
+function toWorld(px, py){
+  const r = canvas.getBoundingClientRect();
+  return { x: (px - r.left - r.width/2 - view.x) / view.k,
+           y: (py - r.top - r.height/2 - view.y) / view.k };
+}
+
+function nodeAt(px, py){
+  const p = toWorld(px, py);
+  let best = null, bestD = Infinity;
+  for (const n of NODES){
+    if (n.hidden) continue;
+    const d = Math.hypot(n.x-p.x, n.y-p.y);
+    const hit = radiusOf(n) + 6/view.k;
+    if (d < hit && d < bestD){ best = n; bestD = d; }
+  }
+  return best;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Data
+   ═══════════════════════════════════════════════════════════════════════ */
+async function loadGraph(){
+  // Auto by default: the right cosine floor depends on which embedding model
+  // Ollama is running, and guessing wrong shows an empty map.
+  const th = $("#autoTh").checked ? "auto" : (+$("#th").value / 100).toFixed(2);
+  const nb = +$("#nb").value;
+  toast("Building the map… this takes a moment on a big index.", 0);
+  try{
+    const r = await fetch(`/atlas/graph?threshold=${th}&neighbours=${nb}`);
+    const d = await r.json();
+    if (d.error){ toast("Couldn't build the graph: " + esc(d.error), 6000); return; }
+    ingest(d);
+    if (d.threshold != null){
+      $("#thVal").textContent = $("#autoTh").checked
+        ? "auto (" + (+d.threshold).toFixed(2) + ")" : (+d.threshold).toFixed(2);
+      $("#th").value = Math.round(d.threshold * 100);
+    }
+    toast(d.note ? d.note : "", d.note ? 7000 : 1);
+  }catch(e){
+    toast("Couldn't reach Jarvis. Is the server running?", 6000);
+  }
+}
+
+function ingest(d){
+  NODES = (d.nodes||[]).map((n, i) => ({...n, i, x:0, y:0, vx:0, vy:0, hidden:false}));
+  BY_ID = new Map(NODES.map(n => [n.id, n]));
+
+  GROUPS = [...new Set(NODES.map(n => n.group))].sort();
+  GROUP_COLOR = new Map(GROUPS.map((g, i) => [g, PALETTE[i % PALETTE.length]]));
+  NODES.forEach(n => n.color = GROUP_COLOR.get(n.group) || "#8fb4ff");
+
+  EDGES = (d.edges||[]).map(e => ({
+    a: BY_ID.get(e.source), b: BY_ID.get(e.target), weight: e.weight,
+  })).filter(e => e.a && e.b);
+
+  ADJ = new Map(NODES.map(n => [n.id, []]));
+  for (const e of EDGES){
+    ADJ.get(e.a.id).push({ id: e.b.id, node: e.b, weight: e.weight });
+    ADJ.get(e.b.id).push({ id: e.a.id, node: e.a, weight: e.weight });
+  }
+  for (const list of ADJ.values()) list.sort((x,y) => y.weight - x.weight);
+
+  const st = d.stats || {};
+  $("#nNodes").textContent = st.nodes ?? NODES.length;
+  $("#nEdges").textContent = st.edges ?? EDGES.length;
+  $("#nIso").textContent = st.isolated ?? 0;
+
+  renderLegend();
+  applyFilters();
+  rescaleForCount(NODES.filter(n => !n.hidden).length);
+  seedPositions();
+  alpha = 1;
+  loop();
+  // Framed by loop() the moment the simulation settles, rather than on a
+  // timer — see pendingFit. The early fit is just so it isn't off-screen
+  // while it's still arranging itself.
+  pendingFit = true;
+  setTimeout(() => { if (pendingFit) fit(); }, 700);
+}
+
+function renderLegend(){
+  $("#legend").innerHTML = GROUPS.map(g =>
+    `<div class="lg${GROUP_OFF.has(g)?" off":""}" data-g="${esc(g)}">
+       <span class="sw" style="background:${GROUP_COLOR.get(g)}"></span>${esc(g)}
+     </div>`).join("");
+  $("#legend").querySelectorAll(".lg").forEach(el => {
+    el.onclick = () => {
+      const g = el.dataset.g;
+      GROUP_OFF.has(g) ? GROUP_OFF.delete(g) : GROUP_OFF.add(g);
+      renderLegend(); applyFilters();
+      rescaleForCount(NODES.filter(n => !n.hidden).length);
+      reheat(0.45);
+    };
+  });
+}
+
+function applyFilters(){
+  const hideIso = $("#hideIso").checked;
+  for (const n of NODES){
+    n.hidden = GROUP_OFF.has(n.group) || (hideIso && n.degree === 0);
+  }
+  draw();
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Interaction
+   ═══════════════════════════════════════════════════════════════════════ */
+canvas.addEventListener("mousedown", e => {
+  const n = nodeAt(e.clientX, e.clientY);
+  if (n){ dragNode = n; n.pinned = true; reheat(0.35); }
+  else { panning = true; canvas.classList.add("dragging"); }
+});
+window.addEventListener("mousemove", e => {
+  if (dragNode){
+    const p = toWorld(e.clientX, e.clientY);
+    dragNode.x = p.x; dragNode.y = p.y; dragNode.vx = dragNode.vy = 0;
+    reheat(0.3); return;
+  }
+  if (panning){ pendingFit = false; view.x += e.movementX; view.y += e.movementY; draw(); return; }
+
+  const n = nodeAt(e.clientX, e.clientY);
+  if (n !== hover){
+    hover = n;
+    canvas.style.cursor = n ? "pointer" : "grab";
+    draw();
+  }
+  const tip = $("#tip");
+  if (n){
+    tip.style.display = "block";
+    tip.style.left = Math.min(e.clientX + 14, window.innerWidth - 340) + "px";
+    tip.style.top  = (e.clientY + 14) + "px";
+    tip.innerHTML = `<div>${esc(n.label)}</div><div class="p">${esc(tilde(n.path))}</div>` +
+                    `<div class="p">${n.degree} link${n.degree===1?"":"s"} · ${esc(n.group)}</div>`;
+  } else tip.style.display = "none";
+});
+window.addEventListener("mouseup", () => {
+  if (dragNode) dragNode = null;
+  panning = false; canvas.classList.remove("dragging");
+});
+canvas.addEventListener("click", e => {
+  const n = nodeAt(e.clientX, e.clientY);
+  selected = n;
+  n ? showDetail(n) : $("#detail").classList.remove("on");
+  draw();
+});
+canvas.addEventListener("dblclick", e => {
+  const n = nodeAt(e.clientX, e.clientY);
+  if (n){ n.pinned = false; reheat(0.5); }
+});
+canvas.addEventListener("wheel", e => {
+  e.preventDefault();
+  pendingFit = false;
+  const r = canvas.getBoundingClientRect();
+  const mx = e.clientX - r.left - r.width/2, my = e.clientY - r.top - r.height/2;
+  const factor = Math.exp(-e.deltaY * 0.0016);
+  const k2 = Math.max(0.04, Math.min(9, view.k * factor));
+  // Zoom about the pointer, not the origin — otherwise the thing you're
+  // aiming at slides away as you zoom in.
+  view.x = mx - (mx - view.x) * (k2 / view.k);
+  view.y = my - (my - view.y) * (k2 / view.k);
+  view.k = k2;
+  draw();
+}, { passive: false });
+
+function showDetail(n){
+  $("#dName").textContent = n.label;
+  $("#dPath").textContent = tilde(n.path);
+  const kb = n.size ? (n.size > 1048576 ? (n.size/1048576).toFixed(1)+" MB"
+                                        : Math.max(1, Math.round(n.size/1024))+" KB") : "";
+  $("#dMeta").innerHTML = [n.ext||"file", n.degree + " links", kb, n.group]
+    .filter(Boolean).map(esc).join(" &middot; ");
+  $("#dReveal").onclick = () => reveal(n.path);
+
+  const nbrs = (ADJ.get(n.id) || []).slice(0, 10);
+  $("#dNbrs").innerHTML = nbrs.length
+    ? "<h4>Most similar</h4>" + nbrs.map(nb =>
+        `<div class="nbr" data-id="${esc(nb.id)}">${esc(nb.node.label)}
+           <span class="w">${(nb.weight*100).toFixed(0)}%</span></div>`).join("")
+    : "<h4>Most similar</h4><div style='font-size:11.5px;color:var(--text-3)'>"
+      + "Nothing else resembles this file. Lower the link threshold to see weaker matches.</div>";
+  $("#dNbrs").querySelectorAll(".nbr").forEach(el => {
+    el.onclick = () => { const t = BY_ID.get(el.dataset.id); if (t) focusNode(t); };
+  });
+  $("#detail").classList.add("on");
+}
+
+function focusNode(n){
+  selected = n; showDetail(n);
+  view.k = Math.max(view.k, 1.3);
+  view.x = -n.x * view.k; view.y = -n.y * view.k;
+  draw();
+}
+
+$("#detailClose").onclick = () => { $("#detail").classList.remove("on"); selected = null; draw(); };
+$("#refit").onclick = fit;
+
+/* ── controls ── */
+$("#th").addEventListener("input", e => {
+  $("#autoTh").checked = false;           // touching the slider means manual
+  $("#thVal").textContent = (+e.target.value/100).toFixed(2);
+});
+$("#autoTh").addEventListener("change", loadGraph);
+$("#nb").addEventListener("input", e => $("#nbVal").textContent = e.target.value);
+$("#th").addEventListener("change", loadGraph);
+$("#nb").addEventListener("change", loadGraph);
+$("#showLabels").addEventListener("change", draw);
+$("#showHulls").addEventListener("change", draw);
+$("#cluster").addEventListener("input", e => {
+  const v = +e.target.value;
+  $("#clVal").textContent = v === 0 ? "off" : v < 35 ? "loose"
+                          : v < 70 ? "normal" : v < 100 ? "tight" : "very tight";
+  reheat(0.45);
+});
+$("#hideIso").addEventListener("change", () => {
+  applyFilters();
+  rescaleForCount(NODES.filter(n => !n.hidden).length);
+  reheat(0.45);
+});
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Search — highlights on the map AND lists results
+   ═══════════════════════════════════════════════════════════════════════ */
+let searchTimer = null;
+$("#q").addEventListener("input", e => {
+  const q = e.target.value.trim();
+  clearTimeout(searchTimer);
+  if (!q){
+    matched = null; $("#results").classList.remove("on");
+    $("#qcount").textContent = ""; draw(); return;
+  }
+  searchTimer = setTimeout(() => runSearch(q), 240);
+});
+document.addEventListener("keydown", e => {
+  if ((e.metaKey || e.ctrlKey) && e.key === "f"){ e.preventDefault(); $("#q").focus(); $("#q").select(); }
+  if (e.key === "Escape"){
+    $("#q").value = ""; matched = null; $("#results").classList.remove("on");
+    $("#qcount").textContent = ""; $("#detail").classList.remove("on"); selected = null; draw();
+  }
+});
+
+async function runSearch(q){
+  try{
+    const r = await fetch("/atlas/search?q=" + encodeURIComponent(q) + "&k=20");
+    const d = await r.json();
+    const items = d.results || [];
+    matched = new Set(items.map(i => i.path).filter(p => BY_ID.has(p)));
+    $("#qcount").textContent = items.length ? items.length + " found" : "none";
+    $("#results").innerHTML = items.length ? items.map((it, i) => {
+      const pct = it.score != null ? Math.round(it.score*100) + "%" : "keyword";
+      return `<div class="res" data-path="${esc(it.path)}">
+        <div class="top"><span class="name">${esc(it.name||"untitled")}</span>
+          <span class="tag">${esc((it.ext||"file").replace(".",""))}</span>
+          <span class="score">${pct}</span></div>
+        <div class="path">${esc(tilde(it.path))}</div>
+        ${it.snippet ? `<div class="snip">${esc(it.snippet)}</div>` : ""}
+      </div>`;
+    }).join("") : `<div class="res"><div class="snip">No matches. Try different words, or Reindex if you just added files.</div></div>`;
+    $("#results").classList.add("on");
+    $("#results").querySelectorAll(".res").forEach(el => {
+      el.onclick = () => {
+        const n = BY_ID.get(el.dataset.path);
+        // A search hit that isn't on the map means the index has files the
+        // graph doesn't — say so rather than silently doing nothing.
+        if (n) focusNode(n);
+        else toast("That file is indexed but not on the map — rebuild the graph to include it.", 4000);
+      };
+    });
+    draw();
+  }catch(e){
+    $("#results").innerHTML = `<div class="res"><div class="snip">Search failed. Is Jarvis running?</div></div>`;
+    $("#results").classList.add("on");
+  }
+}
+
+async function reveal(path){
+  try{ await fetch("/atlas/open?path=" + encodeURIComponent(path)); }
+  catch(e){ toast("Couldn't open that file.", 3000); }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Indexing
+   ═══════════════════════════════════════════════════════════════════════ */
+let pollTimer = null;
+async function loadStatus(){
+  try{
+    const d = await (await fetch("/atlas/status")).json();
+    const af = d.atlas_files || {}, cn = d.codex_notes || {};
+    const running = af.running || cn.running;
+    $("#prog").classList.toggle("on", !!running);
+    if (running){
+      $("#progText").textContent =
+        (af.indexed||0) + " done · " + (af.seen||0) + " seen"
+        + (af.current ? " · " + af.current : "");
+    }
+    return running;
+  }catch(e){ return false; }
+}
+function startPolling(){
+  if (pollTimer) return;
+  pollTimer = setInterval(async () => {
+    if (!await loadStatus()){
+      clearInterval(pollTimer); pollTimer = null;
+      toast("Index rebuilt — refreshing the map.", 2500);
+      loadGraph();
+    }
+  }, 1500);
+}
+$("#reindex").onclick = async () => {
+  // Rebuild rather than incremental: the skip list now excludes vendored
+  // code, and an incremental pass would leave everything already embedded in
+  // place — the noise would never go away.
+  $("#reindex").disabled = true;
+  toast("Rebuilding the index from scratch…", 0);
+  try{
+    await fetch("/atlas/reindex", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ which: "all", rebuild: true }),
+    });
+  }catch(e){ toast("Couldn't start the reindex.", 4000); }
+  $("#reindex").disabled = false;
+  setTimeout(startPolling, 600);
+};
+
+let toastTimer = null;
+function toast(msg, ms = 3000){
+  const t = $("#toast");
+  clearTimeout(toastTimer);
+  if (!msg || ms === 1){ t.classList.remove("on"); return; }
+  t.innerHTML = msg;
+  t.classList.add("on");
+  if (ms > 0) toastTimer = setTimeout(() => t.classList.remove("on"), ms);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Boot
+   ═══════════════════════════════════════════════════════════════════════ */
+function clock(){
+  $("#clock").textContent = new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
+}
+clock(); setInterval(clock, 30000);
+window.addEventListener("resize", resize);
+resize();
+loadStatus().then(r => { if (r) startPolling(); });
+loadGraph();
+</script>
+</body>
+</html>

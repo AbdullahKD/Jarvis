@@ -15,7 +15,7 @@ import queue
 import subprocess
 import threading
 from contextlib import contextmanager
-from typing import Iterator, Optional
+from typing import Callable, Iterator, Optional
 
 import numpy as np
 import sounddevice as sd
@@ -86,18 +86,87 @@ class MicStream:
             except queue.Empty:
                 pass
 
+    @staticmethod
+    def _find_builtin_mic() -> Optional[int]:
+        """Index of the built-in Mac microphone, or None.
+
+        Used as a fallback when the default input is a Bluetooth headset
+        (AirPods etc.) — opening a BT mic while the same device is the A2DP
+        output forces a profile switch that PortAudio rejects with -9986.
+        """
+        try:
+            for idx, d in enumerate(sd.query_devices()):
+                if d.get("max_input_channels", 0) > 0:
+                    name = (d.get("name") or "").lower()
+                    if any(k in name for k in
+                           ("macbook", "built-in", "built in", "internal", "imac")):
+                        return idx
+        except Exception:
+            pass
+        return None
+
+    def _candidate_devices(self) -> list:
+        """Ordered, de-duplicated list of input devices to try."""
+        cands: list = []
+        # 1. Explicitly configured device (AUDIO_INPUT_DEVICE) wins.
+        if self._cfg.input_device is not None:
+            cands.append(self._cfg.input_device)
+        # 2. Built-in mic — avoids the AirPods/Bluetooth SCO conflict.
+        builtin = self._find_builtin_mic()
+        if builtin is not None:
+            cands.append(builtin)
+        # 3. System default input (None) as a last resort.
+        cands.append(None)
+        # De-dupe preserving order.
+        seen, out = set(), []
+        for c in cands:
+            if c not in seen:
+                seen.add(c)
+                out.append(c)
+        return out
+
     def start(self) -> None:
         if self._stream is not None:
             return
-        self._stream = sd.InputStream(
-            samplerate=self._cfg.sample_rate,
-            channels=1,
-            dtype="int16",
-            blocksize=CHUNK_SAMPLES,
-            device=self._cfg.input_device,
-            callback=self._callback,
+
+        last_err: Optional[Exception] = None
+        for device in self._candidate_devices():
+            try:
+                stream = sd.InputStream(
+                    samplerate=self._cfg.sample_rate,
+                    channels=1,
+                    dtype="int16",
+                    blocksize=CHUNK_SAMPLES,
+                    device=device,
+                    callback=self._callback,
+                )
+                stream.start()
+            except Exception as exc:  # PortAudioError and friends
+                last_err = exc
+                try:
+                    name = sd.query_devices(device)["name"] if device is not None else "default"
+                except Exception:
+                    name = str(device)
+                log.warning("mic open failed on device %s (%s): %s",
+                            device, name, exc)
+                continue
+            self._stream = stream
+            try:
+                name = sd.query_devices(device)["name"] if device is not None else "system default"
+            except Exception:
+                name = str(device)
+            log.info("🎙️  mic capture started on '%s' @ %d Hz", name, self._cfg.sample_rate)
+            return
+
+        # Every candidate failed — surface an actionable error. -9986 here is
+        # most often a macOS Microphone-permission denial for the host app.
+        raise RuntimeError(
+            "Could not open any microphone input stream. On macOS, grant "
+            "Microphone access to your terminal/app under System Settings → "
+            "Privacy & Security → Microphone, then retry. If you use AirPods, "
+            "set AUDIO_INPUT_DEVICE to your built-in mic (see GET /voice/devices). "
+            f"Last error: {last_err}"
         )
-        self._stream.start()
 
     def stop(self) -> None:
         if self._stream is None:
@@ -141,6 +210,8 @@ def play_pcm_stream(
     *,
     sample_rate: int,
     stop_event: threading.Event,
+    on_first_audio: Optional[Callable[[], None]] = None,
+    preroll_ms: int = 250,
 ) -> None:
     """
     Stream PCM int16 bytes to the speaker in real time.
@@ -161,7 +232,7 @@ def play_pcm_stream(
     """
     import time
 
-    PREROLL_MS = 250            # pre-roll buffer to absorb network jitter
+    PREROLL_MS = max(0, int(preroll_ms))  # pre-roll buffer to absorb network jitter
     BYTES_PER_SAMPLE = 2        # int16 mono
     preroll_bytes = int(sample_rate * (PREROLL_MS / 1000) * BYTES_PER_SAMPLE)
 
@@ -217,6 +288,14 @@ def play_pcm_stream(
         # Flush pre-roll, then continue with the rest of the stream.
         stream.write(bytes(preroll))
         total_bytes += len(preroll)
+
+        # First audio is now committed to the device — let the caller know so
+        # the UI can flip "thinking" → "speaking" the instant sound starts.
+        if on_first_audio is not None:
+            try:
+                on_first_audio()
+            except Exception:  # noqa: BLE001
+                pass
 
         for chunk in pcm:
             if stop_event.is_set():

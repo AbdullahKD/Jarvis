@@ -8,8 +8,8 @@
   /* ── tokens (refined emerald theme) ── */
   :root {
     --bg-0:#070809; --bg-1:#09100b; --bg-2:#0d160f;
-    --glass:rgba(14,20,16,.65); --glass-2:rgba(16,26,19,.50); --glass-3:rgba(20,32,23,.38);
-    --stroke:rgba(100,200,130,.09); --stroke-strong:rgba(120,220,150,.18);
+    --glass:rgba(18,28,21,.84); --glass-2:rgba(22,34,25,.62); --glass-3:rgba(26,40,29,.46);
+    --stroke:rgba(110,210,140,.12); --stroke-strong:rgba(130,225,160,.22);
     --text-0:#f0f5f2; --text-1:#c4d8ca; --text-2:#7a9282; --text-3:#495e51;
     --accent:#34d399; --accent-2:#10b981; --accent-3:#059669;
     --cyan:#7fe7ff; --green:#34d399; --red:#ff7a8a; --yellow:#ffd166;
@@ -22,21 +22,31 @@
   body{
     color:var(--text-0);font-family:var(--font);font-size:14px;letter-spacing:.01em;
     background:
-      radial-gradient(1100px 700px at 78% -10%,rgba(52,211,153,.08),transparent 60%),
-      radial-gradient(900px 600px at 5% 110%,rgba(16,185,129,.06),transparent 60%),
-      radial-gradient(700px 500px at 50% 50%,rgba(127,231,255,.03),transparent 70%),
-      linear-gradient(180deg,#070809 0%,#050607 100%);
+      radial-gradient(1100px 700px at 78% -12%,rgba(52,211,153,.10),transparent 58%),
+      radial-gradient(900px 600px at 0% 115%,rgba(16,185,129,.07),transparent 58%),
+      linear-gradient(165deg,#08110c 0%,#070f0b 45%,#050a08 100%);
     overflow:hidden;
   }
   body::before{
     content:"";position:fixed;inset:0;pointer-events:none;
     background-image:
-      linear-gradient(rgba(255,255,255,.015) 1px,transparent 1px),
-      linear-gradient(90deg,rgba(255,255,255,.015) 1px,transparent 1px);
-    background-size:56px 56px;
-    mask-image:radial-gradient(ellipse at center,rgba(0,0,0,.5),transparent 70%);
+      linear-gradient(rgba(255,255,255,.012) 1px,transparent 1px),
+      linear-gradient(90deg,rgba(255,255,255,.012) 1px,transparent 1px);
+    background-size:64px 64px;
+    mask-image:radial-gradient(ellipse at center,rgba(0,0,0,.5),transparent 72%);
     z-index:0;
   }
+  /* ── living aurora backdrop (emerald) ── */
+  .aurora{position:fixed;inset:-15%;z-index:0;pointer-events:none;overflow:hidden;filter:blur(70px) saturate(135%);}
+  .aurora span{position:absolute;display:block;border-radius:50%;mix-blend-mode:screen;will-change:transform;}
+  .aurora .a1{width:48vw;height:48vw;left:-6vw;top:-10vw;background:radial-gradient(circle at 50% 50%,rgba(52,211,153,.40),transparent 62%);animation:aurora1 36s ease-in-out infinite;}
+  .aurora .a2{width:42vw;height:42vw;right:-8vw;top:8vh;background:radial-gradient(circle at 50% 50%,rgba(16,185,129,.34),transparent 62%);animation:aurora2 44s ease-in-out infinite;}
+  .aurora .a3{width:40vw;height:40vw;left:18vw;bottom:-16vh;background:radial-gradient(circle at 50% 50%,rgba(45,212,191,.30),transparent 62%);animation:aurora3 52s ease-in-out infinite;}
+  .aurora .a4{width:30vw;height:30vw;right:14vw;bottom:-8vh;background:radial-gradient(circle at 50% 50%,rgba(127,231,255,.18),transparent 62%);animation:aurora4 60s ease-in-out infinite;}
+  @keyframes aurora1{0%,100%{transform:translate(0,0) scale(1);}50%{transform:translate(8vw,6vh) scale(1.18);}}
+  @keyframes aurora2{0%,100%{transform:translate(0,0) scale(1.05);}50%{transform:translate(-7vw,9vh) scale(.9);}}
+  @keyframes aurora3{0%,100%{transform:translate(0,0) scale(1);}50%{transform:translate(6vw,-8vh) scale(1.2);}}
+  @keyframes aurora4{0%,100%{transform:translate(0,0) scale(.95);}50%{transform:translate(-9vw,-6vh) scale(1.15);}}
 
   /* ── chrome ── */
   .chrome{position:relative;z-index:5;height:38px;display:flex;align-items:center;gap:10px;padding:0 14px;}
@@ -59,26 +69,21 @@
   /* ── glass card ── */
   .glass{
     position:relative;
-    background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,.00)) padding-box,var(--glass) padding-box;
+    background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.012) 42%,rgba(0,0,0,.06)) padding-box,var(--glass) padding-box;
     border:1px solid var(--stroke);border-radius:var(--r-lg);
-    backdrop-filter:blur(28px) saturate(140%);-webkit-backdrop-filter:blur(28px) saturate(140%);
+    backdrop-filter:blur(30px) saturate(140%);-webkit-backdrop-filter:blur(30px) saturate(140%);
     box-shadow:
-      0 1px 0 rgba(255,255,255,.04) inset,
-      0 0 0 1px rgba(255,255,255,.015),
-      0 8px 32px rgba(0,0,0,.60),
-      0 0 18px -6px rgba(52,211,153,.12),
-      0 0 48px -18px rgba(52,211,153,.09),
-      0 0 90px -36px rgba(16,185,129,.07);
+      0 1px 0 rgba(255,255,255,.09) inset,
+      0 -10px 24px -18px rgba(0,0,0,.6) inset,
+      0 2px 4px -1px rgba(0,0,0,.45),
+      0 12px 26px -10px rgba(0,0,0,.6),
+      0 28px 58px -26px rgba(0,0,0,.7);
     overflow:hidden;
-    animation:glassGlow 7s ease-in-out infinite;
-    transition:box-shadow .4s ease,border-color .4s ease;
+    animation:none;
+    transition:box-shadow .35s ease,border-color .35s ease,transform .2s ease;
   }
-  .glass::after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;background:radial-gradient(120% 60% at 50% -10%,rgba(52,211,153,.04),transparent 60%);}
-  .glass:hover{border-color:var(--stroke-strong);box-shadow:0 1px 0 rgba(255,255,255,.06) inset,0 0 0 1px rgba(255,255,255,.025),0 8px 32px rgba(0,0,0,.60),0 0 26px -6px rgba(52,211,153,.22),0 0 62px -18px rgba(52,211,153,.16),0 0 110px -36px rgba(16,185,129,.13);animation:none;}
-  @keyframes glassGlow{
-    0%,100%{box-shadow:0 1px 0 rgba(255,255,255,.04) inset,0 0 0 1px rgba(255,255,255,.015),0 8px 32px rgba(0,0,0,.60),0 0 18px -6px rgba(52,211,153,.12),0 0 48px -18px rgba(52,211,153,.09),0 0 90px -36px rgba(16,185,129,.07);}
-    50%{box-shadow:0 1px 0 rgba(255,255,255,.055) inset,0 0 0 1px rgba(255,255,255,.022),0 8px 32px rgba(0,0,0,.60),0 0 26px -6px rgba(52,211,153,.20),0 0 62px -18px rgba(52,211,153,.15),0 0 110px -36px rgba(16,185,129,.12);}
-  }
+  .glass::after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;background:radial-gradient(140% 75% at 50% -15%,rgba(52,211,153,.05),transparent 52%);}
+  .glass:hover{border-color:var(--stroke-strong);transform:translateY(-1px);box-shadow:0 1px 0 rgba(255,255,255,.13) inset,0 -10px 24px -18px rgba(0,0,0,.6) inset,0 3px 6px -1px rgba(0,0,0,.5),0 16px 32px -10px rgba(0,0,0,.65),0 34px 66px -26px rgba(0,0,0,.72),0 0 28px -12px rgba(52,211,153,.22);}
 
   /* ── card inner ── */
   .card{padding:12px 14px;}
@@ -96,8 +101,8 @@
     background:linear-gradient(90deg,rgba(52,211,153,.55),rgba(52,211,153,0));
   }
   .card .h .t{
-    position:relative;
-    font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+    position:relative;min-width:0;
+    font-size:11px;letter-spacing:.12em;text-transform:uppercase;
     display:inline-flex;align-items:center;gap:8px;font-weight:600;
     color:var(--text-0);
   }
@@ -125,6 +130,7 @@
     padding:2px 8px;border-radius:999px;letter-spacing:.04em;
     background:rgba(255,255,255,.025);border:1px solid var(--stroke);
     font-variant-numeric:tabular-nums;
+    white-space:nowrap;flex-shrink:0;
   }
 
   /* ── LEFT rail ── */
@@ -190,7 +196,7 @@
     border:1px solid var(--stroke);border-radius:var(--r-lg);
     backdrop-filter:blur(28px) saturate(140%);
     padding:10px 14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;flex-shrink:0;
-    animation:glassGlow 7s ease-in-out infinite;
+    animation:none;
     box-shadow:0 1px 0 rgba(255,255,255,.04) inset,0 0 0 1px rgba(255,255,255,.015),0 8px 32px rgba(0,0,0,.60),0 0 18px -6px rgba(52,211,153,.12),0 0 48px -18px rgba(52,211,153,.09),0 0 90px -36px rgba(16,185,129,.07);
   }
   .ctrl-label{font-size:11px;color:var(--text-2);text-transform:uppercase;letter-spacing:.1em;flex-shrink:0;}
@@ -267,7 +273,7 @@
     border:1px solid var(--stroke);border-radius:var(--r-md);
     backdrop-filter:blur(28px) saturate(140%);
     padding:10px 14px;display:flex;align-items:center;gap:10px;row-gap:8px;flex-wrap:wrap;flex-shrink:0;
-    animation:glassGlow 7s ease-in-out infinite;animation-delay:-3s;
+    animation:none;
     box-shadow:0 1px 0 rgba(255,255,255,.04) inset,0 0 0 1px rgba(255,255,255,.015),0 8px 32px rgba(0,0,0,.60),0 0 18px -6px rgba(52,211,153,.12),0 0 48px -18px rgba(52,211,153,.09),0 0 90px -36px rgba(16,185,129,.07);
   }
   .up-btn{height:28px;padding:0 14px;border-radius:999px;background:rgba(52,211,153,.11);border:1px solid rgba(52,211,153,.24);color:var(--accent);font-size:11px;font-weight:500;cursor:pointer;font-family:var(--font);transition:background .15s ease,border-color .15s ease,color .15s ease;display:inline-flex;align-items:center;line-height:1;}
@@ -459,6 +465,9 @@
 </head>
 <body>
 
+<!-- living aurora backdrop -->
+<div class="aurora" aria-hidden="true"><span class="a1"></span><span class="a2"></span><span class="a3"></span><span class="a4"></span></div>
+
 <!-- chrome -->
 <div class="chrome">
   <span class="title">Jarvis</span>
@@ -516,9 +525,10 @@
         <select class="select-glass" id="coSelect"><option>Loading…</option></select>
         <span class="ctrl-label">Level</span>
         <div class="levels" id="levelsRow">
+          <button class="lvl-btn active" data-lvl="auto" title="Let Jarvis pick the right reasoning level">Auto</button>
           <button class="lvl-btn" data-lvl="1">L1</button>
           <button class="lvl-btn" data-lvl="2">L2</button>
-          <button class="lvl-btn active" data-lvl="3">L3</button>
+          <button class="lvl-btn" data-lvl="3">L3</button>
           <button class="lvl-btn" data-lvl="4">L4</button>
           <button class="lvl-btn" data-lvl="5">L5</button>
           <button class="lvl-btn" data-lvl="6">L6</button>
@@ -530,8 +540,8 @@
       </div>
       <div class="lvl-suggest open" id="lvlSuggest" aria-live="polite">
         <div class="lvl-suggest-head">
-          <span class="lvl-tag" id="lvlSuggestTag">L3</span>
-          <span class="lvl-label" id="lvlSuggestLabel">Ratio Analysis · click a question to ask</span>
+          <span class="lvl-tag" id="lvlSuggestTag">Auto</span>
+          <span class="lvl-label" id="lvlSuggestLabel">Smart routing · click a question to ask</span>
         </div>
         <div class="q-chips" id="lvlSuggestChips"></div>
       </div>
@@ -567,7 +577,7 @@
     <div class="chat-panel">
       <div class="chat-hd">
         <span class="chat-hd-title">Financial Intelligence Engine</span>
-        <span class="level-badge" id="levelBadge">L3 · Balanced</span>
+        <span class="level-badge" id="levelBadge">Auto · Smart routing</span>
         <button class="clear-btn" onclick="clearChat()">Clear</button>
       </div>
       <div class="chat-thread" id="chatThread">
@@ -647,7 +657,7 @@
           <svg class="t-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h12v14H4z"/><path d="M16 9h4v9a2 2 0 0 1-4 0V9z"/><path d="M7 10h6M7 13h6M7 16h4"/></svg>
           <span class="live-dot"></span>
           Financial News
-        </div><span class="meta" id="newsCount"></span></div>
+        </div></div>
         <div id="railNews" style="overflow-y:auto;flex:1;">
           <div class="shimmer" style="width:90%"></div><div class="shimmer" style="width:75%"></div>
           <div class="shimmer" style="width:85%"></div><div class="shimmer" style="width:70%"></div>
@@ -660,7 +670,7 @@
 
 <script>
 /* ── state ── */
-const state = { level:3, company:'Bestway Cement', history:[], busy:false };
+const state = { level:'auto', company:'Bestway Cement', history:[], busy:false };
 const LEVEL_LABELS = {1:'Quick',2:'Standard',3:'Balanced',4:'Deep',5:'Expert',6:'Maximum'};
 const $  = s => document.querySelector(s);
 const $$ = s => document.querySelectorAll(s);
@@ -690,28 +700,42 @@ function fmtChg(c,pct){
 }
 
 /* ── render helpers ── */
+/* Backend emits `change_pct`; older payloads used `change_percent`. Accept
+ * either so the percentage column never silently shows 0.00%. */
+function pctOf(item){
+  const v = (item.change_pct!=null) ? item.change_pct : item.change_percent;
+  return parseFloat(v)||0;
+}
 function tickerHTML(item){
-  const{symbol,name,price,change,change_percent}=item;
+  const{symbol,name,price,change}=item;
   return`<div class="ticker-row">
     <div><div class="t-sym">${esc(symbol||'')}</div><div class="t-name">${esc(name||symbol||'')}</div></div>
-    <div style="text-align:right"><div class="t-price">${fmtPrice(price)}</div><div class="t-chg">${fmtChg(change,change_percent)}</div></div>
+    <div style="text-align:right"><div class="t-price">${fmtPrice(price)}</div><div class="t-chg">${fmtChg(change,pctOf(item))}</div></div>
   </div>`;
 }
 function stockHTML(item){
-  const{symbol,name,price,change,change_percent}=item;
-  const cls=(parseFloat(change)||0)>=0?'up':'dn',sign=(parseFloat(change)||0)>=0?'+':'';
+  const{symbol,name,price,change}=item;
+  const pct=pctOf(item);
+  const cls=pct>=0?'up':'dn',sign=pct>=0?'+':'';
   return`<div class="stock-row">
     <div style="flex:1"><div class="s-sym">${esc(symbol||'')}</div><div class="s-name">${esc((name||'').slice(0,20))}</div></div>
     <div style="text-align:right">
       <div class="t-price">${fmtPrice(price)}</div>
-      <div class="t-chg ${cls}">${sign}${(parseFloat(change_percent)||0).toFixed(2)}%</div>
+      <div class="t-chg ${cls}">${sign}${pct.toFixed(2)}%</div>
     </div>
   </div>`;
 }
 function renderSection(id,items,fn){
   const el=document.getElementById(id);if(!el)return;
-  if(!items||!items.length){el.innerHTML='<span class="err-text">No data</span>';return;}
+  if(!items||!items.length){
+    // Keep whatever is already on screen (last-known-good) rather than wiping
+    // the widget to "No data" on a transient empty tick. Only show the empty
+    // placeholder if the widget has never been populated.
+    if(!el.dataset.populated){el.innerHTML='<span class="err-text">No data</span>';}
+    return;
+  }
   el.innerHTML=items.map(fn).join('');
+  el.dataset.populated='1';
 }
 
 /* ── market widget rendering (shared by full sidebar load + live tick) ──
@@ -908,14 +932,28 @@ const LEVEL_SUGGESTIONS = {
   ],
 };
 
+// Auto mode shows a curated cross-section so the user can ask anything and let
+// the router pick the depth.
+LEVEL_SUGGESTIONS.auto = [
+  {label:'Revenue',            prompt:'What was the revenue in the latest period?'},
+  {label:'Revenue YoY',        prompt:'How did revenue change year-over-year?'},
+  {label:'Gross margin',       prompt:'What is the gross profit margin?'},
+  {label:'Why margins moved',  prompt:'What is driving the change in gross margin?'},
+  {label:'Operational rundown',prompt:'Give me a rundown of any major operational improvements during the last fiscal year.'},
+  {label:'Healthy?',           prompt:'Is this company financially healthy overall?'},
+  {label:'Growth strategy',    prompt:'What should the long-term growth strategy be?'},
+];
+
+function _isAuto(){ return state.level==='auto' || state.level==null; }
+
 function _renderLvlSuggest(){
   const lvl   = state.level;
-  const lbl   = LEVEL_LABELS[lvl] || '';
+  const lbl   = _isAuto() ? 'Smart routing' : (LEVEL_LABELS[lvl] || '');
   const items = LEVEL_SUGGESTIONS[lvl] || [];
   const tag   = document.getElementById('lvlSuggestTag');
   const head  = document.getElementById('lvlSuggestLabel');
   const wrap  = document.getElementById('lvlSuggestChips');
-  if(tag)  tag.textContent  = `L${lvl}`;
+  if(tag)  tag.textContent  = _isAuto() ? 'Auto' : `L${lvl}`;
   if(head) head.textContent = `${lbl} · click a question to ask`;
   if(wrap){
     wrap.innerHTML = items.map(it=>
@@ -931,8 +969,10 @@ function _renderLvlSuggest(){
 $$('.lvl-btn').forEach(btn=>btn.addEventListener('click',()=>{
   $$('.lvl-btn').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active');
-  state.level=parseInt(btn.dataset.lvl);
-  const lb=$('#levelBadge');if(lb)lb.textContent=`L${state.level} · ${LEVEL_LABELS[state.level]||''}`;
+  const raw=btn.dataset.lvl;
+  state.level = (raw==='auto') ? 'auto' : parseInt(raw);
+  const lb=$('#levelBadge');
+  if(lb)lb.textContent = _isAuto() ? 'Auto · Smart routing' : `L${state.level} · ${LEVEL_LABELS[state.level]||''}`;
   _renderLvlSuggest();
   // Auto-open the panel when the user picks a level (it stays open after)
   const panel = $('#lvlSuggest'), tog = $('#lvlToggle');

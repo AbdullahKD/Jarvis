@@ -14,6 +14,29 @@ from typing import Any, Dict, Optional
 from tools.platform_guard import is_mac, mac_only_response
 
 
+def _as_quote(text: str) -> str:
+    """Escape a Python string for safe embedding inside an AppleScript
+    double-quoted literal. Backslashes MUST be escaped before quotes,
+    otherwise crafted input like `Safari" \\n do shell script "..."` can
+    break out of the literal and run arbitrary AppleScript (which can in
+    turn run arbitrary shell commands)."""
+    return text.replace("\\", "\\\\").replace('"', '\\"')
+
+
+# ── Off-loop subprocess ─────────────────────────────────────────────────────
+# Every method here is `async`, but many call sites ran subprocess.run
+# directly — each blocking the event loop for up to its timeout, stalling
+# every other request, every WebSocket and the reminder scheduler while the
+# shell command ran. The handful of sites already wrapped in
+# `run_in_executor(None, lambda: ...)` were correct and are left alone.
+import functools as _functools
+
+
+async def _run_off_loop(*args, **kwargs):
+    """subprocess.run, executed in a worker thread."""
+    return await asyncio.to_thread(_functools.partial(subprocess.run, *args, **kwargs))
+
+
 def _run_applescript(script: str) -> Dict[str, Any]:
     """Run an AppleScript and return result."""
     # Cloud-deployment guard — every Mac-only method in this file ultimately
@@ -43,10 +66,9 @@ class MacControlTool:
     """
 
     def __init__(self):
-        # If we're not on macOS (e.g. inside a Fly.io Linux container),
-        # replace every public async method with a stub that returns a
-        # friendly "feature disabled in cloud" payload. This avoids
-        # editing each individual method body.
+        # Off macOS, replace every public async method with a stub that
+        # returns a friendly "not supported on this platform" payload. This
+        # avoids editing each individual method body.
         if not is_mac():
             for _name in dir(self):
                 if _name.startswith("_"):
@@ -121,52 +143,158 @@ class MacControlTool:
         return result
 
     async def mute(self) -> Dict[str, Any]:
-        return await self._async_script("set volume with output muted")
+        """Mute the system, then read-back to confirm."""
+        await self._async_script("set volume with output muted")
+        # Read-back: AppleScript returns 0 even when blocked, so verify.
+        state = await self._async_script("output muted of (get volume settings)")
+        if state.get("success") and "true" in state.get("output", "").lower():
+            return {"success": True, "muted": True, "message": "Muted."}
+        return {
+            "success": False,
+            "muted": False,
+            "error": "Could not mute — Bluetooth or external audio devices may not respect software mute. Try the keyboard mute key.",
+        }
 
     async def unmute(self) -> Dict[str, Any]:
-        return await self._async_script("set volume without output muted")
+        """Unmute the system, then read-back to confirm."""
+        await self._async_script("set volume without output muted")
+        state = await self._async_script("output muted of (get volume settings)")
+        if state.get("success") and "false" in state.get("output", "").lower():
+            return {"success": True, "muted": False, "message": "Unmuted."}
+        return {
+            "success": False,
+            "muted": True,
+            "error": "Could not unmute — try the keyboard volume key.",
+        }
+
+    async def get_mute(self) -> Dict[str, Any]:
+        """Return whether the system is currently muted."""
+        result = await self._async_script("output muted of (get volume settings)")
+        if not result.get("success"):
+            return result
+        is_muted = "true" in result.get("output", "").lower()
+        return {
+            "success": True,
+            "muted": is_muted,
+            "message": "Muted." if is_muted else "Not muted.",
+        }
 
     # ── Brightness ─────────────────────────────────────────────────────────
 
     async def set_brightness(self, level: float) -> Dict[str, Any]:
         """
-        Set display brightness (0.0–1.0).
+        Set display brightness on a 0–100 scale (to match volume).
 
-        Apple removed direct AppleScript brightness control years ago. The
-        only reliable way on a stock macOS is the `brightness` Homebrew CLI
-        (https://github.com/nriley/brightness). When it's missing we fall
-        back to nudging the brightness keys, but we cannot read the current
-        level so the result is approximate — the user gets a clear note
-        explaining the limitation rather than a silently-wrong setting.
+        Backward compatible: a value in the 0.0–1.0 range is also accepted
+        and treated as a fraction, so older callers passing e.g. 0.5 still
+        mean "50%". Anything > 1 is treated as a 0–100 percentage.
+
+        Apple removed direct AppleScript brightness control. We try three
+        paths in order:
+          1. `brightness` CLI from Homebrew — exact, deterministic.
+          2. Keyboard keystroke F1/F2 nudges — approximate. Estimate the
+             number of nudges needed by reading the *current* brightness
+             via `brightness -l` if available; otherwise default to 8
+             nudges (covers the full range from min→max in either direction).
+          3. Honest failure with a one-line install command.
         """
         import subprocess
-        level = max(0.0, min(1.0, float(level)))
+        # Normalise to a 0.0–1.0 fraction for the `brightness` CLI.
+        # 0–100 scale is the documented input; 0–1 is accepted for back-compat.
+        level = float(level)
+        if level > 1:
+            level = level / 100.0
+        level = max(0.0, min(1.0, level))
 
-        # Preferred: the `brightness` CLI from Homebrew is the only path that
-        # sets an exact level deterministically.
+        # Path 1: precise via Homebrew `brightness`
         try:
-            result = subprocess.run(
+            result = (await _run_off_loop(
                 ["brightness", str(level)],
-                capture_output=True, text=True, timeout=5
-            )
+                capture_output=True, text=True, timeout=5,
+            ))
             if result.returncode == 0:
+                # Verify by reading back so we report the REAL state.
+                read = (await _run_off_loop(
+                    ["brightness", "-l"], capture_output=True, text=True, timeout=5,
+                ))
+                actual_level = level
+                if read.returncode == 0:
+                    import re as _re
+                    m = _re.search(r"brightness\s+([\d.]+)", read.stdout)
+                    if m:
+                        try:
+                            actual_level = float(m.group(1))
+                        except ValueError:
+                            pass
                 return {
                     "success": True,
-                    "level": level,
-                    "message": f"Brightness set to {int(level * 100)}%.",
+                    "level": actual_level,
+                    "message": f"Brightness set to {int(round(actual_level * 100))}.",
                 }
+            # CLI present but the command failed — surface the real reason.
+            return {
+                "success": False,
+                "error": f"Brightness command failed: {result.stderr.strip() or 'unknown error'}",
+            }
         except FileNotFoundError:
             pass
+        except subprocess.TimeoutExpired:
+            return {"success": False, "error": "Brightness command timed out."}
+        except Exception as e:
+            return {"success": False, "error": f"Brightness error: {e}"}
 
-        # Fallback: tell the user, don't lie about success. Simulating F1/F2
-        # without knowing the current level results in drift — better to be
-        # honest about the prerequisite.
+        # No usable `brightness` CLI. We attempt a best-effort keystroke
+        # nudge, but we CANNOT verify it moved the slider — the media keys
+        # silently no-op without Accessibility permission and don't map to
+        # brightness on every Mac. So we report FAILURE honestly rather than
+        # claiming a success that may not have happened (which previously made
+        # the LLM tell the user "brightness adjusted" when nothing changed).
+        try:
+            key_code = 145 if level < 0.5 else 144  # 145 dim, 144 brighten
+            script = "\n".join([
+                'tell application "System Events"',
+                *[f'    key code {key_code}' for _ in range(16)],
+                'end tell',
+            ])
+            await self._async_script(script)
+        except Exception:
+            pass
+
         return {
             "success": False,
             "error": (
-                "Precise brightness control needs the `brightness` CLI. "
-                "Install it once with: brew install brightness"
+                f"Couldn't reliably set brightness to {int(round(level * 100))}. "
+                "The 'brightness' helper isn't installed, so I can't set the "
+                "display level directly. Install it once with: brew install "
+                "brightness — then brightness commands work exactly. (I sent "
+                "brightness keys as a fallback, but that's unverified and may "
+                "need Accessibility permission.)"
             ),
+        }
+
+    async def get_brightness(self) -> Dict[str, Any]:
+        """Read current display brightness (0.0–1.0) via Homebrew `brightness -l`."""
+        import subprocess, re as _re
+        try:
+            result = (await _run_off_loop(
+                ["brightness", "-l"], capture_output=True, text=True, timeout=5,
+            ))
+            if result.returncode == 0:
+                m = _re.search(r"brightness\s+([\d.]+)", result.stdout)
+                if m:
+                    level = float(m.group(1))
+                    return {
+                        "success": True,
+                        "level": level,
+                        "message": f"Brightness is at {int(level * 100)}%.",
+                    }
+        except FileNotFoundError:
+            pass
+        except Exception:
+            pass
+        return {
+            "success": False,
+            "error": "Brightness read requires `brew install brightness`.",
         }
 
     # ── Apps ───────────────────────────────────────────────────────────────
@@ -188,8 +316,9 @@ class MacControlTool:
         if new_window:
             # Try AppleScript new window first (preserves a single instance
             # making a new window). Fall back to `open -na` (always spawns).
+            _safe_app = _as_quote(app_name)
             script = (
-                f'tell application "{app_name}"\n'
+                f'tell application "{_safe_app}"\n'
                 f'    activate\n'
                 f'    make new window\n'
                 f'end tell'
@@ -230,7 +359,7 @@ class MacControlTool:
 
     async def quit_app(self, app_name: str) -> Dict[str, Any]:
         """Quit an application."""
-        script = f'tell application "{app_name}" to quit'
+        script = f'tell application "{_as_quote(app_name)}" to quit'
         return await self._async_script(script)
 
     async def get_running_apps(self) -> Dict[str, Any]:
@@ -244,14 +373,70 @@ class MacControlTool:
     # ── Clipboard ──────────────────────────────────────────────────────────
 
     async def get_clipboard(self) -> Dict[str, Any]:
-        result = await self._async_script("the clipboard")
-        if result["success"]:
-            result["text"] = result["output"]
-        return result
+        """
+        Read the current clipboard contents.
+
+        Uses pbpaste rather than `the clipboard` AppleScript, because
+        AppleScript's getter blows up on non-text clipboard content (images,
+        files) with a confusing "Can't make «class furl» into type Unicode
+        text" error. pbpaste returns text or empty cleanly.
+        """
+        import asyncio as _aio, subprocess as _sp
+        loop = _aio.get_event_loop()
+        try:
+            proc = await loop.run_in_executor(
+                None,
+                lambda: _sp.run(["pbpaste"], capture_output=True, text=True, timeout=5),
+            )
+            text = proc.stdout or ""
+            return {
+                "success": True,
+                "text": text,
+                "message": f"Clipboard: {text[:200]}" if text else "Clipboard is empty.",
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
     async def set_clipboard(self, text: str) -> Dict[str, Any]:
-        safe = text.replace('"', '\\"')
-        return await self._async_script(f'set the clipboard to "{safe}"')
+        """
+        Write text to the clipboard.
+
+        OLD: piped through `osascript -e 'set the clipboard to "..."'`
+        which only escaped `"` — backslashes, newlines, and embedded
+        single quotes broke the AppleScript with cryptic syntax errors.
+
+        NEW: pipe via pbcopy through stdin. Any byte sequence works,
+        no escaping needed. Returns success only after a pbpaste read-back
+        confirms the write took.
+        """
+        import asyncio as _aio, subprocess as _sp
+        loop = _aio.get_event_loop()
+        try:
+            def _do_set():
+                proc = _sp.run(
+                    ["pbcopy"],
+                    input=text,
+                    text=True,
+                    capture_output=True,
+                    timeout=5,
+                )
+                if proc.returncode != 0:
+                    raise RuntimeError(proc.stderr or "pbcopy failed")
+                # Read-back to confirm
+                back = _sp.run(["pbpaste"], capture_output=True, text=True, timeout=5)
+                return back.stdout == text
+            ok = await loop.run_in_executor(None, _do_set)
+            if ok:
+                return {
+                    "success": True,
+                    "message": f"Copied {len(text)} characters to the clipboard.",
+                }
+            return {
+                "success": False,
+                "error": "Clipboard write didn't verify — system may have refused it.",
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
     # ── Notifications ──────────────────────────────────────────────────────
 
@@ -262,9 +447,11 @@ class MacControlTool:
         subtitle: str = "",
     ) -> Dict[str, Any]:
         """Send a macOS notification."""
-        safe_msg = message.replace('"', '\\"')
-        safe_title = title.replace('"', '\\"')
-        safe_sub = subtitle.replace('"', '\\"')
+        # _as_quote escapes backslashes BEFORE quotes — the old quote-only
+        # escaping still let `\"` in a message break out of the literal.
+        safe_msg = _as_quote(message)
+        safe_title = _as_quote(title)
+        safe_sub = _as_quote(subtitle)
         script = (
             f'display notification "{safe_msg}" '
             f'with title "{safe_title}"'
@@ -277,10 +464,10 @@ class MacControlTool:
     async def get_battery(self) -> Dict[str, Any]:
         """Get battery percentage (MacBooks only)."""
         try:
-            result = subprocess.run(
+            result = (await _run_off_loop(
                 ["pmset", "-g", "batt"],
                 capture_output=True, text=True, timeout=5
-            )
+            ))
             import re
             match = re.search(r"(\d+)%", result.stdout)
             if match:
@@ -353,7 +540,7 @@ class MacControlTool:
 
     async def hide_app(self, app_name: str) -> Dict[str, Any]:
         """Hide an application."""
-        script = f'tell application "System Events" to set visible of process "{app_name}" to false'
+        script = f'tell application "System Events" to set visible of process "{_as_quote(app_name)}" to false'
         return await self._async_script(script)
 
     async def take_screenshot(self, save_path: str = "~/Desktop/screenshot.png") -> Dict[str, Any]:
@@ -361,10 +548,10 @@ class MacControlTool:
         import subprocess, os
         path = os.path.expanduser(save_path)
         try:
-            result = subprocess.run(
+            result = (await _run_off_loop(
                 ["screencapture", "-x", path],
                 capture_output=True, text=True, timeout=10
-            )
+            ))
             if result.returncode == 0:
                 return {"success": True, "path": path, "message": f"Screenshot saved to {path}"}
             return {"success": False, "error": result.stderr}
@@ -381,10 +568,10 @@ class MacControlTool:
         """
         import subprocess
         try:
-            result = subprocess.run(
+            result = (await _run_off_loop(
                 ["defaults", "read", "-g", "AppleInterfaceStyle"],
                 capture_output=True, text=True, timeout=5,
-            )
+            ))
             is_dark = (
                 result.returncode == 0
                 and result.stdout.strip().lower() == "dark"
@@ -447,22 +634,22 @@ class MacControlTool:
         import subprocess
         try:
             # CPU usage
-            cpu = subprocess.run(
+            cpu = (await _run_off_loop(
                 ["bash", "-c", "top -l 1 | grep 'CPU usage' | awk '{print $3}'"],
                 capture_output=True, text=True, timeout=5
-            ).stdout.strip()
+            )).stdout.strip()
 
             # RAM
-            ram = subprocess.run(
+            ram = (await _run_off_loop(
                 ["bash", "-c", "vm_stat | grep 'Pages active' | awk '{print $3}' | tr -d '.'"],
                 capture_output=True, text=True, timeout=5
-            ).stdout.strip()
+            )).stdout.strip()
 
             # Disk
-            disk = subprocess.run(
+            disk = (await _run_off_loop(
                 ["df", "-h", "/"],
                 capture_output=True, text=True, timeout=5
-            ).stdout.split("\n")[1].split() if True else []
+            )).stdout.split("\n")[1].split() if True else []
 
             info = {
                 "success": True,
@@ -480,15 +667,34 @@ class MacControlTool:
             return {"success": False, "error": str(e)}
 
     async def adjust_volume(self, direction: str, amount: int = 10) -> Dict[str, Any]:
-        """Increase or decrease volume by an amount."""
+        """
+        Bump volume up or down by `amount`. Returns the *actual* new
+        volume (read back from the system), not the target — Bluetooth and
+        external audio sometimes refuse software volume changes silently.
+        """
         current = await self.get_volume()
         current_vol = current.get("volume", 50)
         if direction == "up":
-            new_vol = min(100, current_vol + amount)
+            target = min(100, current_vol + amount)
         else:
-            new_vol = max(0, current_vol - amount)
-        result = await self.set_volume(new_vol)
-        result["volume"] = new_vol
+            target = max(0, current_vol - amount)
+        result = await self.set_volume(target)
+        # set_volume already does a read-back and populates "volume" with
+        # the actual measured value. Do NOT overwrite that with the target.
+        if "volume" not in result:
+            result["volume"] = target
+        result["target"] = target
+        result["previous"] = current_vol
+        actual = result.get("volume", target)
+        verb = "up" if direction == "up" else "down"
+        if actual != current_vol:
+            result["message"] = f"Volume turned {verb} from {current_vol}% to {actual}%."
+        else:
+            result["success"] = False
+            result["message"] = (
+                f"Volume didn't change (still {actual}%). External or Bluetooth "
+                "output may be ignoring software volume — try the keyboard volume keys."
+            )
         return result
 
     async def empty_trash(self) -> Dict[str, Any]:
@@ -497,40 +703,92 @@ class MacControlTool:
         return await self._async_script(script)
 
     async def get_wifi_info(self) -> Dict[str, Any]:
-        """Get current WiFi network info — works on all macOS versions."""
+        """
+        Get current WiFi network info.
+
+        Dynamically discovers the actual WiFi interface name from
+        `networksetup -listallhardwareports` instead of guessing en0/en1.
+        On modern Macs the WiFi adapter can be en0, en1, or something else
+        depending on which other hardware is plugged in.
+        """
         import subprocess
         try:
-            # Primary: networksetup (works on all macOS)
-            result = subprocess.run(
-                ["networksetup", "-getairportnetwork", "en0"],
-                capture_output=True, text=True, timeout=5
-            )
-            output = result.stdout.strip()
-            # Output: "Current Wi-Fi Network: NetworkName"
-            if ":" in output:
-                ssid = output.split(":", 1)[1].strip()
-                if ssid and "not associated" not in ssid.lower():
-                    return {
-                        "success": True,
-                        "ssid": ssid,
-                        "message": f"Connected to WiFi: {ssid}",
-                    }
+            # Step 1: find the WiFi interface name from the hardware ports
+            # listing. Format:
+            #   Hardware Port: Wi-Fi
+            #   Device: en0
+            #   Ethernet Address: ...
+            ports = (await _run_off_loop(
+                ["networksetup", "-listallhardwareports"],
+                capture_output=True, text=True, timeout=5,
+            ))
+            wifi_iface = None
+            lines = (ports.stdout or "").splitlines()
+            for i, line in enumerate(lines):
+                if "wi-fi" in line.lower() or "airport" in line.lower():
+                    # next "Device:" line carries the interface name
+                    for j in range(i + 1, min(i + 4, len(lines))):
+                        if "device:" in lines[j].lower():
+                            wifi_iface = lines[j].split(":", 1)[1].strip()
+                            break
+                    if wifi_iface:
+                        break
 
-            # Fallback: try en1
-            result2 = subprocess.run(
-                ["networksetup", "-getairportnetwork", "en1"],
-                capture_output=True, text=True, timeout=5
-            )
-            output2 = result2.stdout.strip()
-            if ":" in output2:
-                ssid2 = output2.split(":", 1)[1].strip()
-                if ssid2 and "not associated" not in ssid2.lower():
-                    return {
-                        "success": True,
-                        "ssid": ssid2,
-                        "message": f"Connected to WiFi: {ssid2}",
-                    }
+            # Step 2: query the active SSID on that interface
+            candidates = []
+            if wifi_iface:
+                candidates.append(wifi_iface)
+            # Belt-and-braces: also try the legacy interface names so we
+            # still work on a stripped-down macOS where listallhardwareports
+            # returns unexpected output.
+            for c in ("en0", "en1", "en2"):
+                if c not in candidates:
+                    candidates.append(c)
 
-            return {"success": True, "ssid": "Not connected", "message": "Not connected to any WiFi network."}
+            for iface in candidates:
+                result = (await _run_off_loop(
+                    ["networksetup", "-getairportnetwork", iface],
+                    capture_output=True, text=True, timeout=5,
+                ))
+                output = (result.stdout or "").strip()
+                if ":" in output:
+                    ssid = output.split(":", 1)[1].strip()
+                    if ssid and "not associated" not in ssid.lower() and "you are not" not in ssid.lower():
+                        # Best-effort signal strength via `ipconfig getsummary`
+                        # (no admin needed, available on all modern macOS).
+                        signal = None
+                        try:
+                            summary = (await _run_off_loop(
+                                ["ipconfig", "getsummary", iface],
+                                capture_output=True, text=True, timeout=3,
+                            ))
+                            import re as _re
+                            m = _re.search(r"RSSI\s*[:=]\s*(-?\d+)", summary.stdout)
+                            if m:
+                                signal = int(m.group(1))
+                        except Exception:
+                            pass
+                        msg = f"Connected to WiFi: {ssid}"
+                        if signal is not None:
+                            quality = (
+                                "excellent" if signal > -50
+                                else "good" if signal > -65
+                                else "fair" if signal > -75
+                                else "weak"
+                            )
+                            msg += f" (signal {signal} dBm, {quality})"
+                        return {
+                            "success": True,
+                            "ssid": ssid,
+                            "interface": iface,
+                            "rssi": signal,
+                            "message": msg,
+                        }
+
+            return {
+                "success": True,
+                "ssid": "Not connected",
+                "message": "Not connected to any WiFi network.",
+            }
         except Exception as e:
             return {"success": False, "error": str(e)}

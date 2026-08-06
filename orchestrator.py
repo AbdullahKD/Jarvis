@@ -9,6 +9,7 @@ This is what makes Jarvis a proper Multi-Agent System.
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import time
 from datetime import datetime
@@ -32,7 +33,7 @@ from config.models import (
     TaskPlan,
     TaskStatus,
 )
-from config.settings import OLLAMA_CHAT_MODEL
+from config.settings import OLLAMA_CHAT_MODEL, OLLAMA_ROUTER_MODEL
 from memory.memory_agent import MemoryAgent
 from tools.document import DocumentTool
 from tools.sports import SportsTool
@@ -46,19 +47,33 @@ from tools.weather import WeatherTool
 from tools.web_search import WebSearchTool
 from tools.file_manager import FileManagerTool, PendingFileOp
 from tools.reminders import ReminderStore
+from tools.forge import ForgeTool
+from tools.sentinel import SentinelTool
+from core.bootstrap import build_registry
+from core.executor import (
+    STATUS_BLOCKED,
+    STATUS_COMPLETED,
+    DagExecutor,
+)
 
-# Demo-tuned: planner replan disabled. Each replan adds a planner+critic
-# round-trip (~2-3 s on llama3.2:latest). The deterministic shortcuts and
-# tightened critic trigger below catch the cases where a replan would actually
-# have helped, so a 0 here costs us nothing in practice and removes a
-# significant chunk of the Tier-3 worst-case latency.
-MAX_REPLAN_ATTEMPTS = 0
+# Planner replan attempts. Each replan adds a planner+critic round-trip.
+# Historically pinned to 0 for demo latency on the old CPU-bound machine;
+# now env-configurable — on the M5 (4x faster prefill) one replan attempt is
+# affordable, so set MAX_REPLAN_ATTEMPTS=1 in .env to re-enable the full
+# critic→replan loop for evaluation runs. Default stays 0 (demo behaviour).
+import os as _os_replan
+MAX_REPLAN_ATTEMPTS = int(_os_replan.getenv("MAX_REPLAN_ATTEMPTS", "0"))
+
+logger = logging.getLogger("jarvis.orchestrator")
 
 # Voice replies are TTS'd via ElevenLabs. Each extra token = ~0.3 s of speaking.
-# This cap keeps Tier-2 voice replies to ~1-2 short sentences (~5-7 s of audio),
-# which is the right shape for a back-and-forth voice demo. Text-mode replies
-# stay on the original 180 cap so the web UI gets the fuller answer.
-VOICE_MAX_TOKENS = 100
+# 100 tokens was too tight — it truncated answers mid-sentence (a definition or
+# a 2-3 item answer would get cut off), which reads as "incomplete". 220 lets
+# replies finish their thought (~3-4 short sentences) while staying snappy:
+# sentence-streaming TTS means speech still starts on the FIRST sentence, so
+# perceived latency is unchanged even though the full answer is longer.
+# Text-mode replies stay on the original 180 cap for the web UI.
+VOICE_MAX_TOKENS = 220
 
 
 # ── One-paragraph enforcement ──────────────────────────────────────────────────
@@ -148,6 +163,10 @@ class JarvisOrchestrator:
         self._pending_email: EmailDraft | None = None
         self._pending_meeting: dict | None = None
         self._pending_file_op: PendingFileOp | None = None
+        # Last inbox shown to the user, so "read/reply/archive email N" can
+        # resolve the number N to a real Gmail message. Populated whenever the
+        # inbox is read; refreshed on demand if empty when an N-command lands.
+        self._last_inbox: List[Dict] = []
 
         # Tool instances
         self.weather    = WeatherTool()
@@ -162,10 +181,46 @@ class JarvisOrchestrator:
         self.briefing   = BriefingHandler()
         self.files      = FileManagerTool()
         self.reminders  = ReminderStore()
+        # Read-only developer tools. Same instances the /forge and /sentinel
+        # pages use, so a chat answer and the dashboard can never disagree.
+        from pathlib import Path as _P
+        _project = _P(__file__).parent
+        self.forge      = ForgeTool(
+            scan_roots=[str(_P.home() / "Desktop"), str(_P.home() / "Documents")],
+            always_include=_project)
+        self.sentinel   = SentinelTool(_project)
+
+        # ── User profile (personalisation) ──────────────────────────────────
+        # Loaded once and injected into the shared system prompt so EVERY chat
+        # call (handle, handle_stream, websearch answers) is grounded in who
+        # Jarvis is assisting. Editable at data/profile.json.
+        try:
+            from config.profile import load_profile
+            self.profile = load_profile()
+            self.llm.JARVIS_SYSTEM_PROMPT = (
+                self.llm.JARVIS_SYSTEM_PROMPT + "\n\n" + self.profile.summary()
+            )
+            print(f"👤 Profile loaded — assisting {self.profile.preferred_name} "
+                  f"({self.profile.tone} tone)")
+        except Exception as exc:
+            self.profile = None
+            print(f"⚠️  Profile not loaded ({exc}); using base persona")
+
+        # ── Tool registry ───────────────────────────────────────────────────
+        # Every tool, behind one interface. The DAG executor resolves through
+        # this instead of a 240-line if/elif chain, which is also what makes
+        # the six tools that had no branch (sports, markets, prayer, files,
+        # contacts) reachable from a plan for the first time.
+        #
+        # Built last, so every tool attribute above already exists. Google
+        # agents are registered lazily and are NOT authenticated here.
+        self.tools = build_registry(self)
 
         print(f"\n🤖 Jarvis Orchestrator ready — model: {model}")
         print(f"   Agents: Router, Memory, Planner, Critic, Evaluator, Summariser, Calendar(lazy), Gmail(lazy), FinEx(lazy)")
-        print(f"   Tools:  Weather, WebSearch, News, Mac, Spotify, Document, FileManager\n")
+        print(f"   Tools:  Weather, WebSearch, News, Mac, Spotify, Document, FileManager")
+        print(f"   Registry: {len(self.tools)} tools, "
+              f"{sum(len(t.actions) for t in self.tools)} actions\n")
 
     # ── Lazy Google + FinEx accessors ──────────────────────────────────────
     # Building CalendarAgent / GmailAgent fires a Google OAuth token refresh
@@ -302,11 +357,7 @@ class JarvisOrchestrator:
                 # the email..." response without anything ever being sent.
                 draft = self._pending_email
                 self._pending_email = None
-                result = await self.gmail.send_email(
-                    to=draft.recipient_email,
-                    subject=draft.subject,
-                    body=draft.body,
-                )
+                result = await self._send_pending_draft(draft)
                 msg = result.get(
                     "message",
                     f"Email sent to {draft.recipient_email}." if result.get("success")
@@ -528,12 +579,12 @@ class JarvisOrchestrator:
                     if prev_user_msg:
                         t0 = time.time()
                         msgs = self._build_elaborate_messages(prev_user_msg, prev_assistant_msg)
-                        # 450 tokens ≈ 320 words. Caps generation time so the
-                        # blocking HTTP path fits comfortably inside the
-                        # 60s LLM timeout even on CPU-only Macs running
-                        # llama3.2. Streaming WS path can afford more.
+                        # 900 tokens ≈ 640 words. The old 450 cap existed so
+                        # the blocking HTTP path fit inside the 60s LLM
+                        # timeout on the CPU-only 8GB machine; the M5 at
+                        # ~40 tok/s clears 900 tokens in ~25s worst case.
                         try:
-                            full_text = await self.llm.chat(msgs, model=model, max_tokens=450)
+                            full_text = await self.llm.chat(msgs, model=model, max_tokens=900)
                         except Exception as exc:
                             # Surface a useful error instead of the bare
                             # "I encountered an error:" — the user has been
@@ -566,6 +617,13 @@ class JarvisOrchestrator:
                     latency_ms=(time.time() - start_time) * 1000,
                 )
 
+            # ── Memory command intercept (remember / forget / recall) ──────
+            if _routing is None:
+                mem_resp = await self._try_memory_command(user_request)
+                if mem_resp is not None:
+                    mem_resp.latency_ms = (time.time() - start_time) * 1000
+                    return mem_resp
+
             # ── Morning Brief intercept (BEFORE the router) ────────────────
             # Must run before the router because the LLM router classifies
             # "morning brief" as Tier-2 general_chat, which then hallucinates
@@ -582,6 +640,25 @@ class JarvisOrchestrator:
                     latency_ms=total_ms,
                 )
 
+            # ── Multi-ACTION intercept (BEFORE the router) ─────────────────
+            # "dim the screen, play Despacito and remind me at 5" is three
+            # separate commands. The router only picks ONE agent, so without
+            # this intercept only the first action would run. We split the
+            # request into atomic commands and execute each through the normal
+            # routing+shortcut path, then aggregate the replies.
+            if _routing is None and self.briefing.looks_multi_action(user_request):
+                t0 = time.time()
+                multi = await self._handle_multi_action(
+                    user_request,
+                    voice_mode=voice_mode,
+                    conversation_history=conversation_history,
+                )
+                if multi is not None:
+                    _t("multi_action", t0)
+                    total_ms = (time.time() - start_time) * 1000
+                    print(f"[JARVIS] ⚡ Multi-action — {total_ms/1000:.2f}s")
+                    return JarvisResponse(success=True, message=multi, latency_ms=total_ms)
+
             # ── Step 1: Route ──────────────────────────────────────────────
             if _routing is not None:
                 routing = _routing
@@ -595,7 +672,7 @@ class JarvisOrchestrator:
             # ── Tier 1: tool-only — skip memory, run shortcut, return fast ─
             if tier == 1:
                 t0 = time.time()
-                shortcut = await self._try_shortcut(routing.primary_agent, user_request)
+                shortcut = await self._try_shortcut(routing.primary_agent, user_request, voice_mode=voice_mode, conversation_history=conversation_history)
                 _t("tool_shortcut", t0)
                 if shortcut is not None:
                     print(f"[JARVIS] ⚡ Tier 1 complete — total: {time.time()-start_time:.2f}s")
@@ -608,12 +685,12 @@ class JarvisOrchestrator:
             print(f"🧠 Retrieved {len(memories)} relevant memories")
 
             # ── Tier 1 fallback: shortcut missed, treat as Tier 2 ─────────
+            # NOTE: we used to call _try_shortcut a SECOND time here with
+            # identical arguments — nothing it reads changes between the two
+            # calls, so the retry could only ever return None again and just
+            # re-paid the full keyword-scan cost on every misrouted Tier-1
+            # request. Escalate straight to Tier 2 instead.
             if tier == 1:
-                t0 = time.time()
-                shortcut = await self._try_shortcut(routing.primary_agent, user_request)
-                _t("tool_shortcut_fallback", t0)
-                if shortcut is not None:
-                    return shortcut
                 tier = 2  # escalate
 
             # ── Tier 2: single LLM call, skip Planner/Critic/Evaluator ────
@@ -689,7 +766,7 @@ class JarvisOrchestrator:
                 # 180 token cap = ~130 words = ~5 medium sentences. Hard upper
                 # bound that prevents the model from running away even when it
                 # ignores the prompt's "one paragraph" instruction.
-                # Voice mode clamps tighter (VOICE_MAX_TOKENS = 100) because
+                # Voice mode clamps tighter (VOICE_MAX_TOKENS) because
                 # ElevenLabs is going to read the whole thing aloud and we don't
                 # want the demo dominated by Jarvis speaking.
                 _tier2_tokens = VOICE_MAX_TOKENS if voice_mode else 180
@@ -781,7 +858,9 @@ class JarvisOrchestrator:
 
             # ── Step 7: Evaluate ───────────────────────────────────────────
             t0 = time.time()
-            evaluation = self.evaluator.evaluate(
+            # evaluate_async persists off the event loop; evaluate() writes to
+            # SQLite inline and this is the async request path.
+            evaluation = await self.evaluator.evaluate_async(
                 plan, results, start_time, planning_score=planning_score
             )
             _t("evaluator", t0)
@@ -917,16 +996,44 @@ class JarvisOrchestrator:
                 yield {"type": "thinking"}
                 msgs = self._build_elaborate_messages(prev_user_msg, prev_assistant_msg)
                 full_text = ""
+                _stream_err = None
                 # chat_stream auto-injects JARVIS_SYSTEM_PROMPT only when
                 # no system message is present — our explicit system
                 # message above suppresses that injection.
-                async for chunk in self.llm.chat_stream(msgs, model=model, max_tokens=700):
-                    full_text += chunk
-                    yield {"type": "chunk", "text": chunk}
+                try:
+                    async for chunk in self.llm.chat_stream(msgs, model=model, max_tokens=700):
+                        full_text += chunk
+                        yield {"type": "chunk", "text": chunk}
+                except Exception as _exc:  # noqa: BLE001
+                    _stream_err = _exc
+                    print(f"[JARVIS] ⚠️ Elaborate stream interrupted: {type(_exc).__name__}: {_exc}")
+                # Keep whatever already streamed — a long answer shouldn't be
+                # thrown away just because the tail hit the idle timeout.
+                if full_text.strip():
+                    yield {
+                        "type": "response",
+                        "message": full_text + ("" if _stream_err is None else "\n\n[Response was cut off early — ask me to continue.]"),
+                        "success": True,
+                        "latency_ms": (time.time() - start_time) * 1000,
+                    }
+                    return
+                if _stream_err is not None:
+                    raise _stream_err  # nothing streamed → let the handler report it
                 yield {
                     "type": "response",
                     "message": full_text,
                     "success": True,
+                    "latency_ms": (time.time() - start_time) * 1000,
+                }
+                return
+
+            # ── Memory command intercept (remember / forget / recall) ──────
+            mem_resp = await self._try_memory_command(user_request)
+            if mem_resp is not None:
+                yield {
+                    "type": "response",
+                    "message": mem_resp.message,
+                    "success": mem_resp.success,
                     "latency_ms": (time.time() - start_time) * 1000,
                 }
                 return
@@ -952,6 +1059,32 @@ class JarvisOrchestrator:
                 }
                 return
 
+            # ── Multi-ACTION intercept (BEFORE the router) ────────────────
+            # The WebSocket path previously routed every request to a single
+            # agent, so a compound command like "turn brightness to 10, play
+            # Despacito and remind me to call mum at 5" only ever ran the
+            # first action. Split it into atomic commands and run each one.
+            if self.briefing.looks_multi_action(user_request):
+                yield {"type": "thinking"}
+                t0 = time.time()
+                multi = await self._handle_multi_action(
+                    user_request,
+                    voice_mode=voice_mode,
+                    conversation_history=conversation_history,
+                )
+                _t("multi_action", t0)
+                if multi is not None:
+                    total_ms = (time.time() - start_time) * 1000
+                    print(f"[JARVIS] ⚡ Stream multi-action — {total_ms/1000:.2f}s")
+                    yield {"type": "chunk", "text": multi}
+                    yield {
+                        "type": "response",
+                        "message": multi,
+                        "success": True,
+                        "latency_ms": total_ms,
+                    }
+                    return
+
             # ── Router (always needed — 1b model, fast) ───────────────────
             t0 = time.time()
             routing = await self.router.route(user_request)
@@ -961,7 +1094,7 @@ class JarvisOrchestrator:
             # ── Tier 1: instant tool response ─────────────────────────────
             if tier == 1:
                 t0 = time.time()
-                shortcut = await self._try_shortcut(routing.primary_agent, user_request)
+                shortcut = await self._try_shortcut(routing.primary_agent, user_request, voice_mode=voice_mode, conversation_history=conversation_history)
                 _t("tool_shortcut", t0)
                 if shortcut is not None:
                     print(f"[JARVIS] ⚡ Stream Tier 1 — {(time.time()-start_time):.2f}s")
@@ -1047,7 +1180,21 @@ class JarvisOrchestrator:
                 history = conversation_history or []
                 _hist_cap = 4 if voice_mode else 8
                 recent_history = history[-_hist_cap:] if len(history) > _hist_cap else history
-                msgs = recent_history + [{"role": "user", "content": user_content}]
+
+                # Personalisation: pull any remembered facts relevant to this
+                # query and prepend them (with the base persona) as a system
+                # message. Skipped in voice mode to protect time-to-first-token.
+                _sys_msgs = []
+                if not voice_mode:
+                    recall = await self._recall_block(user_request)
+                    if recall:
+                        _sys_msgs = [{
+                            "role": "system",
+                            "content": (self.llm.JARVIS_SYSTEM_PROMPT
+                                        + "\n\nThings you remember about the user:\n"
+                                        + recall),
+                        }]
+                msgs = _sys_msgs + recent_history + [{"role": "user", "content": user_content}]
 
                 full_text = ""
                 t0 = time.time()
@@ -1055,10 +1202,19 @@ class JarvisOrchestrator:
                 # the model honest about the one-paragraph rule. Voice mode
                 # clamps tighter so TTS doesn't run away.
                 _tier2_tokens = VOICE_MAX_TOKENS if voice_mode else 180
-                async for chunk in self.llm.chat_stream(msgs, model=model, max_tokens=_tier2_tokens):
-                    full_text += chunk
-                    yield {"type": "chunk", "text": chunk}
+                _stream_err = None
+                try:
+                    async for chunk in self.llm.chat_stream(msgs, model=model, max_tokens=_tier2_tokens):
+                        full_text += chunk
+                        yield {"type": "chunk", "text": chunk}
+                except Exception as _exc:  # noqa: BLE001
+                    _stream_err = _exc
+                    print(f"[JARVIS] ⚠️ Tier 2 stream interrupted: {type(_exc).__name__}: {_exc}")
                 _t("llm_stream", t0)
+                # If the stream died before producing anything, surface the
+                # error; otherwise keep the partial text (cleaned below).
+                if not full_text.strip() and _stream_err is not None:
+                    raise _stream_err
 
                 # Enforce single-paragraph format on the final aggregated text.
                 # We stream chunks for perceived latency, then send a final
@@ -1115,311 +1271,70 @@ class JarvisOrchestrator:
         plan: TaskPlan,
         primary_agent: AgentRole,
     ) -> Dict[str, Any]:
+        """Execute the plan's subtasks in dependency order.
+
+        Delegates to ``core.executor.DagExecutor``; this method now only
+        translates between the executor's plain-string statuses and the
+        orchestrator's TaskStatus enum, and keeps the per-subtask timestamps
+        the evaluator reads.
+
+        Two fixes ride along with the move:
+
+        * A subtask whose dependency FAILED is now genuinely blocked. The old
+          guard tested whether a dependency was present in the results dict,
+          not whether it had succeeded — and a failed dependency is present —
+          so the BLOCKED branch was unreachable and dependents ran against
+          failure payloads.
+
+        * Independent read-only subtasks run concurrently instead of one after
+          another. Writes stay sequential; LLM-generated plans don't reliably
+          declare ordering between side effects.
         """
-        Execute subtasks in dependency order (topological sort).
-        Subtasks whose dependencies have all completed are eligible to run.
-        """
-        completed: Dict[str, Any] = {}
-        pending = {st.id: st for st in plan.subtasks}
-        max_iterations = len(pending) * 2
+        by_id = {st.id: st for st in plan.subtasks}
+        started: Dict[str, datetime] = {}
 
-        for _ in range(max_iterations):
-            if not pending:
-                break
+        for st in plan.subtasks:
+            st.status = TaskStatus.IN_PROGRESS
+            started[st.id] = datetime.now()
 
-            executed_this_round = []
+        def _on_subtask(st_id: str, result: Dict[str, Any]) -> None:
+            st = by_id.get(st_id)
+            if st is None:
+                return
+            st.started_at = started.get(st_id)
+            st.completed_at = datetime.now()
+            st.result = result
+            icon = "✅" if result.get("success") else "❌"
+            print(f"   {icon} [{st_id}] {st.agent}.{st.action}")
 
-            for st_id, subtask in list(pending.items()):
-                deps_done = all(d in completed for d in subtask.depends_on)
-                if not deps_done:
-                    # Check for failed deps → block this subtask
-                    failed_deps = [
-                        d for d in subtask.depends_on
-                        if d in completed and not completed[d].get("success")
-                    ]
-                    if failed_deps:
-                        subtask.status = TaskStatus.BLOCKED
-                        completed[st_id] = {
-                            "success": False,
-                            "error": f"Blocked by failed deps: {failed_deps}",
-                        }
-                        executed_this_round.append(st_id)
-                    continue
+        executor = DagExecutor(
+            self.tools,
+            inject_deps=self._inject_deps,
+            on_subtask=_on_subtask,
+        )
+        report = await executor.execute(plan.subtasks)
 
-                # Execute
-                subtask.started_at = datetime.now()
-                subtask.status = TaskStatus.IN_PROGRESS
-                result = await self._dispatch(subtask, completed, primary_agent)
-                subtask.completed_at = datetime.now()
-                subtask.status = (
-                    TaskStatus.COMPLETED if result.get("success")
-                    else TaskStatus.FAILED
-                )
-                subtask.result = result
-                completed[st_id] = result
-                executed_this_round.append(st_id)
+        status_map = {
+            STATUS_COMPLETED: TaskStatus.COMPLETED,
+            STATUS_BLOCKED: TaskStatus.BLOCKED,
+        }
+        for st_id, status in report.statuses.items():
+            st = by_id.get(st_id)
+            if st is not None:
+                st.status = status_map.get(status, TaskStatus.FAILED)
 
-                icon = "✅" if result.get("success") else "❌"
-                print(f"   {icon} [{st_id}] {subtask.agent}.{subtask.action}")
+        if report.blocked:
+            logger.warning("plan %s: %d subtask(s) blocked by failed dependencies: %s",
+                           getattr(plan, "intent", "?"), len(report.blocked),
+                           report.blocked)
+        if report.cyclic:
+            logger.error("plan %s: circular dependency among %s",
+                         getattr(plan, "intent", "?"), report.cyclic)
+        if report.unresolved_deps:
+            logger.error("plan %s: subtasks depend on undefined ids: %s",
+                         getattr(plan, "intent", "?"), report.unresolved_deps)
 
-            for st_id in executed_this_round:
-                pending.pop(st_id, None)
-
-            # Circular dependency check
-            if not executed_this_round and pending:
-                print("⚠️  Circular dependency detected")
-                for st_id in pending:
-                    completed[st_id] = {
-                        "success": False, "error": "Circular dependency"
-                    }
-                break
-
-        return completed
-
-    # ── Dispatcher ────────────────────────────────────────────────────────
-
-    async def _dispatch(
-        self,
-        subtask: Subtask,
-        completed: Dict[str, Any],
-        primary_agent: AgentRole,
-    ) -> Dict[str, Any]:
-        """Route a subtask to the correct tool/agent based on agent field."""
-        params = self._inject_deps(subtask.params, subtask.depends_on, completed)
-        agent = subtask.agent.lower()
-        action = subtask.action.lower()
-
-        try:
-            # ── Memory ──────────────────────────────────────────────────────
-            if agent == "memory":
-                if action == "retrieve_context":
-                    mems = await self.memory.retrieve(params.get("query", ""))
-                    return {"success": True, "result": [m.content for m in mems]}
-                elif action == "store_fact":
-                    await self.memory.store(
-                        params.get("content", ""),
-                        memory_type=MemoryType.SEMANTIC,
-                    )
-                    return {"success": True}
-
-            # ── Weather ─────────────────────────────────────────────────────
-            elif agent == "weather":
-                if action == "get_current":
-                    data = await self.weather.get_current()
-                    return {"success": True, "result": data,
-                            "message": self.weather.format_current(data)}
-                elif action == "get_forecast":
-                    data = await self.weather.get_forecast()
-                    return {"success": True, "result": data,
-                            "message": self.weather.format_forecast(data)}
-
-            # ── Web search ──────────────────────────────────────────────────
-            elif agent == "websearch":
-                data = await self.websearch.search(params.get("query", ""))
-                return {"success": data.get("success", False), "result": data,
-                        "message": self.websearch.format_results(data)}
-
-            # ── News ────────────────────────────────────────────────────────
-            elif agent == "news":
-                data = await self.news.get_headlines(
-                    source=params.get("source", "bbc"),
-                    topic=params.get("topic"),
-                    max_items=params.get("max_items", 5),
-                )
-                return {"success": data.get("success", False), "result": data,
-                        "message": self.news.format_headlines(data)}
-
-            # ── Mac control ─────────────────────────────────────────────────
-            elif agent == "mac":
-                if action == "open_app":
-                    return await self.mac.open_app(params.get("app", ""))
-                elif action == "set_volume":
-                    return await self.mac.set_volume(int(params.get("level", 50)))
-                elif action == "set_brightness":
-                    return await self.mac.set_brightness(float(params.get("level", 0.5)))
-                elif action == "send_notification":
-                    return await self.mac.send_notification(
-                        params.get("message", ""),
-                        params.get("title", "Jarvis"),
-                    )
-                elif action == "get_battery":
-                    return await self.mac.get_battery()
-                elif action == "lock_screen":
-                    return await self.mac.lock_screen()
-
-            # ── Spotify ─────────────────────────────────────────────────────
-            elif agent == "spotify":
-                if action == "search_tracks":
-                    return await self.spotify.search(params.get("query", ""))
-                elif action in ("play_track", "play_by_name", "play"):
-                    # The Planner LLM is allowed to call any of these three
-                    # action names. If a URI is given we play it directly;
-                    # otherwise we treat the `query` / `name` param as a
-                    # natural-language song request and search-then-play.
-                    uri = params.get("uri") or params.get("track_uri")
-                    query = (
-                        params.get("query") or params.get("name")
-                        or params.get("track") or params.get("song")
-                    )
-                    if uri:
-                        result = await self.spotify.play(uri)
-                    elif query:
-                        result = await self.spotify.play_by_name(query)
-                    else:
-                        result = await self.spotify.play()
-                    return {
-                        **result,
-                        "message": self.spotify.format_play_result(result),
-                    }
-                elif action == "pause":
-                    return await self.spotify.pause()
-                elif action == "skip":
-                    return await self.spotify.skip()
-                elif action == "previous":
-                    return await self.spotify.previous()
-                elif action == "set_volume":
-                    return await self.spotify.set_volume(int(params.get("level", 50)))
-                elif action == "get_now_playing":
-                    data = await self.spotify.get_now_playing()
-                    return {"success": True, "result": data,
-                            "message": self.spotify.format_now_playing(data)}
-
-            # ── Document ────────────────────────────────────────────────────
-            elif agent in ("document", "file"):
-                data = await self.document.extract(params.get("path", ""))
-                return {"success": data.get("success", False), "result": data}
-
-            # ── Summariser ──────────────────────────────────────────────────
-            elif agent == "summariser":
-                text = params.get("text", "")
-                summary = await self.summariser.summarise(
-                    text, max_words=params.get("max_words", 150)
-                )
-                return {"success": True, "result": summary, "message": summary}
-
-            # ── Temporal resolution ─────────────────────────────────────────
-            elif action == "resolve_temporal":
-                resolved = self._resolve_temporal(params.get("phrase", ""))
-                return {"success": True, "result": resolved}
-
-            # ── Validation ──────────────────────────────────────────────────
-            elif action == "validate_output":
-                return {"success": True, "result": {"validated": True}}
-
-            # ── Calendar ────────────────────────────────────────────────
-            elif agent == "calendar":
-                if action == "create_event":
-                    result = await self.calendar.create_event(
-                        title=params.get("title", "Untitled"),
-                        start_time=params.get("start_time", ""),
-                        end_time=params.get("end_time", ""),
-                        attendees=params.get("attendees"),
-                        description=params.get("description"),
-                        location=params.get("location"),
-                    )
-                    return result
-                elif action in ("search_events", "get_events"):
-                    result = await self.calendar.search_events(
-                        start_date=params.get("start_date"),
-                        end_date=params.get("end_date"),
-                        query=params.get("query"),
-                    )
-                    return result
-                elif action == "check_conflicts":
-                    result = await self.calendar.check_conflicts(
-                        params.get("start_time", ""),
-                        params.get("end_time", ""),
-                    )
-                    return result
-                elif action == "delete_event":
-                    return await self.calendar.delete_event(params.get("event_id", ""))
-
-            # ── Gmail ────────────────────────────────────────────────────────
-            elif agent == "email":
-                if action in ("read_emails", "get_inbox"):
-                    result = await self.gmail.get_inbox(
-                        max_results=params.get("max_results", 5),
-                        query=params.get("query", "is:unread"),
-                    )
-                    return result
-                elif action == "send_email":
-                    result = await self.gmail.send_email(
-                        to=params.get("to", ""),
-                        subject=params.get("subject", ""),
-                        body=params.get("body", ""),
-                        cc=params.get("cc"),
-                    )
-                    return result
-                elif action == "draft_email":
-                    result = await self.gmail.draft_email(
-                        to=params.get("to", ""),
-                        subject=params.get("subject", ""),
-                        body=params.get("body", ""),
-                    )
-                    return result
-                elif action == "search_emails":
-                    result = await self.gmail.search_emails(
-                        query=params.get("query", ""),
-                        max_results=params.get("max_results", 5),
-                    )
-                    return result
-
-            # ── FinEx (financial-statement Q&A) ─────────────────────────────
-            elif agent == "finex":
-                question = (
-                    params.get("question")
-                    or params.get("query")
-                    or params.get("q")
-                    or ""
-                )
-                company = params.get("company", "Bestway Cement")
-                if not question:
-                    return {
-                        "success": False,
-                        "error": "finex subtask missing 'question' param",
-                    }
-                fx = await self.finex.chat(question=question, company=company)
-                return {
-                    "success": True,
-                    "result": fx,
-                    "message": fx.get("answer", ""),
-                }
-
-            # ── Reminders ───────────────────────────────────────────────────
-            elif agent == "reminder":
-                if action == "add_reminder":
-                    rid = self.reminders.add(
-                        title=params.get("title", "Reminder"),
-                        body=params.get("body", ""),
-                        due_at=params.get("due_at"),
-                        recurring_minutes=params.get("recurring_minutes"),
-                        offset_minutes=params.get("offset_minutes"),
-                    )
-                    due = params.get("due_at") or f"in {params.get('offset_minutes', 5)} minutes"
-                    return {"success": True, "id": rid,
-                            "message": f"Reminder set: '{params.get('title', 'Reminder')}' — {due}"}
-                elif action == "list_reminders":
-                    pending = self.reminders.list_pending()
-                    return {"success": True, "result": pending,
-                            "message": self.reminders.format_list(pending)}
-                elif action == "complete_reminder":
-                    ok = self.reminders.complete(params.get("id", ""))
-                    return {"success": ok, "message": "Reminder marked complete." if ok else "Reminder not found."}
-                elif action == "delete_reminder":
-                    ok = self.reminders.delete(params.get("id", ""))
-                    return {"success": ok, "message": "Reminder deleted." if ok else "Reminder not found."}
-
-            # ── Fallback ────────────────────────────────────────────────────
-            else:
-                return {
-                    "success": False,
-                    "error": f"Unknown agent/action: {agent}.{action}",
-                }
-
-        except Exception as exc:
-            return {"success": False, "error": str(exc)}
-        # Safety: should never reach here
-        return {"success": False, "error": f"Unhandled: {agent}.{action}"}
+        return report.results
 
     # ── Dependency injection ───────────────────────────────────────────────
 
@@ -1578,33 +1493,80 @@ class JarvisOrchestrator:
         results: Dict[str, Any],
         primary_agent: AgentRole,
     ) -> str:
-        """Build a natural language response from execution results."""
-        messages = []
-        for result in results.values():
-            if result.get("success") and result.get("message"):
-                messages.append(result["message"])
+        """Build a natural language response from execution results.
 
-        if messages:
-            return " ".join(messages)
+        IMPORTANT: failures must NOT be silently dropped. Previously this only
+        collected messages from successful steps, so a failed action (e.g. a
+        brightness change that didn't go through) would either vanish or be
+        replaced with a vague "Completed 0/1 steps" — or worse, a sibling
+        success message made it look like everything worked. We now surface
+        failure messages/errors first so the user is always told the truth.
+        """
+        success_msgs = []
+        failure_msgs = []
+        for result in results.values():
+            if result.get("success"):
+                if result.get("message"):
+                    success_msgs.append(result["message"])
+            else:
+                # Prefer an explicit message, fall back to the error text.
+                fmsg = result.get("message") or result.get("error")
+                if fmsg:
+                    failure_msgs.append(fmsg)
+
+        # Lead with failures so a real failure is never buried under a
+        # success confirmation, then add any genuine successes.
+        if failure_msgs:
+            return " ".join(failure_msgs + success_msgs)
+        if success_msgs:
+            return " ".join(success_msgs)
 
         # Fallback: summarise what happened
         successes = sum(1 for r in results.values() if r.get("success"))
         total = len(results)
+        if successes == total and total > 0:
+            return f"Done — completed {successes}/{total} steps."
         return (
-            f"Completed {successes}/{total} steps for: {plan.intent.replace('_', ' ')}."
+            f"I couldn't fully complete that — only {successes}/{total} steps "
+            f"succeeded for: {plan.intent.replace('_', ' ')}."
         )
 
 
     # ── Shortcut handler ──────────────────────────────────────────────────
 
+    async def _send_pending_draft(self, draft: "EmailDraft") -> Dict[str, Any]:
+        """
+        Send a confirmed pending email draft.
+
+        Reply drafts go through GmailAgent.reply_to_email so the message stays
+        in-thread (threadId + In-Reply-To/References headers); everything else
+        is a fresh send_email. Centralising this means both confirmation paths
+        (the pending-state intercept and the shortcut handler) behave the same.
+        """
+        if getattr(draft, "is_reply", False) and getattr(draft, "original_email", None):
+            return await self.gmail.reply_to_email(draft.original_email, draft.body)
+        return await self.gmail.send_email(
+            to=draft.recipient_email,
+            subject=draft.subject,
+            body=draft.body,
+        )
+
     async def _try_shortcut(
         self,
         primary_agent: AgentRole,
         user_request: str,
+        *,
+        voice_mode: bool = False,
+        conversation_history: Optional[List[Dict]] = None,
     ):
         """
         Bypass LLM planning for deterministic single-tool intents.
         Returns a JarvisResponse if handled, None otherwise.
+
+        voice_mode flag is passed through to shortcut handlers that have
+        a voice-friendly alternative output shape (e.g. file listings,
+        morning brief). conversation_history is used by the save-conversation
+        file shortcut.
         """
         import time as _time
         import re
@@ -1991,10 +1953,126 @@ class JarvisOrchestrator:
         if any(kw in req_lower for kw in email_read_keywords):
             import time as _t2
             _s2 = _t2.time()
-            result = await self.gmail.get_inbox(max_results=5)
+            # Use the SAME source/order as the sidebar (is:inbox, newest first)
+            # so the numbered list here and a follow-up "reply to email N" both
+            # match what the user sees in the inbox panel.
+            result = await self.gmail.get_inbox(max_results=8, query="is:inbox")
+            # Cache the indexed list so a follow-up "reply to email 2" resolves.
+            self._last_inbox = result.get("emails", []) or []
             msg = result.get("message", "Could not read inbox.")
             asyncio.ensure_future(self.memory.store_task_result(user_request, "read_email", True, msg[:100]))
             return JarvisResponse(success=True, message=msg, latency_ms=(_t2.time()-_s2)*1000)
+
+        # ── Email shortcut — read / reply / archive a NUMBERED inbox email ──
+        # Handles "read email 1", "reply to email 2 with a heart emoji",
+        # "archive email 3". Without this the request falls through to the LLM,
+        # which hallucinates a draft (and later a fake "Email sent.") because no
+        # real pending draft is ever created. The number maps into the last
+        # inbox the user saw; if the cache is empty we fetch it on demand.
+        import re as _re_emn
+        _emn = _re_emn.search(
+            r'\b(read|reply|archive)\b(?:\s+to)?\s+(?:email|mail|message)\s*#?\s*(\d+)',
+            req_lower,
+        )
+        if _emn:
+            import time as _temn
+            _semn = _temn.time()
+            action_kind = _emn.group(1)
+            idx = int(_emn.group(2))
+
+            # Resolve the number against a FRESH is:inbox / newest-first list —
+            # the same source and order as the sidebar — so "email N" is always
+            # the message the user sees at position N. We deliberately do NOT
+            # trust self._last_inbox here: other commands ("summarize inbox")
+            # may have cached an is:unread list with a different order, which
+            # previously caused replies to target the wrong email. Fall back to
+            # the cache only if the live fetch fails (offline / mock).
+            _inb = await self.gmail.get_inbox(max_results=8, query="is:inbox")
+            _fresh = _inb.get("emails", []) or []
+            if _fresh:
+                self._last_inbox = _fresh
+
+            if not self._last_inbox:
+                return JarvisResponse(
+                    success=False,
+                    message="I couldn't read your inbox to find that email. Try 'check my inbox' first.",
+                    latency_ms=(_temn.time()-_semn)*1000,
+                )
+            if idx < 1 or idx > len(self._last_inbox):
+                return JarvisResponse(
+                    success=False,
+                    message=(
+                        f"I only see {len(self._last_inbox)} email"
+                        f"{'s' if len(self._last_inbox) != 1 else ''} in your inbox. "
+                        f"Pick a number between 1 and {len(self._last_inbox)}."
+                    ),
+                    latency_ms=(_temn.time()-_semn)*1000,
+                )
+
+            target = self._last_inbox[idx - 1]
+
+            # ── READ ───────────────────────────────────────────────────────
+            if action_kind == "read":
+                body_res = await self.gmail.get_email_body(target.get("id", ""))
+                if not body_res.get("success"):
+                    return JarvisResponse(
+                        success=False,
+                        message=f"Could not read email {idx}: {body_res.get('error', 'unknown error')}",
+                        latency_ms=(_temn.time()-_semn)*1000,
+                    )
+                sender = body_res.get("from", target.get("from", "Unknown"))
+                subj = body_res.get("subject", target.get("subject", "(no subject)"))
+                body_text = (body_res.get("body") or "").strip() or "(empty body)"
+                msg = f"From: {sender}\nSubject: {subj}\n\n{body_text}"
+                asyncio.ensure_future(self.memory.store_task_result(user_request, "read_email", True, subj[:100]))
+                return JarvisResponse(success=True, message=msg, latency_ms=(_temn.time()-_semn)*1000)
+
+            # ── ARCHIVE ──────────────────────────────────────────────────────
+            if action_kind == "archive":
+                ar = await self.gmail.archive_email(target.get("id", ""))
+                ok = ar.get("success", False)
+                msg = ar.get("message") or ("Email archived." if ok else
+                      f"Could not archive: {ar.get('error', 'unknown error')}")
+                if ok:
+                    # Drop it from the cached list so indices stay meaningful.
+                    self._last_inbox.pop(idx - 1)
+                asyncio.ensure_future(self.memory.store_task_result(user_request, "archive_email", ok, msg[:100]))
+                return JarvisResponse(success=ok, message=msg, latency_ms=(_temn.time()-_semn)*1000)
+
+            # ── REPLY ────────────────────────────────────────────────────────
+            # Extract the reply instruction = text after "email N".
+            instruction = _re_emn.sub(
+                r'^.*?\b(?:email|mail|message)\s*#?\s*\d+\b[\s,:-]*', '', user_request, count=1
+            ).strip()
+            if instruction.lower().startswith(("with ", "saying ", "say ", "that ")):
+                instruction = instruction.split(" ", 1)[1].strip() if " " in instruction else instruction
+            if not instruction:
+                instruction = "a brief, polite acknowledgement"
+
+            reply_body = await self.composer.compose_reply(target, instruction)
+
+            parsed = self.gmail._parse_address(target.get("from", ""))
+            r_name = parsed.get("name") or parsed.get("email") or "them"
+            r_email = parsed.get("email", "")
+            subj = target.get("subject", "")
+            if not subj.lower().startswith("re:"):
+                subj = f"Re: {subj}"
+
+            draft = EmailDraft(
+                recipient_name=r_name,
+                recipient_email=r_email,
+                subject=subj,
+                body=reply_body,
+                tone="reply",
+                intent="reply",
+                contact_found=bool(r_email),
+                needs_email=False,
+                is_reply=True,
+                original_email=target,
+            )
+            self._pending_email = draft
+            msg = self.composer.format_draft_for_confirmation(draft)
+            return JarvisResponse(success=True, message=msg, latency_ms=(_temn.time()-_semn)*1000)
 
         # Email shortcut — confirmation check first
         confirm_keywords = ["yes send it", "yes", "send it", "confirm", "go ahead", "yeah send"]
@@ -2003,11 +2081,7 @@ class JarvisOrchestrator:
             _sc = _tc.time()
             draft = self._pending_email
             self._pending_email = None
-            result = await self.gmail.send_email(
-                to=draft.recipient_email,
-                subject=draft.subject,
-                body=draft.body,
-            )
+            result = await self._send_pending_draft(draft)
             msg = result.get("message", f"Email sent to {draft.recipient_email}")
             # Auto-save contact after successful send
             if result.get("success") and draft.recipient_email and draft.recipient_name:
@@ -2099,16 +2173,90 @@ class JarvisOrchestrator:
                 return JarvisResponse(success=True, message="Cancelled.",
                                       latency_ms=(_tfile.time()-_sfile)*1000)
 
-        # Detect file intent keywords
+        # ── Open a file by extension ────────────────────────────────────────
+        # "open README.md", "show me the contents of foo.txt", "read notes.md"
+        # → route through file_manager.read_file (NOT the mac open-app path).
+        # The mac open-app shortcut above already skips when an extension is
+        # detected; this is the matching positive intercept that actually
+        # does the read.
+        import re as _refile_open
+        # IMPORTANT: alternation order matters because the lazy `.*?`
+        # before `\.` will accept the first matching extension. List
+        # LONGER extensions BEFORE shorter ones that share a prefix,
+        # otherwise "package.json" gets captured as "package.js" and
+        # "notes.markdown" as "notes.mark".
+        _open_file_match = _refile_open.search(
+            r'(?:open|read|show(?:\s+me)?(?:\s+the)?(?:\s+contents?\s+of)?|'
+            r'display|cat|preview|peek\s+at|look\s+at)\s+'
+            r'(?:the\s+|my\s+|file\s+)?'
+            r'["\']?([\w\-][\w\-\.\s]*?\.'
+            r'(?:markdown|md|'
+            r'json|jsx|js|tsx|ts|'
+            r'yaml|yml|'
+            r'html|htm|css|'
+            r'pptx|ppt|xlsx|xls|docx|doc|'
+            r'txt|csv|toml|cfg|ini|env|log|xml|rst|sql|graphql|'
+            r'py|sh|zsh|java|cpp|c|h|go|rb|php|swift|kt|r))'
+            r'["\']?\b',
+            user_request, _refile_open.IGNORECASE,
+        )
+        if _open_file_match:
+            import time as _tfo
+            _sfo = _tfo.time()
+            target_file = _open_file_match.group(1).strip()
+            data = self.files.read_file(target_file)
+            if data.get("success"):
+                content = data.get("content", "")
+                trunc = "\n\n[File truncated at 50KB]" if data.get("truncated") else ""
+                if voice_mode:
+                    # Read aloud the first few lines, not the whole thing
+                    snippet = content[:500].strip()
+                    msg = (
+                        f"{data['name']} — {data['lines']} lines, "
+                        f"{self.files._fmt_size(data['size'])}. "
+                        f"It starts with: {snippet[:300]}…"
+                        if len(content) > 300
+                        else f"{data['name']}: {content}"
+                    )
+                else:
+                    msg = f"**{data['display_path']}**\n\n{content}{trunc}"
+            else:
+                msg = data.get("error", f"Could not open {target_file}.")
+                # Suggest alternative — maybe they meant an app with a dot
+                if "extension" in data.get("error", "") or "not allowed" in data.get("error", "").lower():
+                    msg += " (Try giving the full path, or check Desktop/Documents/Downloads.)"
+            return JarvisResponse(
+                success=data.get("success", False),
+                message=msg,
+                latency_ms=(_tfo.time() - _sfo) * 1000,
+            )
+
+        # Detect file intent keywords. Order doesn't matter (we just check
+        # any-match) but each new phrase should be reflected in the parser
+        # below or it'll fall through to "no action".
         _file_kw = [
             "folder", "directory", "file", "files", "desktop", "documents", "downloads",
             "create folder", "make folder", "new folder", "create file", "new file",
+            "create a note", "make a note", "new note",
             "delete file", "delete folder", "remove file", "remove folder",
             "rename", "move to", "find file", "search file", "list files",
             "show files", "browse", "what's on my desktop", "whats on my desktop",
             "what's on my documents", "whats on my documents",
             "show me what's on", "show me whats on", "show me my files",
             "what files", "what do i have on my", "list my files",
+            # NEW — content-bearing creation
+            "with content", "with text", "with body", "saying ", "containing ",
+            "that says", "that contains",
+            # NEW — save chat / transcript
+            "save this conversation", "save the conversation", "save our conversation",
+            "save this chat", "save the chat", "save our chat",
+            "save the discussion", "save the transcript",
+            "export the conversation", "export this chat",
+            "dump the conversation", "dump the chat",
+            # NEW — extension intent searches
+            "all my pdfs", "find pdfs", "find all pdfs", "list pdfs",
+            "my images", "my photos", "my screenshots",
+            "my spreadsheets", "my videos", "my notes",
         ]
         _is_file_request = any(kw in req_lower for kw in _file_kw)
 
@@ -2122,9 +2270,44 @@ class JarvisOrchestrator:
 
             # ── List directory ──────────────────────────────────────────────
             if action == "list" or (not action and any(w in req_lower for w in ["list", "show", "browse", "what's on", "whats on"])):
-                target = loc  # always use the location key ('desktop','documents','downloads','all')
-                data = self.files.list_directory(target)
-                msg = self.files.format_listing(data)
+                target = loc  # location key ('desktop','documents','downloads','all')
+                # Optional modifiers parsed from natural language
+                include_hidden = any(p in req_lower for p in (
+                    "include hidden", "with hidden", "show hidden",
+                    "all files including hidden", "hidden files",
+                    "dotfiles",
+                ))
+                sort_by = "name"
+                reverse = False
+                if any(p in req_lower for p in (
+                    "by date", "by modified", "newest first", "most recent",
+                    "recently modified",
+                )):
+                    sort_by, reverse = "modified", True
+                elif any(p in req_lower for p in (
+                    "oldest first", "by oldest",
+                )):
+                    sort_by, reverse = "modified", False
+                elif any(p in req_lower for p in (
+                    "by size", "biggest first", "largest first",
+                )):
+                    sort_by, reverse = "size", True
+                elif any(p in req_lower for p in (
+                    "smallest first",
+                )):
+                    sort_by, reverse = "size", False
+
+                data = self.files.list_directory(
+                    target,
+                    include_hidden=include_hidden,
+                    sort_by=sort_by,
+                    reverse=reverse,
+                )
+                # Voice mode gets the prose summary; text mode gets the rich list.
+                if voice_mode:
+                    msg = self.files.format_listing_voice(data)
+                else:
+                    msg = self.files.format_listing(data)
                 return JarvisResponse(success=data.get("success", False), message=msg,
                                       latency_ms=(_tfile.time()-_sfile)*1000)
 
@@ -2169,16 +2352,72 @@ class JarvisOrchestrator:
                 return JarvisResponse(success=data.get("success", False), message=msg,
                                       latency_ms=(_tfile.time()-_sfile)*1000)
 
-            # ── Create file ─────────────────────────────────────────────────
+            # ── Create file (with optional content body) ────────────────────
             elif action == "create_file" and name:
-                from pathlib import Path as _P
                 from tools.file_manager import ALLOWED_ROOTS as _ROOTS
                 target_root = _ROOTS.get(loc, _ROOTS["desktop"])
-                full_path = str(target_root / name)
-                data = self.files.create_file(full_path)
+                # Default extension if user gave only a stem like "notes"
+                _name = name
+                if "." not in _name:
+                    _name = f"{_name}.txt"
+                full_path = str(target_root / _name)
+                content = parsed.get("content") or ""
+                data = self.files.create_file(full_path, content=content)
+                if data.get("success") and content:
+                    # Nice user feedback noting the content was written
+                    data["message"] = (
+                        f"Created {data['display_path']} "
+                        f"({len(content)} character{'s' if len(content) != 1 else ''})."
+                    )
                 msg = data.get("message", data.get("error", "Could not create file."))
                 return JarvisResponse(success=data.get("success", False), message=msg,
                                       latency_ms=(_tfile.time()-_sfile)*1000)
+
+            # ── Save conversation to file ──────────────────────────────────
+            elif action == "save_conversation" and name:
+                from tools.file_manager import ALLOWED_ROOTS as _ROOTS
+                target_root = _ROOTS.get(loc, _ROOTS["desktop"])
+                _name = name if "." in name else f"{name}.md"
+                full_path = str(target_root / _name)
+
+                # Render the conversation history as Markdown
+                history = conversation_history or []
+                if not history:
+                    return JarvisResponse(
+                        success=False,
+                        message="There's nothing to save yet — no conversation history in this session.",
+                        latency_ms=(_tfile.time()-_sfile)*1000,
+                    )
+                from datetime import datetime as _dt
+                lines_md = [
+                    f"# Conversation transcript",
+                    f"Saved: {_dt.now().strftime('%A, %d %B %Y at %H:%M')}",
+                    "",
+                ]
+                for turn in history:
+                    role = turn.get("role", "?")
+                    content = turn.get("content", "")
+                    if role == "user":
+                        lines_md.append(f"## You")
+                    elif role == "assistant":
+                        lines_md.append(f"## Jarvis")
+                    else:
+                        lines_md.append(f"## {role}")
+                    lines_md.append(content.strip())
+                    lines_md.append("")
+                body = "\n".join(lines_md)
+                data = self.files.create_file(full_path, content=body)
+                msg = (
+                    f"Conversation saved to {data['display_path']} "
+                    f"({len(history)} message{'s' if len(history) != 1 else ''})."
+                    if data.get("success")
+                    else data.get("error", "Could not save conversation.")
+                )
+                return JarvisResponse(
+                    success=data.get("success", False),
+                    message=msg,
+                    latency_ms=(_tfile.time()-_sfile)*1000,
+                )
 
             # ── Delete — requires approval ───────────────────────────────────
             elif action == "delete" and path:
@@ -2431,38 +2670,130 @@ class JarvisOrchestrator:
         # ── Mac Control shortcuts ──────────────────────────────────────────
         import re as _rem
 
-        # Open app
-        if any(kw in req_lower for kw in ["open", "launch", "start"]):
+        # Open app — guarded so we don't fire on "open the file README.md"
+        # (that's routed to file_manager via the file-extension check below).
+        _open_trigger = (
+            req_lower.startswith("open ") or req_lower.startswith("launch ")
+            or req_lower.startswith("start ") or req_lower.startswith("can you open ")
+            or req_lower.startswith("could you open ") or req_lower.startswith("please open ")
+        )
+        # If the user is referring to a specific file ("open README.md",
+        # "show me the contents of foo.txt"), DON'T treat this as app-open.
+        # File extensions present in the request → file_manager handles it.
+        # Alternation order matters — longer extensions before shorter
+        # prefixes (json/jsx/tsx must come before js/ts).
+        _file_ext_re = _rem.compile(
+            r'\b[\w\-]+\.'
+            r'(?:markdown|md|'
+            r'json|jsx|js|tsx|ts|'
+            r'yaml|yml|'
+            r'pptx|ppt|xlsx|xls|docx|doc|'
+            r'html|htm|css|'
+            r'pdf|txt|csv|toml|cfg|ini|env|log|xml|rst|sh|zsh|py)\b',
+            _rem.IGNORECASE,
+        )
+        _has_file_extension = bool(_file_ext_re.search(user_request))
+
+        if _open_trigger and not _has_file_extension:
             import time as _to
             _so = _to.time()
-            # Known app aliases
+            # Known app aliases — longest first so multi-word matches win.
+            # Add liberally; if a real app exists with the alias name macOS
+            # resolves it via Launch Services regardless.
             app_aliases = {
-                "chrome": "Google Chrome", "google chrome": "Google Chrome",
-                "safari": "Safari", "firefox": "Firefox",
-                "spotify": "Spotify", "music": "Music",
-                "terminal": "Terminal", "iterm": "iTerm",
-                "vscode": "Visual Studio Code", "vs code": "Visual Studio Code",
-                "code": "Visual Studio Code", "visual studio": "Visual Studio Code",
-                "notes": "Notes", "mail": "Mail", "calendar": "Calendar",
-                "slack": "Slack", "zoom": "Zoom", "discord": "Discord",
+                # Browsers
+                "google chrome": "Google Chrome", "chrome": "Google Chrome",
+                "safari": "Safari", "firefox": "Firefox", "brave": "Brave Browser",
+                "arc": "Arc", "edge": "Microsoft Edge", "opera": "Opera",
+                # Code editors / IDEs
+                "visual studio code": "Visual Studio Code", "vs code": "Visual Studio Code",
+                "vscode": "Visual Studio Code", "code editor": "Visual Studio Code",
+                "cursor": "Cursor", "windsurf": "Windsurf",
+                "xcode": "Xcode", "intellij": "IntelliJ IDEA",
+                "pycharm": "PyCharm", "webstorm": "WebStorm",
+                "sublime text": "Sublime Text", "sublime": "Sublime Text",
+                "android studio": "Android Studio",
+                # Terminals
+                "iterm": "iTerm", "iterm2": "iTerm",
+                "warp": "Warp", "terminal": "Terminal", "ghostty": "Ghostty",
+                # Productivity
+                "notion": "Notion", "obsidian": "Obsidian", "bear": "Bear",
+                "things": "Things3", "things 3": "Things3",
+                "todoist": "Todoist", "fantastical": "Fantastical",
+                "raycast": "Raycast", "alfred": "Alfred",
+                "1password": "1Password", "bitwarden": "Bitwarden",
+                # Communication
+                "slack": "Slack", "discord": "Discord",
+                "microsoft teams": "Microsoft Teams", "teams": "Microsoft Teams",
+                "zoom": "zoom.us", "webex": "Webex",
+                "whatsapp": "WhatsApp", "telegram": "Telegram",
+                "signal": "Signal",
+                # Apple apps
+                "mail": "Mail", "calendar": "Calendar", "notes": "Notes",
+                "reminders": "Reminders", "messages": "Messages",
+                "facetime": "FaceTime", "photos": "Photos", "maps": "Maps",
+                "music": "Music", "tv": "TV", "podcasts": "Podcasts",
                 "finder": "Finder", "calculator": "Calculator",
-                "messages": "Messages", "facetime": "FaceTime",
-                "photos": "Photos", "maps": "Maps", "word": "Microsoft Word",
-                "excel": "Microsoft Excel", "powerpoint": "Microsoft PowerPoint",
+                "preview": "Preview", "freeform": "Freeform",
                 "system preferences": "System Preferences",
-                "system settings": "System Settings", "settings": "System Settings",
+                "system settings": "System Settings",
+                "activity monitor": "Activity Monitor",
+                # Office
+                "word": "Microsoft Word", "microsoft word": "Microsoft Word",
+                "excel": "Microsoft Excel", "microsoft excel": "Microsoft Excel",
+                "powerpoint": "Microsoft PowerPoint",
+                "microsoft powerpoint": "Microsoft PowerPoint",
+                "outlook": "Microsoft Outlook", "onenote": "Microsoft OneNote",
+                # Creative
+                "figma": "Figma", "sketch": "Sketch", "framer": "Framer",
+                "photoshop": "Adobe Photoshop", "illustrator": "Adobe Illustrator",
+                "indesign": "Adobe InDesign", "premiere": "Adobe Premiere Pro",
+                "after effects": "Adobe After Effects",
+                "blender": "Blender", "final cut": "Final Cut Pro",
+                "logic": "Logic Pro", "garageband": "GarageBand",
+                # Media
+                "spotify": "Spotify", "vlc": "VLC", "iina": "IINA",
+                "infuse": "Infuse",
+                # Dev tools
+                "postman": "Postman", "insomnia": "Insomnia",
+                "tableplus": "TablePlus", "dbeaver": "DBeaver",
+                "docker": "Docker", "docker desktop": "Docker",
+                "github desktop": "GitHub Desktop",
+                "sourcetree": "Sourcetree", "fork": "Fork",
+                # Cloud / sync
+                "dropbox": "Dropbox", "google drive": "Google Drive",
+                "onedrive": "OneDrive",
+                # Bookkeeping the original list
+                "vs": "Visual Studio Code",   # ambiguous but VS Code is most common
+                "code": "Visual Studio Code",
             }
-            # Try to find a known app name in the request
+            # Sort aliases by length descending so "visual studio code" wins
+            # over "code" when both could match.
+            sorted_aliases = sorted(app_aliases.items(), key=lambda kv: -len(kv[0]))
+
             app = None
-            for alias, real_name in app_aliases.items():
+            for alias, real_name in sorted_aliases:
                 if alias in req_lower:
                     app = real_name
                     break
-            # Fallback: extract word after open/launch/start
+            # Fallback: extract everything after open/launch/start, up to a
+            # natural stopping word (in/on/with/from/to/please). Allows
+            # multi-word app names we haven't aliased explicitly.
             if not app:
-                open_match = _rem.search(r'(?:open|launch|start)\s+([a-zA-Z][a-zA-Z0-9]+)', user_request, _rem.IGNORECASE)
+                open_match = _rem.search(
+                    r'(?:open|launch|start)\s+'
+                    r'(?:the\s+|app\s+|application\s+)?'
+                    r'([\w][\w\s\.\-]*?)'
+                    r'(?:\s+(?:in|on|with|from|to|please|now|app|application)\b|\s*$)',
+                    user_request, _rem.IGNORECASE,
+                )
                 if open_match:
-                    app = open_match.group(1).strip().title()
+                    raw_app = open_match.group(1).strip()
+                    # Title-case for consistency with Launch Services. Don't
+                    # title-case if it's clearly a known camel/lowercase id.
+                    if not any(c.isupper() for c in raw_app):
+                        raw_app = " ".join(w.capitalize() for w in raw_app.split())
+                    app = raw_app
             if app:
                 new_window = any(kw in req_lower for kw in ["new window", "new tab", "open new", "new session"])
 
@@ -2528,12 +2859,19 @@ class JarvisOrchestrator:
                 msg = "Could not read battery level."
             return JarvisResponse(success=result.get("success", False), message=msg, latency_ms=(_tbat.time()-_sbat)*1000)
 
-        # Lock screen
-        if any(kw in req_lower for kw in ["lock screen", "lock my screen", "lock the screen"]):
+        # Lock screen — broaden trigger phrasing
+        _lock_phrases = (
+            "lock screen", "lock my screen", "lock the screen",
+            "lock my mac", "lock the mac", "lock my computer",
+            "lock the computer", "lock my laptop", "lock the laptop",
+            "lock it", "lock me out",
+        )
+        if any(kw in req_lower for kw in _lock_phrases):
             import time as _tl
             _sl = _tl.time()
             result = await self.mac.lock_screen()
-            return JarvisResponse(success=result.get("success", False), message="Screen locked.", latency_ms=(_tl.time()-_sl)*1000)
+            msg = result.get("message") or ("Screen locked." if result.get("success") else result.get("error", "Could not lock the screen."))
+            return JarvisResponse(success=result.get("success", False), message=msg, latency_ms=(_tl.time()-_sl)*1000)
 
         # Get clipboard
         if any(kw in req_lower for kw in ["clipboard", "what did i copy", "whats in my clipboard"]):
@@ -2544,27 +2882,97 @@ class JarvisOrchestrator:
             msg = f"Clipboard contains: {text[:200]}" if text else "Clipboard is empty."
             return JarvisResponse(success=True, message=msg, latency_ms=(_tcb.time()-_scb)*1000)
 
-        # Send Mac notification
-        notif_match = _rem.search(r'(?:send|show|give me)\s+(?:a\s+)?notification[:\s]+(.+)', user_request, _rem.IGNORECASE)
+        # Send Mac notification — broaden phrasing.
+        # Catches:
+        #   "send me a notification: X"
+        #   "notify me: X" / "notify me that X"
+        #   "ping me with X" / "ping me: X"
+        #   "show notification X" / "post notification X"
+        #   "tell me X" (but only if a colon or "that" anchors the body —
+        #     otherwise it's too greedy and would intercept normal Q&A)
+        notif_match = _rem.search(
+            r'(?:send\s+(?:me\s+)?(?:a\s+)?notification|'
+            r'show\s+(?:a\s+|me\s+a\s+)?notification|'
+            r'post\s+(?:a\s+)?notification|'
+            r'give\s+me\s+(?:a\s+)?notification|'
+            r'notify\s+me|ping\s+me)'
+            r'(?:\s+(?:with|that|saying|to\s+say))?\s*[:\-]?\s*(.+)$',
+            user_request, _rem.IGNORECASE,
+        )
         if notif_match:
             import time as _tn
             _sn = _tn.time()
-            message = notif_match.group(1).strip()
-            result = await self.mac.send_notification(message)
-            msg = f"Notification sent: {message}" if result.get("success") else "Could not send notification."
+            message = notif_match.group(1).strip().strip('"').strip("'")
+            # Allow "with title 'X'" subtitle override
+            title = "Jarvis"
+            title_match = _rem.search(r'(?:title|titled)\s+["\']([^"\']+)["\']', message, _rem.IGNORECASE)
+            if title_match:
+                title = title_match.group(1).strip()
+                message = (message[:title_match.start()] + message[title_match.end():]).strip()
+            if not message:
+                return JarvisResponse(
+                    success=False,
+                    message='I need the text for the notification. Try: "notify me: take a break".',
+                    latency_ms=(_tn.time()-_sn)*1000,
+                )
+            result = await self.mac.send_notification(message, title=title)
+            msg = (
+                f"Notification sent: \"{message}\"."
+                if result.get("success")
+                else f"Could not send notification: {result.get('error','unknown error')}"
+            )
             return JarvisResponse(success=result.get("success", False), message=msg, latency_ms=(_tn.time()-_sn)*1000)
 
-        # Quit / close app
-        quit_match = _rem.search(r'(?:quit|close|kill|exit)\s+([a-zA-Z][a-zA-Z0-9\s]+)', user_request, _rem.IGNORECASE)
-        if quit_match:
+        # Quit / close app — tightened regex.
+        # OLD: captured `[a-zA-Z][a-zA-Z0-9\s]+` which greedily consumed
+        # trailing words ("quit chrome now" → "chrome now" → fail).
+        # NEW: stop at a natural boundary (in/on/for/now/please/!.,?) so
+        # we only get the app token(s) themselves.
+        quit_match = _rem.search(
+            r'(?:quit|close|kill|exit|terminate|force\s+quit)\s+'
+            # Strip ALL combinations of "the"/"app"/"application" prefixes.
+            # Stacking with * so "the app discord" / "the application X" all work.
+            r'(?:(?:the|app|application)\s+)*'
+            r'([\w][\w\s\.\-]*?)'
+            r'(?:\s+(?:in|on|for|now|please|app|application)\b|[\.!?,]|\s*$)',
+            user_request, _rem.IGNORECASE,
+        )
+        # Don't fire quit on file-manager intents like "close this file"
+        # or "exit the document".
+        _is_close_file = any(w in req_lower for w in (
+            "close this file", "close the file", "close the document",
+            "close that document", "exit the document",
+        ))
+        if quit_match and not _is_close_file:
             import time as _tq
             _sq = _tq.time()
+            # Reuse the full open-app alias map for quit so any app you
+            # can open by alias you can also quit by alias.
             app_aliases_q = {
-                "chrome": "Google Chrome", "safari": "Safari",
-                "spotify": "Spotify", "vscode": "Visual Studio Code",
-                "vs code": "Visual Studio Code", "slack": "Slack",
-                "zoom": "Zoom", "discord": "Discord", "mail": "Mail",
-                "terminal": "Terminal", "finder": "Finder",
+                "chrome": "Google Chrome", "google chrome": "Google Chrome",
+                "safari": "Safari", "firefox": "Firefox", "brave": "Brave Browser",
+                "arc": "Arc", "edge": "Microsoft Edge",
+                "spotify": "Spotify", "vlc": "VLC", "iina": "IINA",
+                "vscode": "Visual Studio Code", "vs code": "Visual Studio Code",
+                "code": "Visual Studio Code", "cursor": "Cursor",
+                "xcode": "Xcode", "warp": "Warp", "iterm": "iTerm",
+                "terminal": "Terminal", "ghostty": "Ghostty",
+                "slack": "Slack", "discord": "Discord",
+                "teams": "Microsoft Teams", "microsoft teams": "Microsoft Teams",
+                "zoom": "zoom.us", "whatsapp": "WhatsApp", "telegram": "Telegram",
+                "notion": "Notion", "obsidian": "Obsidian", "raycast": "Raycast",
+                "figma": "Figma", "sketch": "Sketch",
+                "postman": "Postman", "insomnia": "Insomnia",
+                "tableplus": "TablePlus", "docker": "Docker",
+                "github desktop": "GitHub Desktop",
+                "mail": "Mail", "calendar": "Calendar", "notes": "Notes",
+                "messages": "Messages", "facetime": "FaceTime",
+                "photos": "Photos", "maps": "Maps", "music": "Music",
+                "finder": "Finder", "calculator": "Calculator",
+                "preview": "Preview",
+                "word": "Microsoft Word", "excel": "Microsoft Excel",
+                "powerpoint": "Microsoft PowerPoint", "outlook": "Microsoft Outlook",
+                "1password": "1Password",
             }
             raw_app = quit_match.group(1).strip().lower()
             app_q = app_aliases_q.get(raw_app, quit_match.group(1).strip().title())
@@ -2795,12 +3203,27 @@ class JarvisOrchestrator:
             msg = "Trash emptied." if result.get("success") else f"Could not empty trash: {result.get('error')}"
             return JarvisResponse(success=result.get("success", False), message=msg, latency_ms=(_ttr.time()-_str)*1000)
 
-        # Sleep Mac
-        if any(kw in req_lower for kw in ["sleep", "put to sleep", "sleep the mac", "sleep my mac"]) and "reminder" not in req_lower:
+        # Sleep Mac — narrow trigger to avoid "I'm sleepy", "go to sleep
+        # mode", "asleep at the wheel" false-positives.
+        # Require an explicit machine reference, OR a clear command verb.
+        _sleep_command_phrases = (
+            "sleep the mac", "sleep my mac", "sleep my computer",
+            "sleep the computer", "sleep my laptop", "sleep the laptop",
+            "put the mac to sleep", "put my mac to sleep",
+            "put the computer to sleep", "put my computer to sleep",
+            "send my mac to sleep", "send the mac to sleep",
+            "shut the screen", "screen off",
+        )
+        _is_sleep_command = (
+            any(p in req_lower for p in _sleep_command_phrases)
+            and "reminder" not in req_lower
+        )
+        if _is_sleep_command:
             import time as _tslp
             _sslp = _tslp.time()
             result = await self.mac.sleep()
-            return JarvisResponse(success=result.get("success", False), message="Putting Mac to sleep.", latency_ms=(_tslp.time()-_sslp)*1000)
+            msg = result.get("message") or ("Putting your Mac to sleep." if result.get("success") else result.get("error", "Could not put the Mac to sleep."))
+            return JarvisResponse(success=result.get("success", False), message=msg, latency_ms=(_tslp.time()-_sslp)*1000)
 
         # ── Reminder shortcuts ────────────────────────────────────────────────
         # Must come BEFORE the calendar shortcuts because "remind me about
@@ -3218,8 +3641,19 @@ class JarvisOrchestrator:
         else:
             time_phrase = "Good evening"
 
+        # ── Profile-driven personalisation ─────────────────────────────────
+        # Which sections to render (and in concept, order) comes from the
+        # user profile. `_on(name)` gates each section; with no profile, or
+        # the default "all", every section shows.
+        _prof = getattr(self, "profile", None)
+        _secs = set(_prof.enabled_sections()) if _prof else set()
+        def _on(name: str) -> bool:
+            return (not _secs) or (name in _secs)
+        _pref_name = _prof.preferred_name if _prof else "Abdullah"
+
         # ── Parallel fetch everything ──────────────────────────────────────
         from config.settings import FAVOURITE_TEAMS, FAVOURITE_FOOTBALL_LEAGUE, FAVOURITE_BASKETBALL_LEAGUE
+        _fav_teams = (_prof.favourite_teams if _prof and _prof.favourite_teams else FAVOURITE_TEAMS)
 
         # All six tools run concurrently. return_exceptions=True means a
         # single failed fetch (e.g. Gmail OAuth expired) doesn't crash the
@@ -3306,12 +3740,12 @@ class JarvisOrchestrator:
         # TEXT MODE — bold-headed, 20-30 line digest
         # ════════════════════════════════════════════════════════════════
         lines: list[str] = [
-            f"{time_phrase}, Abdullah. Here's your brief for {date_str}.",
+            f"{time_phrase}, {_pref_name}. Here's your brief for {date_str}.",
             "",
         ]
 
         # ── Weather ────────────────────────────────────────────────────────
-        if isinstance(weather_data, dict) and weather_data.get("success"):
+        if _on("weather") and isinstance(weather_data, dict) and weather_data.get("success"):
             w = weather_data
             cond = w.get("condition", "—")
             temp = w.get("temperature_c", "—")
@@ -3325,7 +3759,7 @@ class JarvisOrchestrator:
             lines.append("")
 
         # ── Prayer Times ───────────────────────────────────────────────────
-        if isinstance(prayer_data, dict) and prayer_data.get("success"):
+        if _on("prayer") and isinstance(prayer_data, dict) and prayer_data.get("success"):
             lines.append("**Prayer Times**")
             ptimes = prayer_data.get("times") or {}
             # Compact one-liner: Fajr 02:57 · Zuhr 13:00 · Asr 17:19 · Maghrib 21:08 · Isha 23:04
@@ -3347,7 +3781,7 @@ class JarvisOrchestrator:
             lines.append("")
 
         # ── Your Day (calendar) ───────────────────────────────────────────
-        if isinstance(cal_data, dict) and cal_data.get("success"):
+        if _on("calendar") and isinstance(cal_data, dict) and cal_data.get("success"):
             events = cal_data.get("events", []) or []
             lines.append("**Your Day**")
             if events:
@@ -3360,7 +3794,7 @@ class JarvisOrchestrator:
             else:
                 lines.append("  Nothing scheduled — a free day.")
             lines.append("")
-        elif not isinstance(cal_data, dict) or cal_data.get("error"):
+        elif _on("calendar") and (not isinstance(cal_data, dict) or cal_data.get("error")):
             # Calendar is disconnected (mock mode). Surface it honestly
             # rather than silently dropping the section.
             lines.append("**Your Day**")
@@ -3368,7 +3802,7 @@ class JarvisOrchestrator:
             lines.append("")
 
         # ── Inbox ──────────────────────────────────────────────────────────
-        if isinstance(email_data, dict) and email_data.get("success"):
+        if _on("email") and isinstance(email_data, dict) and email_data.get("success"):
             emails = email_data.get("emails", []) or []
             count = email_data.get("count", 0) or 0
             lines.append("**Inbox**")
@@ -3380,13 +3814,13 @@ class JarvisOrchestrator:
                     subj = subj[:62] + "…"
                 lines.append(f"  • {subj} — {sender}")
             lines.append("")
-        elif not isinstance(email_data, dict) or email_data.get("error"):
+        elif _on("email") and (not isinstance(email_data, dict) or email_data.get("error")):
             lines.append("**Inbox**")
             lines.append("  Gmail offline — connect Google to see your inbox.")
             lines.append("")
 
         # ── Top News (5 stories with one-line description) ────────────────
-        if isinstance(news_data, dict) and news_data.get("success"):
+        if _on("news") and isinstance(news_data, dict) and news_data.get("success"):
             stories = news_data.get("stories", []) or []
             if stories:
                 lines.append("**Top News**")
@@ -3405,7 +3839,7 @@ class JarvisOrchestrator:
 
         # ── Sports ─────────────────────────────────────────────────────────
         sports_block: list[str] = []
-        fav_lower = [t.lower() for t in FAVOURITE_TEAMS]
+        fav_lower = [t.lower() for t in _fav_teams]
 
         def _is_fav(g: dict) -> bool:
             home = (g.get("home_team", "") or "").lower()
@@ -3446,10 +3880,11 @@ class JarvisOrchestrator:
                     f"  {label}: {ht} {hs} - {as_} {at}{clock}{star}"
                 )
 
-        _add_league("PL", sports_pl)
-        _add_league("La Liga", sports_rm, max_games=1)
-        _add_league("NBA", sports_nba)
-        _add_league("Cricket", sports_cricket, max_games=1)
+        if _on("sports"):
+            _add_league("PL", sports_pl)
+            _add_league("La Liga", sports_rm, max_games=1)
+            _add_league("NBA", sports_nba)
+            _add_league("Cricket", sports_cricket, max_games=1)
 
         if sports_block:
             lines.append("**Sports**")
@@ -3457,7 +3892,7 @@ class JarvisOrchestrator:
             lines.append("")
 
         # ── Markets ────────────────────────────────────────────────────────
-        if isinstance(market_data, dict) and market_data.get("success"):
+        if _on("markets") and isinstance(market_data, dict) and market_data.get("success"):
             tickers = market_data.get("tickers") or market_data.get("data") or []
             if tickers:
                 lines.append("**Markets**")
@@ -3474,17 +3909,224 @@ class JarvisOrchestrator:
                 lines.append("")
 
         # ── Sign-off (deterministic — no LLM) ──────────────────────────────
-        closings = [
-            "Make it count today.",
-            "Have a good one.",
-            "You've got this.",
-            "Go well today.",
-        ]
-        lines.append(random.choice(closings))
+        if _on("closing"):
+            closings = [
+                "Make it count today.",
+                "Have a good one.",
+                "You've got this.",
+                "Go well today.",
+            ]
+            lines.append(random.choice(closings))
 
         lines_out = lines
 
         return chr(10).join(lines_out)
+
+    # ──────────────────────────────────────────────────────────────────────
+    #  Multi-ACTION decomposition & execution
+    # ──────────────────────────────────────────────────────────────────────
+
+    async def _split_into_actions(self, user_request: str) -> List[str]:
+        """
+        Decompose a compound request into an ordered list of atomic commands.
+
+        Primary path: a fast LLM call that returns a JSON list of standalone
+        commands. Fallback: the deterministic rule-based splitter in
+        BriefingHandler. Returns a list with <2 items when the request is a
+        single action (the caller then lets it flow through the normal path).
+        """
+        rule_segments = self.briefing.split_compound(user_request)
+
+        system = (
+            "You split a user's request into separate standalone commands. "
+            "Return ONLY JSON: {\"actions\": [\"...\", \"...\"]}.\n"
+            "Rules:\n"
+            "- Each action must be a complete, self-contained instruction that "
+            "could be run on its own (carry over any shared context like times "
+            "or names into each).\n"
+            "- Preserve the original order.\n"
+            "- Do NOT split a single instruction that merely contains the word "
+            "'and' (e.g. 'salt and pepper', 'Pakistan and Australia', "
+            "'pros and cons').\n"
+            "- If the request is really just ONE command or one question, "
+            "return it as a single-element list."
+        )
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": f'Request: "{user_request}"'},
+        ]
+        try:
+            data = await self.llm.chat_json(
+                messages, model=OLLAMA_ROUTER_MODEL, max_tokens=200
+            )
+            actions = data.get("actions") if isinstance(data, dict) else None
+            if isinstance(actions, list):
+                cleaned = [a.strip() for a in actions
+                           if isinstance(a, str) and a.strip()]
+                if len(cleaned) >= 2:
+                    return cleaned[:5]
+        except Exception as exc:
+            print(f"⚠️  Multi-action LLM split failed: {exc} — using rule split")
+
+        return rule_segments[:5] if len(rule_segments) >= 2 else []
+
+    async def _handle_multi_action(
+        self,
+        user_request: str,
+        *,
+        voice_mode: bool = False,
+        conversation_history: Optional[List[Dict]] = None,
+    ) -> Optional[str]:
+        """
+        Split a compound action request and run each sub-command through the
+        normal routing + shortcut path, then aggregate the replies.
+
+        Returns the aggregated message, or None if the request didn't actually
+        decompose into 2+ actions (so the caller falls back to normal flow).
+        """
+        segments = await self._split_into_actions(user_request)
+        if len(segments) < 2:
+            return None
+
+        print(f"🧩 Multi-action: {len(segments)} commands → {segments}")
+
+        results: List[tuple] = []
+        for seg in segments:
+            try:
+                decision = await self.router.route(seg)
+                resp = await self._try_shortcut(
+                    decision.primary_agent,
+                    seg,
+                    voice_mode=voice_mode,
+                    conversation_history=conversation_history,
+                )
+                if resp is None:
+                    resp = await self._mini_answer(seg, decision.primary_agent)
+            except Exception as exc:
+                resp = JarvisResponse(
+                    success=False, message=f"Couldn't complete this: {exc}"
+                )
+            results.append((seg, resp))
+
+        return self._format_multi_action(results)
+
+    async def _mini_answer(self, segment: str, agent: AgentRole) -> JarvisResponse:
+        """
+        Produce a short answer for a multi-action sub-command that has no
+        tier-1 shortcut (e.g. an embedded question). Kept deliberately compact
+        — one tool lookup (if relevant) plus one short LLM call.
+        """
+        context_str = ""
+        try:
+            if agent == AgentRole.WEBSEARCH:
+                data = await self.websearch.search(segment)
+                context_str = self.websearch.format_results(data)
+            elif agent == AgentRole.NEWS:
+                data = await self.news.get_headlines(query=segment, max_items=5)
+                return JarvisResponse(success=True, message=self.news.format_headlines(data))
+        except Exception:
+            pass
+
+        user_content = (
+            f"Answer this concisely in 1-2 sentences: {segment}"
+            + (f"\n\nSource material:\n{context_str}" if context_str else "")
+        )
+        try:
+            ans = await self.llm.chat(
+                [{"role": "user", "content": user_content}], max_tokens=160
+            )
+            return JarvisResponse(success=True, message=ans.strip() or "Done.")
+        except Exception as exc:
+            return JarvisResponse(success=False, message=f"Couldn't answer that: {exc}")
+
+    def _format_multi_action(self, results: List[tuple]) -> str:
+        """Aggregate per-command results into one readable reply."""
+        lines: List[str] = []
+        for seg, resp in results:
+            ok = getattr(resp, "success", False)
+            mark = "✅" if ok else "⚠️"
+            label = seg[0].upper() + seg[1:] if seg else seg
+            msg = (getattr(resp, "message", "") or "").strip()
+            lines.append(f"{mark} {label}")
+            if msg:
+                # Indent the body so multi-line results (e.g. an email draft)
+                # stay visually grouped under their command.
+                lines.append("\n".join(f"   {ln}" for ln in msg.splitlines()))
+            lines.append("")
+        return "\n".join(lines).strip()
+
+    # ──────────────────────────────────────────────────────────────────────
+    #  Long-term memory: remember / forget / recall
+    # ──────────────────────────────────────────────────────────────────────
+
+    async def _try_memory_command(self, user_request: str):
+        """
+        Deterministic intercept for explicit memory commands:
+          • "remember that I prefer short replies"  → store a SEMANTIC fact
+          • "forget what I said about X"             → delete matching facts
+          • "what do you know about me"              → list stored facts
+
+        Returns a JarvisResponse if handled, else None. Runs before the router
+        so these never get misrouted to web search.
+        """
+        import time as _tm
+        q = user_request.strip()
+        ql = q.lower()
+
+        # ── Recall: "what do you know/remember about me" ────────────────────
+        if re.search(r"\b(what do you (know|remember)( about me)?|"
+                     r"what have you remembered|what do you know about me|"
+                     r"show (me )?(my )?(memories|what you know about me))\b", ql):
+            _s = _tm.time()
+            facts = await self.memory.recall_facts("everything about the user", k=20)
+            if not facts:
+                msg = ("I haven't been told anything to remember yet. Say "
+                       "\"remember that …\" and I'll keep it in mind.")
+            else:
+                lines = "\n".join(f"  • {m.content}" for m in facts)
+                msg = f"Here's what I'm keeping in mind about you:\n{lines}"
+            return JarvisResponse(success=True, message=msg, latency_ms=(_tm.time()-_s)*1000)
+
+        # ── Forget ──────────────────────────────────────────────────────────
+        m = re.match(r"^\s*(?:please\s+)?forget\b(?:\s+(?:that|about|what i (?:said|told you) about))?\s*(.+)$",
+                     q, re.IGNORECASE)
+        if m:
+            target = m.group(1).strip(" .!?")
+            if len(target) >= 2:
+                _s = _tm.time()
+                n = await self.memory.forget(target)
+                msg = (f"Done — I've forgotten {('that' if n==1 else f'{n} things')} "
+                       f"about \"{target}\"." if n else
+                       f"I didn't have anything remembered about \"{target}\".")
+                return JarvisResponse(success=True, message=msg, latency_ms=(_tm.time()-_s)*1000)
+
+        # ── Remember ─────────────────────────────────────────────────────────
+        m = re.match(r"^\s*(?:please\s+)?(?:remember|note|keep in mind|don'?t forget)\b"
+                     r"\s*(?:that\s+|:\s*)?(.+)$", q, re.IGNORECASE)
+        if m:
+            fact = m.group(1).strip()
+            # "remember TO …" is a reminder, not a fact — let it route normally.
+            if fact.lower().startswith("to ") or len(fact) < 3:
+                return None
+            _s = _tm.time()
+            await self.memory.remember(fact)
+            return JarvisResponse(
+                success=True,
+                message=f"Noted — I'll remember that {fact.rstrip('.')}.",
+                latency_ms=(_tm.time()-_s)*1000,
+            )
+        return None
+
+    async def _recall_block(self, query: str) -> str:
+        """Return a short bullet block of remembered facts relevant to `query`,
+        or "" if none. Best-effort — never raises into the request path."""
+        try:
+            facts = await self.memory.recall_facts(query, k=4)
+        except Exception:
+            return ""
+        if not facts:
+            return ""
+        return "\n".join(f"- {m.content}" for m in facts)
 
     async def _handle_multi_query(self, user_request: str, intents: list) -> str:
         """

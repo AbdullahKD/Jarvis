@@ -19,6 +19,12 @@ from typing import List
 from orchestrator import JarvisOrchestrator
 from config.settings import BENCHMARK_MODELS, OLLAMA_CHAT_MODEL
 
+# The CLI runs in a terminal with a human present, so the interactive Google
+# OAuth flow is appropriate here — unlike the server, where it would block the
+# event loop waiting on a browser. Set before any agent import.
+import os as _os_cli
+_os_cli.environ.setdefault("JARVIS_INTERACTIVE_OAUTH", "true")
+
 
 # ── Demo tasks ─────────────────────────────────────────────────────────────
 DEMO_TASKS = [

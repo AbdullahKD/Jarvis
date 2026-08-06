@@ -185,6 +185,24 @@ class ReminderScheduler:
         self._task = asyncio.ensure_future(self._loop())
         print("⏰ ReminderScheduler running (checks every 60s)")
 
+    async def stop(self):
+        """Stop the loop and wait for it to actually finish.
+
+        Without this the task outlives the app: on `--reload` every restart
+        leaves another scheduler polling the same SQLite file, and Ctrl-C
+        prints "Task was destroyed but it is pending". Awaiting the cancelled
+        task matters — cancel() only *requests* cancellation, so returning
+        immediately would still race the loop's next tick.
+        """
+        task, self._task = self._task, None
+        if task is None or task.done():
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
     async def _loop(self):
         while True:
             try:

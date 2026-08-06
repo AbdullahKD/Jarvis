@@ -22,13 +22,13 @@ google-api-python-client>=2.100.0
 google-auth-httplib2>=0.1.1
 google-auth-oauthlib>=1.1.0
 
-# ── Voice - Speech to text (local Whisper) ─────────────────────────────────
-openai-whisper>=20231117
-
-# ── Voice - Text to speech (free local option) ─────────────────────────────
-# piper-tts  # install separately: pip install piper-tts
-
-# ── ElevenLabs TTS (optional, premium voices) ──────────────────────────────
+# ── Voice (optional) ───────────────────────────────────────────────────────
+# The voice layer (faster-whisper STT + Silero VAD + sounddevice + ElevenLabs)
+# is a separate, heavier install. NOTE: the STT engine is faster-whisper, NOT
+# openai-whisper — installing openai-whisper here would pull a large unused
+# PyTorch stack and still leave voice broken. Install the real voice deps with:
+#     pip install -r voice_requirements.txt
+# elevenlabs is kept here because the text path's voice preflight imports it.
 elevenlabs>=1.0.0
 
 # ── Web UI ─────────────────────────────────────────────────────────────────

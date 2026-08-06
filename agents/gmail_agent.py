@@ -7,6 +7,7 @@ Falls back to mock mode if credentials not configured.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import email as email_lib
 import re
@@ -16,6 +17,7 @@ from email.mime.text import MIMEText
 from typing import Any, Dict, List, Optional
 
 from config.settings import GOOGLE_CREDENTIALS_PATH, GOOGLE_TOKEN_PATH, GOOGLE_SCOPES
+from config.settings import google_call
 
 try:
     from google.oauth2.credentials import Credentials
@@ -46,6 +48,37 @@ def _norm(s: str) -> str:
     return re.sub(r'[\-_.\s]', '', s).lower()
 
 _skip_normalised = {_norm(s) for s in _SKIP_RAW}
+
+
+
+# Interactive OAuth opens a browser and blocks until a human finishes the
+# consent screen. Both agents are built lazily, from a property first touched
+# inside an async request handler — so running the flow there froze the entire
+# event loop (every request, every WebSocket, the reminder scheduler) until
+# someone clicked, and never returned at all on a headless deploy.
+#
+# It is now opt-in: the CLI and POST /google/reauth set this, the server does
+# not. Without it a missing token means mock mode and a clear auth_error,
+# which the adapters surface as DEGRADED rather than silently pretending.
+import os as _os_oauth
+
+def _interactive_oauth_allowed() -> bool:
+    return _os_oauth.getenv("JARVIS_INTERACTIVE_OAUTH", "").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+def _persist_token(path, creds) -> None:
+    """Write the token with owner-only permissions.
+
+    It carries a refresh token for the user's mail and calendar; the default
+    umask leaves it world-readable (0644).
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(creds.to_json())
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass  # non-POSIX filesystem — content is written either way
 
 
 class GmailAgent:
@@ -85,8 +118,7 @@ class GmailAgent:
                     try:
                         creds.refresh(Request())
                         print("📧 GmailAgent: refreshed expired token")
-                        GOOGLE_TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
-                        GOOGLE_TOKEN_PATH.write_text(creds.to_json())
+                        _persist_token(GOOGLE_TOKEN_PATH, creds)
                     except Exception as refresh_exc:
                         self.auth_error = (
                             f"token refresh failed ({type(refresh_exc).__name__}: "
@@ -97,13 +129,21 @@ class GmailAgent:
                         )
                         print(f"📧 GmailAgent: {self.auth_error}")
                         return
+                elif not _interactive_oauth_allowed():
+                    self.auth_error = (
+                        "no valid token and interactive OAuth is disabled here. "
+                        "Run the CLI (python3 main.py) or POST /google/reauth to "
+                        "authorise; set JARVIS_INTERACTIVE_OAUTH=true to allow the "
+                        "browser flow from this process."
+                    )
+                    print(f"📧 GmailAgent: {self.auth_error}")
+                    return
                 else:
                     flow = InstalledAppFlow.from_client_secrets_file(
                         str(GOOGLE_CREDENTIALS_PATH), GOOGLE_SCOPES
                     )
                     creds = flow.run_local_server(port=0)
-                    GOOGLE_TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
-                    GOOGLE_TOKEN_PATH.write_text(creds.to_json())
+                    _persist_token(GOOGLE_TOKEN_PATH, creds)
                     print("📧 GmailAgent: completed fresh OAuth flow")
 
             self.service = build("gmail", "v1", credentials=creds)
@@ -134,17 +174,27 @@ class GmailAgent:
             }
 
         try:
-            result = self.service.users().messages().list(
+            result = await google_call(lambda: self.service.users().messages().list(
                 userId="me", q=query, maxResults=max_results
-            ).execute()
+            ).execute())
 
             messages = result.get("messages", [])
-            emails = []
-            for msg in messages:
-                detail = self.service.users().messages().get(
-                    userId="me", id=msg["id"], format="metadata",
+
+            # Fetch all message metadata IN PARALLEL (was a serial N+1 loop —
+            # each .get() is a blocking HTTP round-trip, so 5 unread emails
+            # used to cost 5x the latency and froze the event loop throughout).
+            def _fetch_detail(msg_id: str):
+                return self.service.users().messages().get(
+                    userId="me", id=msg_id, format="metadata",
                     metadataHeaders=["From", "Subject", "Date", "Message-ID", "Thread-Index"]
                 ).execute()
+
+            details = await asyncio.gather(
+                *(google_call(_fetch_detail, msg["id"]) for msg in messages)
+            )
+
+            emails = []
+            for msg, detail in zip(messages, details):
                 headers = {
                     h["name"]: h["value"]
                     for h in detail.get("payload", {}).get("headers", [])
@@ -189,9 +239,9 @@ class GmailAgent:
             }
 
         try:
-            detail = self.service.users().messages().get(
+            detail = await google_call(lambda: self.service.users().messages().get(
                 userId="me", id=email_id, format="full"
-            ).execute()
+            ).execute())
             headers = {
                 h["name"]: h["value"]
                 for h in detail.get("payload", {}).get("headers", [])
@@ -215,9 +265,9 @@ class GmailAgent:
         if self.is_mock:
             return {"success": True, "messages": [], "thread_id": thread_id}
         try:
-            result = self.service.users().threads().get(
+            result = await google_call(lambda: self.service.users().threads().get(
                 userId="me", id=thread_id, format="full"
-            ).execute()
+            ).execute())
             messages = []
             for msg in result.get("messages", []):
                 headers = {
@@ -330,9 +380,9 @@ class GmailAgent:
 
         try:
             raw = self._build_mime(to=to, subject=subject, body=body, cc=cc)
-            result = self.service.users().messages().send(
+            result = await google_call(lambda: self.service.users().messages().send(
                 userId="me", body={"raw": raw}
-            ).execute()
+            ).execute())
 
             return {
                 "success": True,
@@ -375,9 +425,9 @@ class GmailAgent:
             if thread_id:
                 msg_body["threadId"] = thread_id
 
-            result = self.service.users().messages().send(
+            result = await google_call(lambda: self.service.users().messages().send(
                 userId="me", body=msg_body
-            ).execute()
+            ).execute())
 
             return {
                 "success": True,
@@ -404,9 +454,9 @@ class GmailAgent:
             }
         try:
             raw = self._build_mime(to=to, subject=subject, body=body)
-            result = self.service.users().drafts().create(
+            result = await google_call(lambda: self.service.users().drafts().create(
                 userId="me", body={"message": {"raw": raw}}
-            ).execute()
+            ).execute())
             return {
                 "success": True,
                 "id": result["id"],
@@ -425,10 +475,10 @@ class GmailAgent:
                     e["unread"] = False
             return {"success": True, "message": "Marked as read."}
         try:
-            self.service.users().messages().modify(
+            await google_call(lambda: self.service.users().messages().modify(
                 userId="me", id=email_id,
                 body={"removeLabelIds": ["UNREAD"]}
-            ).execute()
+            ).execute())
             return {"success": True, "message": "Marked as read."}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -440,15 +490,22 @@ class GmailAgent:
                 e["unread"] = False
             return {"success": True, "message": "All emails marked as read."}
         try:
-            result = self.service.users().messages().list(
+            result = await google_call(lambda: self.service.users().messages().list(
                 userId="me", q="is:unread", maxResults=50
-            ).execute()
+            ).execute())
             messages = result.get("messages", [])
-            for msg in messages:
-                self.service.users().messages().modify(
-                    userId="me", id=msg["id"],
+
+            # Batch the modify calls in parallel (was serial — up to 50
+            # sequential HTTP round-trips for a full unread page).
+            def _mark_read(msg_id: str):
+                return self.service.users().messages().modify(
+                    userId="me", id=msg_id,
                     body={"removeLabelIds": ["UNREAD"]}
                 ).execute()
+
+            await asyncio.gather(
+                *(google_call(_mark_read, msg["id"]) for msg in messages)
+            )
             return {"success": True, "message": f"Marked {len(messages)} emails as read."}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -459,10 +516,10 @@ class GmailAgent:
             self.mock_inbox = [e for e in self.mock_inbox if e["id"] != email_id]
             return {"success": True, "message": "Email archived."}
         try:
-            self.service.users().messages().modify(
+            await google_call(lambda: self.service.users().messages().modify(
                 userId="me", id=email_id,
                 body={"removeLabelIds": ["INBOX"]}
-            ).execute()
+            ).execute())
             return {"success": True, "message": "Email archived."}
         except Exception as e:
             return {"success": False, "error": str(e)}

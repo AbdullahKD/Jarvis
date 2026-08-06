@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Jarvis · Forge</title>
+<style>
+  :root{
+    --accent:#ff9f5a; --accent-2:#ff7a2f; --accent-soft:rgba(255,159,90,.10);
+    --glass:rgba(34,22,14,.72); --glass-2:rgba(40,26,17,.55);
+    --stroke:rgba(255,159,90,.14); --stroke-strong:rgba(255,159,90,.30);
+    --text-0:#fdf3ea; --text-1:#e0cbb8; --text-2:#ab8f78; --text-3:#7a6350;
+    --green:#5ee7a8; --red:#ff8090; --amber:#ffcf6b; --blue:#7fb4ff; --violet:#b9a3ff;
+    --r-lg:18px; --r-md:13px;
+    --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter",system-ui,sans-serif;
+    --font-mono:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,monospace;
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;margin:0;}
+  body{color:var(--text-0);font-family:var(--font);font-size:14px;
+    background:radial-gradient(1200px 720px at 84% -18%,rgba(255,159,90,.12),transparent 58%),
+      radial-gradient(1000px 640px at -8% 108%,rgba(255,122,47,.06),transparent 56%),
+      linear-gradient(165deg,#170e07 0%,#120a05 46%,#0a0603 100%);}
+  ::selection{background:rgba(255,159,90,.25);}
+
+  .chrome{height:46px;display:flex;align-items:center;gap:10px;padding:0 22px;}
+  .chrome .title{color:var(--text-2);font-size:12px;letter-spacing:.08em;text-transform:uppercase;}
+  .chrome .badge{padding:2px 9px;border-radius:999px;background:var(--accent-soft);color:var(--accent);border:1px solid var(--stroke-strong);font-size:10px;letter-spacing:.08em;text-transform:uppercase;}
+  .chrome .right{margin-left:auto;display:flex;align-items:center;gap:12px;}
+  .chrome-back{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:999px;background:var(--glass-2);border:1px solid var(--stroke);color:var(--text-2);font-size:11px;text-decoration:none;transition:.15s;}
+  .chrome-back:hover{color:var(--text-0);border-color:var(--stroke-strong);}
+
+  .wrap{max-width:1240px;margin:0 auto;padding:10px 22px 70px;}
+  h1{font-size:22px;font-weight:700;margin:14px 0 4px;letter-spacing:-.01em;}
+  .sub{color:var(--text-2);font-size:12.5px;margin-bottom:20px;font-family:var(--font-mono);}
+
+  .btn{font:inherit;font-size:12px;font-weight:600;cursor:pointer;border:1px solid var(--stroke-strong);
+    background:var(--accent-soft);color:var(--accent);border-radius:9px;padding:9px 15px;transition:.15s;
+    display:inline-flex;align-items:center;gap:7px;white-space:nowrap;}
+  .btn:hover{background:rgba(255,159,90,.2);border-color:var(--accent);}
+  .btn:disabled{opacity:.55;cursor:default;}
+
+  .bar{display:flex;gap:12px;align-items:center;margin-bottom:18px;flex-wrap:wrap;}
+  .bar .spacer{flex:1;}
+  .rollup{display:flex;gap:22px;padding:14px 20px;border-radius:var(--r-lg);margin-bottom:18px;
+    border:1px solid var(--stroke-strong);background:linear-gradient(120deg,rgba(255,159,90,.08),rgba(255,159,90,.015));}
+  .rollup .cnt .n{font-size:23px;font-weight:700;font-family:var(--font-mono);line-height:1;}
+  .rollup .cnt .l{font-size:9px;letter-spacing:.13em;text-transform:uppercase;color:var(--text-3);margin-top:5px;}
+  .rollup .dirty .n{color:var(--amber);} .rollup .marks .n{color:var(--violet);}
+  .rollup .spacer{flex:1;}
+  .rollup .hint{font-size:11.5px;color:var(--text-2);align-self:center;max-width:340px;line-height:1.5;}
+
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:16px;}
+  .proj{background:var(--glass);border:1px solid var(--stroke);border-radius:var(--r-lg);padding:17px 19px;
+    display:flex;flex-direction:column;gap:13px;transition:border-color .16s,transform .14s;}
+  .proj:hover{border-color:var(--stroke-strong);transform:translateY(-2px);}
+  .ph{display:flex;align-items:center;gap:9px;flex-wrap:wrap;}
+  .ph .nm{font-size:16px;font-weight:700;letter-spacing:-.01em;}
+  .branch{font-family:var(--font-mono);font-size:10.5px;padding:2.5px 9px;border-radius:6px;
+    background:rgba(127,180,255,.12);color:var(--blue);border:1px solid rgba(127,180,255,.28);}
+  .state{margin-left:auto;display:inline-flex;align-items:center;gap:6px;font-size:11px;font-family:var(--font-mono);}
+  .state .lamp{width:7px;height:7px;border-radius:50%;}
+  .state.clean{color:var(--green);} .state.clean .lamp{background:var(--green);box-shadow:0 0 7px var(--green);}
+  .state.dirty{color:var(--amber);} .state.dirty .lamp{background:var(--amber);box-shadow:0 0 7px var(--amber);}
+  .path{font-size:10.5px;color:var(--text-3);font-family:var(--font-mono);word-break:break-all;margin-top:-6px;}
+
+  .stats{display:flex;gap:18px;}
+  .st .n{font-size:19px;font-weight:700;font-family:var(--font-mono);line-height:1;}
+  .st .l{font-size:8.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);margin-top:4px;}
+  .st.todo .n{color:var(--amber);} .st.fixme .n{color:var(--red);} .st.hack .n{color:var(--violet);}
+  .st.zero .n{color:var(--text-3);}
+
+  .sync{display:flex;gap:8px;flex-wrap:wrap;}
+  .tag{font-size:10px;font-family:var(--font-mono);padding:3px 9px;border-radius:6px;
+    background:rgba(255,255,255,.04);border:1px solid var(--stroke);color:var(--text-2);}
+  .tag.ahead{color:var(--green);border-color:rgba(94,231,168,.3);background:rgba(94,231,168,.08);}
+  .tag.behind{color:var(--amber);border-color:rgba(255,207,107,.3);background:rgba(255,207,107,.08);}
+
+  .sect{border-top:1px solid var(--stroke);padding-top:12px;}
+  .sect h4{margin:0 0 9px;font-size:9px;letter-spacing:.13em;text-transform:uppercase;color:var(--text-3);font-weight:700;}
+  .commit{display:flex;align-items:baseline;gap:9px;padding:4px 0;font-size:12px;}
+  .commit .h{font-family:var(--font-mono);font-size:10.5px;color:var(--accent);flex:none;}
+  .commit .m{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-1);}
+  .commit .r{font-size:10px;color:var(--text-3);font-family:var(--font-mono);flex:none;}
+
+  .mark{display:flex;align-items:baseline;gap:9px;padding:5px 0;font-size:11.5px;}
+  .mkind{font-size:8.5px;font-weight:700;letter-spacing:.08em;padding:2px 6px;border-radius:5px;flex:none;}
+  .mkind.TODO{background:rgba(255,207,107,.13);color:var(--amber);border:1px solid rgba(255,207,107,.3);}
+  .mkind.FIXME,.mkind.BUG{background:rgba(255,128,144,.13);color:var(--red);border:1px solid rgba(255,128,144,.3);}
+  .mkind.HACK,.mkind.XXX{background:rgba(185,163,255,.13);color:var(--violet);border:1px solid rgba(185,163,255,.3);}
+  .mark .mt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-1);font-family:var(--font-mono);}
+  .mark .mf{font-size:9.5px;color:var(--text-3);font-family:var(--font-mono);flex:none;}
+
+  .more{font-size:11px;color:var(--text-3);background:transparent;border:0;cursor:pointer;padding:5px 0;font-family:inherit;}
+  .more:hover{color:var(--accent);}
+  .empty{text-align:center;color:var(--text-3);padding:56px 20px;font-size:13px;}
+  .empty .big{font-size:15px;color:var(--text-2);margin-bottom:6px;}
+  .skel{height:190px;border-radius:var(--r-lg);
+    background:linear-gradient(90deg,rgba(255,159,90,.05),rgba(255,159,90,.11),rgba(255,159,90,.05));
+    background-size:200% 100%;animation:sh 1.3s infinite;}
+  @keyframes sh{0%{background-position:200% 0;}100%{background-position:-200% 0;}}
+  .spin{display:inline-block;animation:rot 1s linear infinite;}
+  @keyframes rot{to{transform:rotate(360deg);}}
+</style>
+</head>
+<body>
+  <div class="chrome">
+    <span class="title">Jarvis</span>
+    <span class="badge">Forge</span>
+    <div class="right">
+      <span id="clock" class="title"></span>
+      <a class="chrome-back" href="/">&larr; Back to Jarvis</a>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <h1>Forge &mdash; Dev Dashboard</h1>
+    <div class="sub">Every git project you&rsquo;re working on: what&rsquo;s uncommitted, what&rsquo;s unpushed, and what you left a note about.</div>
+
+    <div class="rollup" id="rollup" style="display:none"></div>
+
+    <div class="bar">
+      <span id="count" class="sub" style="margin:0"></span>
+      <span class="spacer"></span>
+      <button class="btn" id="refresh">&#8635; Refresh</button>
+    </div>
+
+    <div class="grid" id="grid">
+      <div class="skel"></div><div class="skel"></div>
+    </div>
+  </div>
+
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+const esc = s => (s||"").replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const tilde = p => String(p||"").replace(/^\/Users\/[^/]+/, "~");
+let PROJECTS = [];
+
+async function load(){
+  $("#refresh").disabled = true;
+  $("#refresh").innerHTML = '<span class="spin">&#8635;</span> Scanning…';
+  try{
+    const d = await (await fetch("/forge/data")).json();
+    PROJECTS = d.projects || [];
+    render();
+  }catch(e){
+    $("#grid").innerHTML = '<div class="empty"><div class="big">Couldn&rsquo;t reach Jarvis.</div>Is the server running?</div>';
+  }
+  $("#refresh").disabled = false;
+  $("#refresh").innerHTML = "&#8635; Refresh";
+}
+
+function render(){
+  if (!PROJECTS.length){
+    $("#grid").innerHTML = '<div class="empty"><div class="big">No git projects found.</div>'
+      + 'Forge scans your configured roots for folders containing a .git directory.</div>';
+    return;
+  }
+
+  // Roll-up first: the point of a dashboard is the one-glance answer, and
+  // "how much is uncommitted across everything" is the question you actually
+  // open this page with.
+  const dirty = PROJECTS.reduce((a,p) => a + (p.dirty||0), 0);
+  const marks = PROJECTS.reduce((a,p) => a + ((p.todos&&p.todos.total)||0), 0);
+  const unpushed = PROJECTS.reduce((a,p) => a + (p.ahead||0), 0);
+  const cleanN = PROJECTS.filter(p => !(p.dirty||0)).length;
+  $("#rollup").style.display = "";
+  $("#rollup").innerHTML =
+      '<div class="cnt"><div class="n">' + PROJECTS.length + '</div><div class="l">Projects</div></div>'
+    + '<div class="cnt dirty"><div class="n">' + dirty + '</div><div class="l">Uncommitted</div></div>'
+    + '<div class="cnt"><div class="n">' + unpushed + '</div><div class="l">Unpushed</div></div>'
+    + '<div class="cnt marks"><div class="n">' + marks + '</div><div class="l">Code marks</div></div>'
+    + '<div class="spacer"></div>'
+    + '<div class="hint">' + (dirty
+        ? cleanN + ' of ' + PROJECTS.length + ' repos are clean. The rest have work that only exists on this Mac.'
+        : 'Everything is committed. Nice.') + '</div>';
+
+  $("#count").textContent = PROJECTS.length + " project" + (PROJECTS.length===1?"":"s") + " tracked";
+
+  $("#grid").innerHTML = PROJECTS.map((p, idx) => {
+    const t = p.todos || {};
+    const marksRow = [["todo","TODO",t.TODO||0],["fixme","FIXME",(t.FIXME||0)+(t.BUG||0)],["hack","HACK",(t.HACK||0)+(t.XXX||0)]]
+      .map(x => '<div class="st ' + x[0] + (x[2] ? "" : " zero") + '"><div class="n">' + x[2]
+        + '</div><div class="l">' + x[1] + '</div></div>').join("");
+
+    const sync = [];
+    if (p.ahead)  sync.push('<span class="tag ahead">&uarr; ' + p.ahead + ' unpushed</span>');
+    if (p.behind) sync.push('<span class="tag behind">&darr; ' + p.behind + ' behind</span>');
+    if (p.files)  sync.push('<span class="tag">' + p.files + ' files</span>');
+
+    const commits = (p.commits||[]).slice(0,5).map(c =>
+      '<div class="commit"><span class="h">' + esc(c.hash) + '</span>'
+      + '<span class="m">' + esc(c.msg) + '</span>'
+      + '<span class="r">' + esc(c.rel) + '</span></div>').join("");
+
+    const samples = (p.todo_samples||[]);
+    const shown = samples.slice(0,4).map(s =>
+      '<div class="mark"><span class="mkind ' + esc(s.kind) + '">' + esc(s.kind) + '</span>'
+      + '<span class="mt">' + esc(s.text) + '</span>'
+      + '<span class="mf">' + esc(s.file) + ':' + s.line + '</span></div>').join("");
+    const rest = samples.slice(4).map(s =>
+      '<div class="mark"><span class="mkind ' + esc(s.kind) + '">' + esc(s.kind) + '</span>'
+      + '<span class="mt">' + esc(s.text) + '</span>'
+      + '<span class="mf">' + esc(s.file) + ':' + s.line + '</span></div>').join("");
+
+    return '<div class="proj">'
+      + '<div class="ph"><span class="nm">' + esc(p.name) + '</span>'
+      + (p.is_git ? '<span class="branch">' + esc(p.branch||"?") + '</span>' : '<span class="tag">not a git repo</span>')
+      + '<span class="state ' + (p.dirty ? "dirty" : "clean") + '"><span class="lamp"></span>'
+      + (p.dirty ? p.dirty + ' uncommitted' : 'clean') + '</span></div>'
+      + '<div class="path">' + esc(tilde(p.path)) + '</div>'
+      + '<div class="stats">' + marksRow + '</div>'
+      + (sync.length ? '<div class="sync">' + sync.join("") + '</div>' : "")
+      + (commits ? '<div class="sect"><h4>Recent commits</h4>' + commits + '</div>' : "")
+      + (shown ? '<div class="sect"><h4>Loose ends</h4>' + shown
+          + (rest ? '<div id="more' + idx + '" style="display:none">' + rest + '</div>'
+              + '<button class="more" data-i="' + idx + '">Show ' + samples.slice(4).length + ' more</button>' : "")
+          + '</div>' : "")
+      + '</div>';
+  }).join("");
+
+  $("#grid").querySelectorAll(".more").forEach(b => {
+    b.onclick = () => {
+      const box = document.getElementById("more" + b.dataset.i);
+      const open = box.style.display !== "none";
+      box.style.display = open ? "none" : "";
+      b.textContent = open ? ("Show " + box.children.length + " more") : "Show less";
+    };
+  });
+}
+
+$("#refresh").addEventListener("click", load);
+function tick(){ $("#clock").textContent = new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}); }
+tick(); setInterval(tick, 30000);
+load();
+</script>
+</body>
+</html>

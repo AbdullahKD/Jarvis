@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Jarvis · Recall</title>
+<style>
+  :root{
+    /* Magenta. FinEx owns green (finance), and two surfaces sharing an accent
+       makes the launcher dots useless as a wayfinding cue. */
+    --accent:#e879c7; --accent-2:#d658b0; --accent-soft:rgba(232,121,199,.10);
+    --glass:rgba(32,18,28,.72); --glass-2:rgba(38,22,33,.55);
+    --stroke:rgba(232,121,199,.14); --stroke-strong:rgba(232,121,199,.30);
+    --text-0:#fdeff8; --text-1:#e2c9dc; --text-2:#ad8aa2; --text-3:#7c5c70;
+    --amber:#ffb37a;   /* search marker only — not a surface accent */
+    --r-lg:18px; --r-md:13px;
+    --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter",system-ui,sans-serif;
+    --font-mono:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,monospace;
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;margin:0;}
+  body{color:var(--text-0);font-family:var(--font);font-size:14px;
+    background:radial-gradient(1200px 720px at 82% -18%,rgba(232,121,199,.13),transparent 58%),
+      radial-gradient(1000px 640px at -8% 108%,rgba(214,88,176,.07),transparent 56%),
+      linear-gradient(165deg,#170a13 0%,#11070f 46%,#0a040a 100%);}
+  ::selection{background:rgba(232,121,199,.26);}
+
+  .chrome{height:46px;display:flex;align-items:center;gap:10px;padding:0 22px;}
+  .chrome .title{color:var(--text-2);font-size:12px;letter-spacing:.08em;text-transform:uppercase;}
+  .chrome .badge{padding:2px 9px;border-radius:999px;background:var(--accent-soft);color:var(--accent);border:1px solid var(--stroke-strong);font-size:10px;letter-spacing:.08em;text-transform:uppercase;}
+  .chrome .right{margin-left:auto;display:flex;align-items:center;gap:12px;}
+  .chrome-back{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:999px;background:var(--glass-2);border:1px solid var(--stroke);color:var(--text-2);font-size:11px;text-decoration:none;transition:.15s;}
+  .chrome-back:hover{color:var(--text-0);border-color:var(--stroke-strong);}
+
+  .wrap{max-width:1220px;margin:0 auto;padding:10px 22px 70px;}
+  h1{font-size:22px;font-weight:700;margin:14px 0 4px;letter-spacing:-.01em;}
+  .sub{color:var(--text-2);font-size:12.5px;margin-bottom:20px;font-family:var(--font-mono);}
+
+  .btn{font:inherit;font-size:12px;font-weight:600;cursor:pointer;border:1px solid var(--stroke-strong);
+    background:var(--accent-soft);color:var(--accent);border-radius:9px;padding:9px 14px;transition:.15s;
+    display:inline-flex;align-items:center;gap:7px;text-decoration:none;white-space:nowrap;}
+  .btn:hover{background:rgba(232,121,199,.2);border-color:var(--accent);}
+  .btn:disabled{opacity:.5;cursor:default;}
+
+  .bar{display:flex;gap:12px;align-items:center;margin-bottom:18px;flex-wrap:wrap;}
+  .seg{display:inline-flex;background:var(--glass-2);border:1px solid var(--stroke);border-radius:10px;padding:3px;}
+  .seg button{font:inherit;font-size:12px;font-weight:600;border:0;background:transparent;color:var(--text-2);
+    padding:6px 14px;border-radius:7px;cursor:pointer;transition:.15s;}
+  .seg button.on{background:var(--accent-soft);color:var(--accent);box-shadow:inset 0 0 0 1px var(--stroke-strong);}
+  .search{position:relative;flex:1;min-width:240px;}
+  .search input{width:100%;padding:11px 14px 11px 38px;font-size:14px;background:var(--glass-2);
+    border:1px solid var(--stroke);color:var(--text-0);border-radius:var(--r-md);outline:none;font-family:inherit;}
+  .search input:focus{border-color:var(--accent);}
+  .search svg{position:absolute;left:13px;top:12px;width:16px;height:16px;stroke:var(--text-3);fill:none;stroke-width:2;}
+
+  .strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:18px;}
+  .card{background:var(--glass);border:1px solid var(--stroke);border-radius:var(--r-lg);padding:15px 17px;}
+  .kpi .n{font-size:26px;font-weight:700;font-family:var(--font-mono);line-height:1;letter-spacing:-.02em;}
+  .kpi .l{font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--text-3);margin-top:6px;}
+  .kpi .d{font-size:11px;color:var(--text-2);margin-top:4px;}
+
+  .chartcard{margin-bottom:18px;}
+  .chart{display:flex;align-items:flex-end;gap:4px;height:118px;margin-top:14px;}
+  .chart .col{flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:5px;min-width:0;}
+  .chart .bar{width:100%;border-radius:4px 4px 2px 2px;
+    background:linear-gradient(180deg,var(--accent),color-mix(in srgb,var(--accent) 26%,transparent));
+    min-height:2px;transition:filter .15s;}
+  .chart .bar.peak{box-shadow:0 0 14px color-mix(in srgb,var(--accent) 45%,transparent);}
+  .chart .cn{font-size:10px;color:var(--text-2);font-family:var(--font-mono);margin-bottom:4px;}
+  .chart .col:hover .bar{filter:brightness(1.4);}
+  .chart .cl{font-size:9px;color:var(--text-3);font-family:var(--font-mono);white-space:nowrap;overflow:hidden;max-width:100%;}
+
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px;}
+  @media (max-width:900px){.cols{grid-template-columns:1fr;}}
+  .card h3{margin:0 0 12px;font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--text-3);font-weight:700;}
+  .row{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid rgba(232,121,199,.06);}
+  .row:last-child{border-bottom:none;}
+  .row .rank{font-size:10px;color:var(--text-3);font-family:var(--font-mono);width:16px;flex:none;}
+  .row .txt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px;}
+  .row .meter{width:64px;height:4px;border-radius:2px;background:rgba(232,121,199,.08);overflow:hidden;flex:none;}
+  .row .meter i{display:block;height:100%;background:linear-gradient(90deg,var(--accent-2),var(--accent));}
+  .row .n{font-size:11px;color:var(--text-2);font-family:var(--font-mono);width:26px;text-align:right;flex:none;}
+
+  .day{margin-bottom:22px;}
+  .day-h{display:flex;align-items:baseline;gap:11px;margin-bottom:9px;}
+  .day-h .d{font-size:12px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);}
+  .day-h .c{font-size:10.5px;color:var(--text-3);font-family:var(--font-mono);}
+  .day-h .line{flex:1;height:1px;background:linear-gradient(90deg,var(--stroke-strong),transparent);}
+  .tl{position:relative;padding-left:20px;}
+  .tl::before{content:"";position:absolute;left:5px;top:4px;bottom:4px;width:1px;
+    background:linear-gradient(180deg,var(--stroke-strong),rgba(232,121,199,.03));}
+  .ev{display:flex;align-items:baseline;gap:12px;padding:6px 10px 6px 0;border-radius:8px;position:relative;transition:background .12s;}
+  .ev:hover{background:rgba(232,121,199,.05);}
+  .ev::before{content:"";position:absolute;left:-18px;top:12px;width:6px;height:6px;border-radius:50%;
+    background:var(--accent);box-shadow:0 0 7px var(--accent);opacity:.75;}
+  .ev.q::before{background:var(--amber);box-shadow:0 0 7px var(--amber);}
+  .ev .t{font-size:10.5px;color:var(--text-3);font-family:var(--font-mono);width:42px;flex:none;}
+  .ev .body{flex:1;min-width:0;}
+  .ev .ttl{font-size:13px;color:var(--text-0);text-decoration:none;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .ev .ttl:hover{color:var(--accent);}
+  .ev .host{font-size:10.5px;color:var(--text-3);font-family:var(--font-mono);margin-top:2px;}
+  .qtag{display:inline-block;font-size:9px;letter-spacing:.08em;text-transform:uppercase;padding:1.5px 6px;
+    border-radius:5px;background:rgba(255,179,122,.13);color:var(--amber);border:1px solid rgba(255,179,122,.28);margin-right:7px;}
+
+  .empty{text-align:center;color:var(--text-3);padding:56px 20px;font-size:13px;}
+  .empty .big{font-size:15px;color:var(--text-2);margin-bottom:6px;}
+  .warn{background:rgba(255,179,122,.07);border:1px solid rgba(255,179,122,.26);color:var(--amber);
+    border-radius:var(--r-md);padding:12px 15px;font-size:12.5px;margin-bottom:18px;}
+  .prog{font-size:11.5px;color:var(--accent);font-family:var(--font-mono);display:none;align-items:center;gap:7px;}
+  .prog.on{display:inline-flex;}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 7px var(--accent);animation:pulse 1.3s infinite;}
+  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.4;}}
+  .skel{height:13px;border-radius:5px;background:linear-gradient(90deg,rgba(232,121,199,.06),rgba(232,121,199,.13),rgba(232,121,199,.06));
+    background-size:200% 100%;animation:sh 1.3s infinite;margin:9px 0;}
+  @keyframes sh{0%{background-position:200% 0;}100%{background-position:-200% 0;}}
+</style>
+</head>
+<body>
+  <div class="chrome">
+    <span class="title">Jarvis</span>
+    <span class="badge">Recall</span>
+    <div class="right">
+      <span id="clock" class="title"></span>
+      <a class="chrome-back" href="/">&larr; Back to Jarvis</a>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <h1>Recall &mdash; Activity Timeline</h1>
+    <div class="sub">What you&rsquo;ve searched and read, from Chrome. Local only &mdash; never leaves your Mac.</div>
+
+    <div id="warn"></div>
+
+    <div class="bar">
+      <div class="seg" id="range">
+        <button data-d="1">24h</button>
+        <button data-d="7" class="on">7 days</button>
+        <button data-d="30">30 days</button>
+        <button data-d="90">90 days</button>
+      </div>
+      <div class="search">
+        <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
+        <input id="q" type="text" placeholder="Search your history by meaning&hellip;" autocomplete="off" />
+      </div>
+      <span class="prog" id="prog"><span class="dot"></span><span id="progText">Indexing&hellip;</span></span>
+      <button class="btn" id="reindex">&#8635; Index for semantic search</button>
+    </div>
+
+    <div class="strip" id="strip"></div>
+
+    <div class="card chartcard" id="chartCard" style="display:none">
+      <h3>Activity by day</h3>
+      <div class="chart" id="chart"></div>
+    </div>
+
+    <div class="cols">
+      <div class="card">
+        <h3>Top searches</h3>
+        <div id="searches"><div class="skel"></div><div class="skel" style="width:80%"></div><div class="skel" style="width:60%"></div></div>
+      </div>
+      <div class="card">
+        <h3>Most visited</h3>
+        <div id="sites"><div class="skel"></div><div class="skel" style="width:80%"></div><div class="skel" style="width:60%"></div></div>
+      </div>
+    </div>
+
+    <div id="timeline"></div>
+  </div>
+
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+const esc = s => (s||"").replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+let DAYS = 7, DATA = null, searchTimer = null, pollTimer = null;
+
+function fmtDay(iso){
+  const d = new Date(iso + "T00:00:00");
+  const today = new Date(); today.setHours(0,0,0,0);
+  const diff = Math.round((today - d) / 86400000);
+  if (diff === 0) return "Today";
+  if (diff === 1) return "Yesterday";
+  if (diff < 7) return d.toLocaleDateString([], {weekday:"long"});
+  return d.toLocaleDateString([], {weekday:"short", day:"numeric", month:"short"});
+}
+
+async function load(){
+  try{
+    DATA = await (await fetch("/recall/data?days=" + DAYS)).json();
+    render(DATA);
+  }catch(e){
+    $("#timeline").innerHTML = '<div class="empty"><div class="big">Couldn&rsquo;t reach Jarvis.</div>Is the server running?</div>';
+  }
+}
+
+function render(d){
+  // Chrome-only by design. Saying so beats an empty timeline that reads as
+  // "you did nothing this week".
+  $("#warn").innerHTML = d.chrome_found ? "" :
+    '<div class="warn">No Chrome history database found. Recall reads Chrome&rsquo;s local history &mdash; if you browse in another browser, there&rsquo;s nothing here to show.</div>';
+
+  const days = d.timeline || [];
+  // `count` is the true number of visits that day; `items` is capped at 40
+  // for rendering, so using its length made every busy day look identical.
+  const dayN = x => (x.count != null ? x.count : x.items.length);
+  const busiest = days.reduce((a, x) => dayN(x) > (a ? dayN(a) : 0) ? x : a, null);
+  $("#strip").innerHTML = [
+    ["Visits", d.total_visits, "in the last " + d.days + " day" + (d.days === 1 ? "" : "s")],
+    ["Searches", (d.top_searches||[]).reduce((a,s)=>a+s.n,0), (d.top_searches||[]).length + " distinct"],
+    ["Sites", (d.top_sites||[]).length, "distinct hosts"],
+    ["Busiest day", busiest ? dayN(busiest) : 0, busiest ? fmtDay(busiest.day) : "—"],
+  ].map(x => '<div class="card kpi"><div class="n">' + x[1] + '</div><div class="l">'
+      + esc(x[0]) + '</div><div class="d">' + esc(x[2]) + '</div></div>').join("");
+
+  // Oldest → newest: the API returns newest-first, which reads backwards on a
+  // time axis.
+  const chrono = days.slice().reverse();
+  if (chrono.length > 1){
+    const max = Math.max.apply(null, chrono.map(dayN).concat([1]));
+    $("#chartCard").style.display = "";
+    $("#chart").innerHTML = chrono.map(x => {
+      // Scale from zero, not from a floor: a floor of 3px on a 78px range
+      // flattens genuine differences at the low end.
+      const h = Math.max(2, Math.round(dayN(x) / max * 78));
+      const isMax = dayN(x) === max;
+      return '<div class="col" title="' + esc(fmtDay(x.day)) + ': ' + dayN(x) + ' visits">'
+        + '<div class="cn">' + dayN(x) + '</div>'
+        + '<div class="bar' + (isMax ? " peak" : "") + '" style="height:' + h + 'px"></div>'
+        + '<div class="cl">' + esc(fmtDay(x.day).slice(0,3)) + '</div></div>';
+    }).join("");
+  } else $("#chartCard").style.display = "none";
+
+  const rows = (items, label) => items.length
+    ? items.map((it, i) => {
+        const max = items[0].n || 1;
+        return '<div class="row"><span class="rank">' + (i+1) + '</span>'
+          + '<span class="txt">' + esc(label(it)) + '</span>'
+          + '<span class="meter"><i style="width:' + Math.round(it.n/max*100) + '%"></i></span>'
+          + '<span class="n">' + it.n + '</span></div>';
+      }).join("")
+    : '<div style="color:var(--text-3);font-size:12px;padding:8px 0">Nothing yet.</div>';
+
+  $("#searches").innerHTML = rows(d.top_searches||[], s => s.q);
+  $("#sites").innerHTML = rows(d.top_sites||[], s => s.host);
+
+  $("#timeline").innerHTML = days.length ? days.map(day =>
+    '<div class="day"><div class="day-h"><span class="d">' + esc(fmtDay(day.day)) + '</span>'
+    + '<span class="c">' + dayN(day) + ' visit' + (dayN(day)===1?"":"s") + (day.count != null && day.count > day.items.length ? ' &middot; showing ' + day.items.length : '') + '</span>'
+    + '<span class="line"></span></div><div class="tl">'
+    + day.items.map(it =>
+        '<div class="ev' + (it.query ? " q" : "") + '"><span class="t">' + esc(it.time) + '</span>'
+        + '<span class="body"><a class="ttl" href="' + esc(it.url) + '" target="_blank" rel="noopener">'
+        + (it.query ? '<span class="qtag">search</span>' : "")
+        + esc(it.title || it.host) + '</a>'
+        + '<div class="host">' + esc(it.host) + '</div></span></div>').join("")
+    + '</div></div>').join("")
+    : '<div class="empty"><div class="big">Nothing in this window.</div>Try a longer range.</div>';
+}
+
+$("#q").addEventListener("input", e => {
+  const q = e.target.value.trim();
+  clearTimeout(searchTimer);
+  if (!q){ if (DATA) render(DATA); return; }
+  searchTimer = setTimeout(() => runSearch(q), 250);
+});
+
+async function runSearch(q){
+  try{
+    const d = await (await fetch("/recall/search?q=" + encodeURIComponent(q) + "&k=40")).json();
+    const items = d.results || [];
+    $("#chartCard").style.display = "none";
+    $("#timeline").innerHTML = items.length
+      ? '<div class="day"><div class="day-h"><span class="d">Matches</span><span class="c">'
+        + items.length + ' for &ldquo;' + esc(q) + '&rdquo;</span><span class="line"></span></div><div class="tl">'
+        + items.map(it =>
+            '<div class="ev"><span class="t">'
+            + (it.score != null ? Math.round(it.score*100) + "%" : "&mdash;") + '</span>'
+            + '<span class="body"><a class="ttl" href="' + esc(it.url) + '" target="_blank" rel="noopener">'
+            + esc(it.title || it.url) + '</a><div class="host">'
+            + esc(String(it.url||"").replace(/^https?:\/\//, "").split("/")[0])
+            + '</div></span></div>').join("")
+        + '</div></div>'
+      : '<div class="empty"><div class="big">No matches for &ldquo;' + esc(q) + '&rdquo;.</div>'
+        + 'Until you hit <b>Index for semantic search</b> this only substring-matches recent history.</div>';
+  }catch(e){
+    $("#timeline").innerHTML = '<div class="empty">Search failed.</div>';
+  }
+}
+
+$("#range").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  Array.prototype.forEach.call($("#range").children, x => x.classList.toggle("on", x === b));
+  DAYS = +b.dataset.d;
+  $("#q").value = "";
+  load();
+});
+
+$("#reindex").addEventListener("click", async () => {
+  $("#reindex").disabled = true;
+  $("#prog").classList.add("on");
+  $("#progText").textContent = "Starting…";
+  try{ await fetch("/recall/reindex", {method:"POST"}); }catch(e){}
+  if (!pollTimer) pollTimer = setInterval(pollIndex, 1500);
+});
+
+async function pollIndex(){
+  try{
+    const d = await (await fetch("/atlas/status")).json();
+    const st = d.recall_activity || {};
+    if (st.running){
+      $("#prog").classList.add("on");
+      $("#progText").textContent = (st.indexed || 0) + " embedded";
+    } else {
+      if (pollTimer){ clearInterval(pollTimer); pollTimer = null; }
+      $("#prog").classList.remove("on");
+      $("#reindex").disabled = false;
+      if (st.count) $("#reindex").innerHTML = "&#8635; Reindex &middot; " + st.count + " indexed";
+    }
+  }catch(e){
+    if (pollTimer){ clearInterval(pollTimer); pollTimer = null; }
+    $("#reindex").disabled = false;
+  }
+}
+
+function tick(){ $("#clock").textContent = new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}); }
+tick(); setInterval(tick, 30000);
+load();
+pollIndex();
+</script>
+</body>
+</html>

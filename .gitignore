@@ -30,3 +30,17 @@ data/jarvis.db
 *.icloud
 venv/
 venv.icloud.bak/
+
+# macOS
+.DS_Store
+
+# Large media — exceeds GitHub's 100MB file limit
+*.MOV
+*.mov
+*.mp4
+
+# Scratch / working artifacts
+_to_delete/
+_sync2/
+_*.png
+*.diff

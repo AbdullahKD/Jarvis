@@ -10,11 +10,11 @@
     --bg-0: #07060c;
     --bg-1: #0c0a18;
     --bg-2: #15102a;
-    --glass:   rgba(22, 18, 38, 0.55);
-    --glass-2: rgba(28, 22, 50, 0.42);
-    --glass-3: rgba(40, 30, 70, 0.30);
-    --stroke:  rgba(180, 140, 255, 0.14);
-    --stroke-strong: rgba(200, 160, 255, 0.28);
+    --glass:   rgba(30, 24, 50, 0.82);
+    --glass-2: rgba(34, 27, 58, 0.58);
+    --glass-3: rgba(44, 34, 74, 0.40);
+    --stroke:  rgba(185, 155, 255, 0.12);
+    --stroke-strong: rgba(205, 165, 255, 0.30);
     --text-0:  #f3eefe;
     --text-1:  #cabfe6;
     --text-2:  #8a83a8;
@@ -35,21 +35,51 @@
   body {
     color: var(--text-0); font-family: var(--font); font-size: 14px; letter-spacing: 0.01em;
     background:
-      radial-gradient(1100px 700px at 78% -10%, rgba(192,132,252,0.22), transparent 60%),
-      radial-gradient(900px 600px at 5% 110%, rgba(255,92,242,0.14), transparent 60%),
-      radial-gradient(700px 500px at 50% 50%, rgba(127,231,255,0.06), transparent 70%),
-      linear-gradient(180deg, #07060c 0%, #050409 100%);
+      radial-gradient(1100px 700px at 80% -15%, rgba(192,132,252,0.12), transparent 58%),
+      radial-gradient(900px 600px at 0% 115%, rgba(255,92,242,0.08), transparent 58%),
+      linear-gradient(165deg, #0c0918 0%, #0a0715 45%, #08060f 100%);
     overflow: hidden;
   }
   body::before {
     content: ""; position: fixed; inset: 0; pointer-events: none;
     background-image:
-      linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px);
-    background-size: 56px 56px;
-    mask-image: radial-gradient(ellipse at center, rgba(0,0,0,0.6), transparent 70%);
+      linear-gradient(rgba(255,255,255,0.012) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.012) 1px, transparent 1px);
+    background-size: 64px 64px;
+    mask-image: radial-gradient(ellipse at center, rgba(0,0,0,0.5), transparent 72%);
     z-index: 0;
   }
+
+  /* ── living aurora backdrop ──
+     Edge-to-edge colour field that slowly flows and breathes behind the UI,
+     including the centre. Cards are opaque so it never bleeds through them. */
+  .aurora { position: fixed; inset: -10%; z-index: 0; pointer-events: none; overflow: hidden; filter: blur(64px) saturate(145%); opacity: 0.92; transition: opacity 1s ease, filter 1s ease; }
+  .aurora span { position: absolute; display: block; border-radius: 50%; mix-blend-mode: screen; will-change: transform; }
+  .aurora .a1 { width: 56vw; height: 56vw; left: -10vw; top: -14vw;  background: radial-gradient(circle at 50% 50%, rgba(150,80,255,0.46), transparent 60%); animation: aurora1 30s ease-in-out infinite; }
+  .aurora .a2 { width: 50vw; height: 50vw; right: -12vw; top: 0vh;    background: radial-gradient(circle at 50% 50%, rgba(255,92,200,0.36), transparent 60%); animation: aurora2 38s ease-in-out infinite; }
+  .aurora .a3 { width: 50vw; height: 50vw; left: 8vw; bottom: -20vh;  background: radial-gradient(circle at 50% 50%, rgba(90,150,255,0.34), transparent 60%); animation: aurora3 46s ease-in-out infinite; }
+  .aurora .a4 { width: 38vw; height: 38vw; right: 6vw; bottom: -8vh;  background: radial-gradient(circle at 50% 50%, rgba(127,231,255,0.24), transparent 60%); animation: aurora4 54s ease-in-out infinite; }
+  .aurora .a5 { width: 48vw; height: 48vw; left: 28vw; top: 20vh;     background: radial-gradient(circle at 50% 50%, rgba(185,110,255,0.28), transparent 62%); animation: aurora5 42s ease-in-out infinite; }
+  @keyframes aurora1 { 0%,100% { transform: translate(0,0) scale(1); } 50% { transform: translate(10vw,7vh) scale(1.2); } }
+  @keyframes aurora2 { 0%,100% { transform: translate(0,0) scale(1.05); } 50% { transform: translate(-9vw,10vh) scale(0.88); } }
+  @keyframes aurora3 { 0%,100% { transform: translate(0,0) scale(1); } 50% { transform: translate(8vw,-9vh) scale(1.22); } }
+  @keyframes aurora4 { 0%,100% { transform: translate(0,0) scale(0.95); } 50% { transform: translate(-10vw,-7vh) scale(1.18); } }
+  @keyframes aurora5 { 0%,100% { transform: translate(0,0) scale(1.08); } 50% { transform: translate(-7vw,8vh) scale(0.9); } }
+  /* React when Jarvis is thinking/speaking: field brightens & flows faster. */
+  body.jarvis-busy .aurora { opacity: 1; filter: blur(56px) saturate(175%); }
+  body.jarvis-busy .aurora .a1 { animation-duration: 12s; }
+  body.jarvis-busy .aurora .a2 { animation-duration: 14s; }
+  body.jarvis-busy .aurora .a3 { animation-duration: 16s; }
+  body.jarvis-busy .aurora .a4 { animation-duration: 18s; }
+  body.jarvis-busy .aurora .a5 { animation-duration: 13s; }
+
+  /* Ripples radiating outward from the central orb. */
+  .orb-pulse { position: absolute; left: 50%; top: 50%; width: 96px; height: 96px; transform: translate(-50%, -50%); pointer-events: none; z-index: 0; }
+  .orb-pulse i { position: absolute; inset: 0; border-radius: 50%; border: 1px solid rgba(192,132,252,0.30); transform: scale(0.5); opacity: 0; animation: orbRipple 6s ease-out infinite; }
+  .orb-pulse i:nth-child(2) { animation-delay: 2s; }
+  .orb-pulse i:nth-child(3) { animation-delay: 4s; }
+  @keyframes orbRipple { 0% { transform: scale(0.5); opacity: 0; } 12% { opacity: 0.45; } 100% { transform: scale(4.4); opacity: 0; } }
+  body.jarvis-busy .orb-pulse i { animation-duration: 2.8s; border-color: rgba(255,92,242,0.55); }
 
   /* chrome */
   .chrome { position: relative; z-index: 5; height: 38px; display: flex; align-items: center; gap: 10px; padding: 0 14px; }
@@ -74,35 +104,30 @@
   /* glass */
   .glass {
     position: relative;
-    background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.00)) padding-box, var(--glass) padding-box;
+    background: linear-gradient(180deg, rgba(255,255,255,0.07), rgba(255,255,255,0.015) 42%, rgba(0,0,0,0.06)) padding-box, var(--glass) padding-box;
     border: 1px solid var(--stroke); border-radius: var(--r-lg);
-    backdrop-filter: blur(28px) saturate(140%); -webkit-backdrop-filter: blur(28px) saturate(140%);
+    backdrop-filter: blur(30px) saturate(140%); -webkit-backdrop-filter: blur(30px) saturate(140%);
     box-shadow:
-      0 1px 0 rgba(255,255,255,0.05) inset,
-      0 0 0 1px rgba(255,255,255,0.02),
-      0 8px 32px rgba(0,0,0,0.55),
-      0 0 22px -4px rgba(192,132,252,0.20),
-      0 0 55px -14px rgba(192,132,252,0.18),
-      0 0 100px -30px rgba(255,92,242,0.14);
+      0 1px 0 rgba(255,255,255,0.10) inset,
+      0 -10px 24px -18px rgba(0,0,0,0.55) inset,
+      0 2px 4px -1px rgba(0,0,0,0.40),
+      0 12px 26px -10px rgba(0,0,0,0.55),
+      0 28px 58px -26px rgba(0,0,0,0.65);
     overflow: hidden;
-    animation: glassGlow 6s ease-in-out infinite;
-    transition: box-shadow .4s ease, border-color .4s ease;
+    animation: none;
+    transition: box-shadow .35s ease, border-color .35s ease, transform .2s ease;
   }
-  .glass::after { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; background: radial-gradient(120% 60% at 50% -10%, rgba(192,132,252,0.08), transparent 60%); }
-  .rail .glass:hover { border-color: var(--stroke-strong); box-shadow: 0 1px 0 rgba(255,255,255,0.07) inset, 0 0 0 1px rgba(255,255,255,0.03), 0 8px 32px rgba(0,0,0,0.60), 0 0 32px -4px rgba(192,132,252,0.32), 0 0 72px -14px rgba(192,132,252,0.28), 0 0 130px -30px rgba(255,92,242,0.24); animation: none; }
-  .center.glass { box-shadow: 0 1px 0 rgba(255,255,255,0.06) inset, 0 0 0 1px rgba(255,255,255,0.025), 0 8px 40px rgba(0,0,0,0.60), 0 0 36px -6px rgba(192,132,252,0.26), 0 0 80px -18px rgba(192,132,252,0.24), 0 0 150px -40px rgba(255,92,242,0.20); animation: glassGlowCenter 6s ease-in-out infinite; }
-  .panel.glass { box-shadow: 0 1px 0 rgba(255,255,255,0.05) inset, 0 0 0 1px rgba(255,255,255,0.02), 0 8px 32px rgba(0,0,0,0.55), 0 0 22px -4px rgba(192,132,252,0.20), 0 0 55px -14px rgba(192,132,252,0.18), 0 0 100px -30px rgba(255,92,242,0.14); animation: glassGlow 6s ease-in-out infinite; }
-  @keyframes glassGlow {
-    0%, 100% { box-shadow: 0 1px 0 rgba(255,255,255,0.05) inset, 0 0 0 1px rgba(255,255,255,0.02), 0 8px 32px rgba(0,0,0,0.55), 0 0 22px -4px rgba(192,132,252,0.20), 0 0 55px -14px rgba(192,132,252,0.18), 0 0 100px -30px rgba(255,92,242,0.14); }
-    50%          { box-shadow: 0 1px 0 rgba(255,255,255,0.07) inset, 0 0 0 1px rgba(255,255,255,0.03), 0 8px 32px rgba(0,0,0,0.55), 0 0 30px -4px rgba(192,132,252,0.32), 0 0 70px -14px rgba(192,132,252,0.28), 0 0 130px -30px rgba(255,92,242,0.22); }
-  }
-  @keyframes glassGlowCenter {
-    0%, 100% { box-shadow: 0 1px 0 rgba(255,255,255,0.06) inset, 0 0 0 1px rgba(255,255,255,0.025), 0 8px 40px rgba(0,0,0,0.60), 0 0 36px -6px rgba(192,132,252,0.26), 0 0 80px -18px rgba(192,132,252,0.24), 0 0 150px -40px rgba(255,92,242,0.20); }
-    50%          { box-shadow: 0 1px 0 rgba(255,255,255,0.08) inset, 0 0 0 1px rgba(255,255,255,0.035), 0 8px 40px rgba(0,0,0,0.60), 0 0 48px -6px rgba(192,132,252,0.38), 0 0 100px -18px rgba(192,132,252,0.34), 0 0 180px -40px rgba(255,92,242,0.30); }
-  }
+  /* Faint top sheen — soft and contained, never reaching the card edge. */
+  .glass::after { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; background: radial-gradient(140% 75% at 50% -15%, rgba(192,132,252,0.06), transparent 52%); }
+  .rail .glass:hover { border-color: var(--stroke-strong); transform: translateY(-1px); box-shadow: 0 1px 0 rgba(255,255,255,0.14) inset, 0 -10px 24px -18px rgba(0,0,0,0.55) inset, 0 3px 6px -1px rgba(0,0,0,0.45), 0 16px 32px -10px rgba(0,0,0,0.6), 0 34px 66px -26px rgba(0,0,0,0.68), 0 0 30px -12px rgba(192,132,252,0.28); }
+  .center.glass { box-shadow: 0 1px 0 rgba(255,255,255,0.11) inset, 0 -12px 28px -20px rgba(0,0,0,0.55) inset, 0 3px 6px -1px rgba(0,0,0,0.4), 0 18px 40px -12px rgba(0,0,0,0.6), 0 40px 80px -30px rgba(0,0,0,0.7), 0 0 60px -26px rgba(192,132,252,0.24); animation: none; }
+  .panel.glass { box-shadow: 0 1px 0 rgba(255,255,255,0.10) inset, 0 -10px 24px -18px rgba(0,0,0,0.55) inset, 0 2px 4px -1px rgba(0,0,0,0.40), 0 12px 26px -10px rgba(0,0,0,0.55), 0 28px 58px -26px rgba(0,0,0,0.65); animation: none; }
 
   /* rail */
-  .rail { display: flex; flex-direction: column; gap: 12px; overflow-y: auto; padding-right: 2px; padding-bottom: 64px; scrollbar-width: thin; scrollbar-color: rgba(180,140,255,0.25) transparent; }
+  .rail { display: flex; flex-direction: column; gap: 12px; overflow-y: auto; padding-right: 2px; padding-bottom: 24px; scrollbar-width: thin; scrollbar-color: rgba(180,140,255,0.25) transparent; }
+  /* Cards keep their natural height — never shrink to fit, which would clip
+     content under the .glass overflow:hidden. The rail scrolls instead. */
+  .rail > .glass { flex-shrink: 0; }
   .rail::-webkit-scrollbar { width: 6px; } .rail::-webkit-scrollbar-thumb { background: rgba(180,140,255,0.25); border-radius: 3px; }
   /* Stagger the glow pulses so the four rail cards don't breathe in unison.
      Negative delays cycle them through the keyframes immediately. */
@@ -110,21 +135,26 @@
   .rail .glass:nth-child(2) { animation-delay: -1.5s; }
   .rail .glass:nth-child(3) { animation-delay: -3s; }
   .rail .glass:nth-child(4) { animation-delay: -4.5s; }
-  .card { padding: 14px 16px; }
-  .card .h { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
-  .card .h .t { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-2); display: flex; align-items: center; gap: 8px; }
-  .card .h .t .tag { padding: 2px 7px; border-radius: 999px; background: rgba(192,132,252,0.12); color: var(--accent); border: 1px solid rgba(192,132,252,0.25); font-size: 10px; letter-spacing: 0.08em; }
-  .card .h .meta { color: var(--text-3); font-size: 11px; }
+  .card { padding: 12px 16px 12px; }
+  .card .h { display: flex; align-items: center; justify-content: space-between; flex-wrap: nowrap; margin-bottom: 10px; padding-bottom: 7px; border-bottom: 1px solid var(--stroke); position: relative; gap: 10px; }
+  .card .h .t { position: relative; min-width: 0; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-0); font-weight: 600; display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
+  .card .h .t #locLabel { overflow: hidden; text-overflow: ellipsis; }
+  .card .h .meta { white-space: nowrap; flex-shrink: 0; }
+  /* Accent underline sits under the title text only, scoped to the header. */
+  .card .h .t::after { content: ""; position: absolute; left: 0; bottom: -9px; height: 1px; width: 100%; background: linear-gradient(90deg, rgba(192,132,252,0.55), rgba(192,132,252,0)); }
+  .card .h .t-icon { width: 14px; height: 14px; flex-shrink: 0; color: var(--accent); filter: drop-shadow(0 0 4px rgba(192,132,252,0.45)); }
+  .card .h .t .tag { padding: 2px 7px; border-radius: 999px; background: rgba(192,132,252,0.12); color: var(--accent); border: 1px solid rgba(192,132,252,0.25); font-size: 10px; letter-spacing: 0.08em; font-weight: 500; }
+  .card .h .meta { color: var(--text-2); font-size: 10px; font-family: var(--font-mono); padding: 2px 8px; border-radius: 999px; letter-spacing: 0.04em; background: rgba(255,255,255,0.025); border: 1px solid var(--stroke); font-variant-numeric: tabular-nums; }
 
   /* clock */
-  .clock { display: flex; align-items: baseline; gap: 6px; font-weight: 300; letter-spacing: -0.02em; }
-  .clock .hh { font-size: 46px; line-height: 1; }
-  .clock .ss { font-size: 18px; color: var(--accent); }
-  .clock .date { margin-top: 8px; color: var(--text-2); font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; }
+  .clock { display: flex; align-items: baseline; gap: 6px; font-weight: 300; letter-spacing: -0.02em; margin-top: 2px; }
+  .clock .hh { font-size: 40px; line-height: 1; }
+  .clock .ss { font-size: 17px; color: var(--accent); }
+  .clock .date { margin-top: 8px; margin-bottom: 2px; color: var(--text-2); font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; }
 
   /* prayer */
-  .prayers-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; margin-top: 2px; }
-  .pr { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 2px; border-radius: var(--r-sm); border: 1px solid transparent; transition: background .15s ease, border-color .15s ease; }
+  .prayers-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; margin-top: 2px; padding-bottom: 0; }
+  .pr { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 7px 2px 8px; border-radius: var(--r-sm); border: 1px solid transparent; transition: background .15s ease, border-color .15s ease; }
   .pr .name { font-size: 10px; color: var(--text-2); letter-spacing: 0.08em; text-transform: uppercase; }
   .pr .time { font-size: 11px; color: var(--text-1); font-variant-numeric: tabular-nums; font-weight: 500; }
   .pr.active { background: linear-gradient(180deg, rgba(192,132,252,0.20), rgba(255,92,242,0.08)); border-color: rgba(192,132,252,0.30); box-shadow: 0 6px 20px -14px rgba(192,132,252,0.7); }
@@ -132,8 +162,8 @@
   .pr.active .time { color: var(--text-0); }
 
   /* weather */
-  .weather { display: flex; align-items: center; gap: 12px; }
-  .weather .icon { font-size: 30px; line-height: 1; }
+  .weather { display: flex; align-items: center; gap: 14px; padding: 2px 0 4px; }
+  .weather .icon { font-size: 34px; line-height: 1; }
   .weather .temp { font-size: 32px; font-weight: 300; letter-spacing: -0.02em; line-height: 1; }
   .weather .cond { color: var(--text-2); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; margin-top: 4px; }
   .weather .right-col { margin-left: auto; text-align: right; }
@@ -141,10 +171,10 @@
   .weather .rain  { color: var(--cyan); font-size: 11px; margin-top: 2px; }
 
   /* system */
-  .sys { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
-  .stat { background: var(--glass-3); border: 1px solid var(--stroke); border-radius: var(--r-sm); padding: 8px 8px; min-width: 0; }
-  .stat .lbl { color: var(--text-2); font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase; white-space: nowrap; }
-  .stat .val { color: var(--text-0); font-weight: 500; font-size: 11px; margin-top: 2px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sys { display: grid; grid-template-columns: repeat(2, 1fr); gap: 7px; }
+  .stat { background: var(--glass-3); border: 1px solid var(--stroke); border-radius: var(--r-sm); padding: 7px 11px 8px; min-width: 0; box-shadow: 0 1px 0 rgba(255,255,255,0.05) inset, 0 2px 6px -3px rgba(0,0,0,0.5); }
+  .stat .lbl { color: var(--text-2); font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; white-space: nowrap; }
+  .stat .val { color: var(--text-0); font-weight: 500; font-size: 14px; margin-top: 3px; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .bar { height: 3px; border-radius: 2px; background: rgba(255,255,255,0.08); margin-top: 6px; overflow: hidden; }
   .bar > i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-3)); border-radius: 2px; box-shadow: 0 0 8px rgba(192,132,252,0.5); transition: width .4s ease; }
   .stat.good .bar > i { background: linear-gradient(90deg, var(--green), var(--cyan)); }
@@ -161,11 +191,16 @@
   .music .title { font-weight: 500; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .music .artist { color: var(--text-2); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .music .controls { display: flex; gap: 4px; align-items: center; }
-  .music .btn { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; background: var(--glass-3); border: 1px solid var(--stroke); color: var(--text-1); cursor: pointer; transition: transform .12s, background .12s; font-size: 10px; }
-  .music .btn:hover { background: rgba(192,132,252,0.18); }
+  .music .btn { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; background: var(--glass-3); border: 1px solid var(--stroke); color: var(--text-1); cursor: pointer; transition: transform .12s, background .12s; }
+  .music .btn svg { width: 12px; height: 12px; display: block; }
+  .music .btn:hover { background: rgba(192,132,252,0.18); color: var(--text-0); }
   .music .btn:active { transform: scale(0.92); }
-  .music .btn.play { width: 28px; height: 28px; background: var(--text-0); color: #1a1030; }
+  .music .btn.play { width: 28px; height: 28px; background: var(--text-0); color: #1a1030; border-color: transparent; }
+  .music .btn.play svg { width: 13px; height: 13px; }
   .music .btn.play:hover { background: #fff; }
+  .music .btn.play .ic-pause { display: none; }
+  .music .btn.play[data-state="playing"] .ic-play { display: none; }
+  .music .btn.play[data-state="playing"] .ic-pause { display: block; }
   .progress { margin-top: 8px; height: 3px; border-radius: 2px; background: rgba(255,255,255,0.08); overflow: hidden; }
   .progress > i { display: block; height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), var(--accent-3)); transition: width .5s linear; }
   .progress-meta { margin-top: 4px; display: flex; justify-content: space-between; color: var(--text-3); font-size: 10px; font-variant-numeric: tabular-nums; min-height: 12px; }
@@ -186,6 +221,13 @@
   /* orb */
   .orb-wrap { flex: 1; width: 100%; min-height: 280px; display: grid; place-items: center; position: relative; transition: opacity .25s; }
   .orb-wrap.hidden { display: none; }
+  /* Compact mode — orb stays visible as a slim presence above the chat thread. */
+  .orb-wrap.compact { flex: 0 0 auto; min-height: 0; margin: 2px 0 6px; }
+  .orb-wrap.compact .orb { width: 116px; height: 116px; }
+  .orb-wrap.compact .ring.r2 { inset: 12px; }
+  .orb-wrap.compact .ring.r3 { inset: 26px; }
+  .orb-wrap.compact .core { width: 44px; height: 44px; }
+  .orb-wrap.compact .orb-pulse { width: 44px; height: 44px; }
   .orb { position: relative; width: 320px; height: 320px; }
   .ring { position: absolute; inset: 0; border: 1px solid rgba(192,132,252,0.18); border-radius: 50%; animation: spin 18s linear infinite; }
   .ring.r2 { inset: 32px; border-color: rgba(127,231,255,0.18); animation-duration: 26s; animation-name: spin2; }
@@ -193,11 +235,36 @@
   .ring .sat { position: absolute; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); top: -4px; left: 50%; box-shadow: 0 0 16px var(--accent); }
   .ring.r2 .sat { background: var(--cyan); box-shadow: 0 0 16px var(--cyan); }
   .ring.r3 .sat { background: var(--accent-3); box-shadow: 0 0 16px var(--accent-3); }
-  .core { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 96px; height: 96px; border-radius: 50%;
-    background: radial-gradient(circle at 35% 30%, rgba(255,255,255,0.9), transparent 40%), radial-gradient(circle at 60% 60%, rgba(192,132,252,0.9), transparent 60%), radial-gradient(circle at 50% 50%, #6f3cff, #1d0c4a 80%);
-    box-shadow: 0 0 80px rgba(192,132,252,0.55), 0 0 30px rgba(255,92,242,0.4), inset 0 0 30px rgba(255,255,255,0.15);
-    animation: pulse 4s ease-in-out infinite; }
-  .core.thinking { animation: pulse 1s ease-in-out infinite; }
+  .core { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 102px; height: 102px; overflow: hidden; isolation: isolate;
+    border-radius: 42% 58% 63% 37% / 45% 38% 62% 55%;
+    background:
+      radial-gradient(circle at 32% 26%, rgba(255,255,255,0.95), transparent 38%),
+      radial-gradient(circle at 72% 74%, rgba(255,92,200,0.55), transparent 55%),
+      radial-gradient(circle at 58% 56%, rgba(127,231,255,0.42), transparent 60%),
+      radial-gradient(circle at 50% 50%, #7a44ff, #1d0c4a 82%);
+    box-shadow: 0 0 80px rgba(192,132,252,0.55), 0 0 34px rgba(255,92,242,0.40), inset 0 0 26px rgba(255,255,255,0.18), inset 9px -10px 26px rgba(124,77,255,0.5);
+    animation: pulse 4s ease-in-out infinite, blobMorph 16s ease-in-out infinite; }
+  /* Living plasma — two swirling colour layers inside the sphere. */
+  .core::before { content: ""; position: absolute; inset: -25%; border-radius: 50%; mix-blend-mode: screen;
+    background: conic-gradient(from 0deg, transparent 0%, rgba(255,150,255,0.55) 22%, transparent 45%, rgba(127,231,255,0.45) 68%, transparent 90%);
+    animation: coreSwirl 9s linear infinite; }
+  .core::after { content: ""; position: absolute; inset: -10%; border-radius: 50%; mix-blend-mode: screen;
+    background: conic-gradient(from 180deg, transparent 0%, rgba(180,110,255,0.45) 30%, transparent 60%, rgba(255,92,200,0.4) 85%, transparent 100%);
+    animation: coreSwirl 6s linear infinite reverse; }
+  @keyframes coreSwirl { to { transform: rotate(360deg); } }
+  /* Liquid-metal silhouette: border-radius drifts so the blob undulates. */
+  @keyframes blobMorph {
+    0%,100% { border-radius: 42% 58% 63% 37% / 45% 38% 62% 55%; }
+    25%     { border-radius: 60% 40% 42% 58% / 52% 56% 44% 48%; }
+    50%     { border-radius: 38% 62% 56% 44% / 62% 44% 56% 38%; }
+    75%     { border-radius: 55% 45% 38% 62% / 40% 58% 42% 60%; }
+  }
+  .core.thinking { animation: pulse 1s ease-in-out infinite, blobMorph 5s ease-in-out infinite; }
+  body.jarvis-busy .core { animation: pulse 1s ease-in-out infinite, blobMorph 5s ease-in-out infinite; }
+  .core.thinking::before { animation-duration: 2.6s; }
+  .core.thinking::after  { animation-duration: 1.8s; }
+  body.jarvis-busy .core::before { animation-duration: 2.6s; }
+  body.jarvis-busy .core::after  { animation-duration: 1.8s; }
   @keyframes spin  { to { transform: rotate(360deg); } }
   @keyframes spin2 { from { transform: rotate(35deg); } to { transform: rotate(395deg); } }
   @keyframes spin3 { from { transform: rotate(75deg); } to { transform: rotate(435deg); } }
@@ -229,7 +296,7 @@
     background: linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.00)) padding-box, var(--glass) padding-box;
     border: 1px solid var(--stroke-strong); backdrop-filter: blur(28px) saturate(140%);
     box-shadow: 0 24px 60px -30px rgba(192,132,252,0.55), 0 0 28px -6px rgba(192,132,252,0.28), 0 0 80px -22px rgba(255,92,242,0.28);
-    animation: glassGlow 6s ease-in-out infinite;
+    animation: none;
     animation-delay: -3s;
   }
   .dock:focus-within { border-color: rgba(192,132,252,0.45); box-shadow: 0 24px 60px -28px rgba(192,132,252,0.7), 0 0 36px -6px rgba(192,132,252,0.42), 0 0 110px -22px rgba(255,92,242,0.40); animation: none; }
@@ -238,14 +305,18 @@
   .dock input::placeholder { color: var(--text-3); }
   .dock .row2 { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
   .mode { padding: 6px 12px; border-radius: 999px; background: var(--glass-3); border: 1px solid var(--stroke); color: var(--text-1); font-size: 12px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: background .15s ease, border-color .15s ease, color .15s ease; }
+  .mode svg { width: 13px; height: 13px; display: block; flex-shrink: 0; }
+  .mode.active svg { color: var(--accent); }
   .mode:hover { background: rgba(192,132,252,0.10); border-color: var(--stroke-strong); color: var(--text-0); }
   .mode.active { background: rgba(192,132,252,0.18); border-color: rgba(192,132,252,0.35); color: var(--text-0); }
   .mode:focus-visible, .icobtn:focus-visible, .chip:focus-visible, .chrome-btn:focus-visible, .send:focus-visible, .tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 999px; }
   .dock .spacer { flex: 1; }
-  .icobtn { width: 32px; height: 32px; border-radius: 50%; background: var(--glass-3); border: 1px solid var(--stroke); color: var(--text-1); display: grid; place-items: center; cursor: pointer; transition: background .15s ease, border-color .15s ease, transform .12s ease; font-size: 13px; line-height: 1; }
-  .icobtn:hover { background: rgba(192,132,252,0.18); border-color: var(--stroke-strong); }
+  .icobtn { width: 32px; height: 32px; border-radius: 50%; background: var(--glass-3); border: 1px solid var(--stroke); color: var(--text-1); display: grid; place-items: center; cursor: pointer; transition: background .15s ease, border-color .15s ease, color .15s ease, transform .12s ease; line-height: 1; }
+  .icobtn svg { width: 15px; height: 15px; display: block; }
+  .icobtn:hover { background: rgba(192,132,252,0.18); border-color: var(--stroke-strong); color: var(--text-0); }
   .icobtn:active { transform: scale(0.92); }
-  .send { width: 36px; height: 36px; border-radius: 50%; background: linear-gradient(135deg, var(--accent), var(--accent-3)); color: #1a0833; display: grid; place-items: center; box-shadow: 0 8px 20px -8px rgba(192,132,252,0.7); cursor: pointer; transition: transform .12s ease, box-shadow .2s ease; font-weight: 700; }
+  .send { width: 36px; height: 36px; border-radius: 50%; background: linear-gradient(135deg, var(--accent), var(--accent-3)); color: #1a0833; display: grid; place-items: center; box-shadow: 0 8px 20px -8px rgba(192,132,252,0.7); cursor: pointer; transition: transform .12s ease, box-shadow .2s ease; }
+  .send svg { width: 16px; height: 16px; display: block; }
   .send:hover { transform: translateY(-1px); box-shadow: 0 10px 26px -8px rgba(192,132,252,0.85); }
   .send:active { transform: scale(0.95); }
   .icobtn.recording { background: rgba(255,122,138,0.25); border-color: rgba(255,122,138,0.45); color: var(--red); animation: blink 1s infinite; }
@@ -365,6 +436,60 @@
   .sports-section-hdr .ss-icon { font-size: 14px; line-height: 1; }
   .sports-section-hdr .ss-name { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-1); font-weight: 600; flex: 1; }
   .sports-section-hdr .ss-league { font-size: 10px; color: var(--text-3); letter-spacing: 0.08em; }
+  /* ─── SPORTS REDESIGN ─── */
+  .section-title-label { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); font-weight: 600; margin: 2px 2px 9px; display: flex; align-items: center; gap: 7px; }
+  .section-title-label::after { content: ""; flex: 1; height: 1px; background: linear-gradient(90deg, rgba(192,132,252,0.3), transparent); }
+
+  /* Live Now strip */
+  .live-strip { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 8px; margin-bottom: 16px; scrollbar-width: none; }
+  .live-strip::-webkit-scrollbar { display: none; }
+  .live-chip { flex-shrink: 0; min-width: 156px; max-width: 200px; padding: 9px 12px; border-radius: var(--r-md); background: linear-gradient(180deg, rgba(255,122,138,0.10), var(--glass-3)); border: 1px solid rgba(255,122,138,0.30); box-shadow: 0 2px 10px -4px rgba(255,122,138,0.25); }
+  .live-chip .lc-top { display: inline-flex; align-items: center; gap: 5px; font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--red); margin-bottom: 6px; }
+  .live-chip .lc-top::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--red); box-shadow: 0 0 6px var(--red); animation: blink 1.4s infinite; }
+  .live-chip .lc-teams { font-size: 12px; font-weight: 600; line-height: 1.35; color: var(--text-0); }
+  .live-chip .lc-score { font-size: 13px; color: var(--accent); font-variant-numeric: tabular-nums; margin-top: 3px; font-weight: 600; }
+
+  /* My Teams */
+  .myteams { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 18px; }
+  .mt-card { padding: 10px 12px; border-radius: var(--r-md); background: var(--glass-3); border: 1px solid var(--stroke); box-shadow: 0 1px 0 rgba(255,255,255,0.04) inset, 0 2px 8px -4px rgba(0,0,0,0.5); transition: border-color .15s ease, transform .12s ease; min-width: 0; }
+  .mt-card:hover { border-color: var(--stroke-strong); transform: translateY(-1px); }
+  .mt-head { display: flex; align-items: center; gap: 7px; margin-bottom: 7px; }
+  .mt-emoji { font-size: 14px; line-height: 1; }
+  .mt-name { font-size: 11px; font-weight: 700; letter-spacing: 0.02em; color: var(--text-0); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mt-sport { margin-left: auto; font-size: 8px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-3); flex-shrink: 0; }
+  .mt-opp { font-size: 12px; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mt-meta { font-size: 10px; color: var(--text-2); margin-top: 4px; display: flex; align-items: center; gap: 6px; }
+  .mt-state { font-size: 9px; padding: 1px 6px; border-radius: 999px; letter-spacing: 0.06em; flex-shrink: 0; }
+  .mt-state.live { color: var(--red); border: 1px solid rgba(255,122,138,0.4); background: rgba(255,122,138,0.1); }
+  .mt-state.next { color: var(--cyan); border: 1px solid rgba(127,231,255,0.3); background: rgba(127,231,255,0.08); }
+  .mt-state.final { color: var(--green); border: 1px solid rgba(110,231,168,0.3); background: rgba(110,231,168,0.08); }
+  .mt-empty { font-size: 11px; color: var(--text-3); }
+
+  /* Collapsible sport sections */
+  .sports-section-hdr { cursor: pointer; user-select: none; }
+  .sports-section-hdr:hover .ss-name { color: var(--accent); }
+  .ss-chev { width: 11px; height: 11px; margin-left: 8px; color: var(--text-3); transition: transform .25s ease; flex-shrink: 0; }
+  .sports-section.collapsed .ss-chev { transform: rotate(-90deg); }
+  .sports-section.collapsed .sports-section-body { display: none; }
+  .ss-live { display: inline-flex; align-items: center; gap: 4px; color: var(--red); font-size: 10px; margin-left: 8px; font-weight: 500; }
+  .ss-live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--red); box-shadow: 0 0 6px var(--red); animation: blink 1.4s infinite; }
+
+  /* Combat (UFC / boxing) cards */
+  .combat-row { display: flex; align-items: center; gap: 10px; }
+  .combat-f { font-size: 13px; font-weight: 600; color: var(--text-0); flex: 1; min-width: 0; }
+  .combat-f.right { text-align: right; }
+  .combat-vs { font-size: 10px; color: var(--text-3); letter-spacing: 0.06em; flex-shrink: 0; }
+  .combat-detail { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--stroke); font-size: 11px; color: var(--text-2); line-height: 1.35; }
+  /* F1 race weekend cards */
+  .f1-circuit { font-size: 11px; color: var(--text-2); margin-top: 2px; }
+  .f1-podium { display: flex; gap: 16px; margin-top: 9px; flex-wrap: wrap; }
+  .f1-pos { display: flex; align-items: center; gap: 5px; font-size: 12px; font-variant-numeric: tabular-nums; }
+  .f1-driver { color: var(--text-1); font-weight: 500; }
+  /* Tennis match cards */
+  .tennis-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 0; }
+  .tennis-row + .tennis-row { border-top: 1px dashed var(--stroke); }
+  .tennis-p { font-size: 13px; font-weight: 500; color: var(--text-0); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tennis-s { font-size: 12px; font-variant-numeric: tabular-nums; color: var(--accent); letter-spacing: 0.1em; flex-shrink: 0; }
 
   .game { padding: 10px 12px; border-radius: var(--r-sm); background: var(--glass-3); border: 1px solid var(--stroke); margin-bottom: 6px; transition: border-color .15s ease; }
   .game:hover { border-color: var(--stroke-strong); }
@@ -445,7 +570,7 @@
   .modal-close-btn:hover { color: var(--text-0); border-color: var(--stroke-strong); }
 
   /* misc */
-  .sep { height: 1px; background: var(--stroke); margin: 14px 0; }
+  .sep { height: 1px; background: var(--stroke); margin: 12px 0; }
   .row-flex { display: flex; align-items: center; gap: 8px; }
   .empty { padding: 20px; color: var(--text-3); text-align: center; font-size: 12px; }
 
@@ -477,6 +602,9 @@
 </head>
 <body>
 
+<!-- living aurora backdrop -->
+<div class="aurora" aria-hidden="true"><span class="a1"></span><span class="a2"></span><span class="a3"></span><span class="a4"></span><span class="a5"></span></div>
+
 <!-- ============ CHROME BAR ============ -->
 <div class="chrome">
   <div class="title">Jarvis</div>
@@ -502,26 +630,20 @@
   <!-- ============ LEFT RAIL ============ -->
   <aside class="rail">
 
-    <!-- clock + prayers -->
+    <!-- clock -->
     <section class="glass card">
       <div class="h">
-        <div class="t"><span id="locLabel">Loading…</span> <span class="tag" id="tzLabel">—</span></div>
+        <div class="t"><svg class="t-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span id="locLabel">Loading…</span> <span class="tag" id="tzLabel">—</span></div>
         <div class="meta" id="dateLine">—</div>
       </div>
       <div class="clock"><span class="hh" id="clockH">--:--</span><span class="ss" id="clockS">:--</span></div>
       <div class="date" id="nextPrayer">—</div>
-      <div class="sep"></div>
-      <div class="h">
-        <div class="t">Prayer Times</div>
-        <div class="meta">ISNA</div>
-      </div>
-      <div id="prayerList"><div class="empty">Loading…</div></div>
     </section>
 
     <!-- weather -->
     <section class="glass card">
       <div class="h">
-        <div class="t">Weather</div>
+        <div class="t"><svg class="t-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19a4.5 4.5 0 1 0 0-9 6 6 0 0 0-11.6-1.5A4 4 0 0 0 6 19z"/></svg>Weather</div>
         <div class="meta" id="wxLoc">—</div>
       </div>
       <div class="weather">
@@ -540,7 +662,7 @@
     <!-- system -->
     <section class="glass card">
       <div class="h">
-        <div class="t">System <span class="tag">LIVE</span></div>
+        <div class="t"><svg class="t-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/></svg>System <span class="tag">LIVE</span></div>
         <div class="meta" id="sysOS">macOS</div>
       </div>
       <div class="sys">
@@ -558,7 +680,7 @@
     <!-- music -->
     <section class="glass card">
       <div class="h">
-        <div class="t">Now Playing</div>
+        <div class="t"><svg class="t-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>Now Playing</div>
         <div class="meta">Spotify</div>
       </div>
       <div class="music">
@@ -568,9 +690,9 @@
           <div class="artist" id="spArtist">—</div>
         </div>
         <div class="controls">
-          <div class="btn" id="spPrev" title="Previous">⏮</div>
-          <div class="btn play" id="spPlay" title="Play/Pause">▶</div>
-          <div class="btn" id="spNext" title="Next">⏭</div>
+          <div class="btn" id="spPrev" title="Previous"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 5v14a1 1 0 0 1-2 0V5a1 1 0 0 1 2 0z"/><path d="M19.3 5.3 9.7 11.2a1 1 0 0 0 0 1.6l9.6 5.9a1 1 0 0 0 1.5-.8V6.1a1 1 0 0 0-1.5-.8z"/></svg></div>
+          <div class="btn play" id="spPlay" title="Play/Pause" data-state="paused"><svg class="ic-play" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.1v13.8a1 1 0 0 0 1.5.9l11-6.9a1 1 0 0 0 0-1.7l-11-6.9A1 1 0 0 0 8 5.1z"/></svg><svg class="ic-pause" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg></div>
+          <div class="btn" id="spNext" title="Next"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17 5v14a1 1 0 0 0 2 0V5a1 1 0 0 0-2 0z"/><path d="M4.7 5.3 14.3 11.2a1 1 0 0 1 0 1.6l-9.6 5.9A1 1 0 0 1 3.2 18V6.1a1 1 0 0 1 1.5-.8z"/></svg></div>
         </div>
       </div>
       <div class="progress"><i id="spProg"></i></div>
@@ -589,6 +711,7 @@
 
     <div class="orb-wrap" id="orbWrap">
       <div class="orb">
+        <div class="orb-pulse"><i></i><i></i><i></i></div>
         <div class="ring r1"><span class="sat"></span></div>
         <div class="ring r2"><span class="sat"></span></div>
         <div class="ring r3"><span class="sat"></span></div>
@@ -612,10 +735,10 @@
           <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></span>
           Plan my day
         </button>
-        <button type="button" class="chip" data-q="Give me a morning brief">
+        <a href="/brief" class="chip" style="text-decoration:none;color:inherit" title="Open your morning brief">
           <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg></span>
           Morning brief
-        </button>
+        </a>
       </div>
       <div class="dock">
         <div class="row1">
@@ -623,15 +746,15 @@
           <input id="chatInput" placeholder="Ask Jarvis anything…" autocomplete="off" />
         </div>
         <div class="row2">
-          <div class="mode active" data-mode="search">🔍 Search</div>
-          <div class="mode" data-mode="deep">🧠 Deep Research</div>
-          <div class="mode" data-mode="agent">🎯 Agent</div>
+          <div class="mode active" data-mode="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>Search</div>
+          <div class="mode" data-mode="deep"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a4 4 0 0 0-4 4c0 1 .3 1.6-.6 2.6A5 5 0 0 0 9 18v1a2 2 0 0 0 2 2M12 3a4 4 0 0 1 4 4c0 1-.3 1.6.6 2.6A5 5 0 0 1 15 18v1a2 2 0 0 1-2 2M12 3v18"/></svg>Deep Research</div>
+          <div class="mode" data-mode="agent"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="1" fill="currentColor"/></svg>Agent</div>
           <div class="spacer"></div>
-          <div class="icobtn" id="newChatBtn" title="New chat" style="display:none;">⟲</div>
-          <label class="icobtn" for="fileInput" title="Attach">📎</label>
+          <div class="icobtn" id="newChatBtn" title="New chat" style="display:none;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 15.5-6.3L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15.5 6.3L3 16"/><path d="M3 21v-5h5"/></svg></div>
+          <label class="icobtn" for="fileInput" title="Attach"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.4 11.05 12.25 20.2a5.5 5.5 0 0 1-7.78-7.78l9.2-9.2a3.67 3.67 0 0 1 5.18 5.18l-9.2 9.2a1.83 1.83 0 0 1-2.6-2.6l8.5-8.48"/></svg></label>
           <input type="file" id="fileInput" style="display:none;" />
-          <div class="icobtn" id="micBtn" title="Voice">🎙</div>
-          <div class="send" id="sendBtn" title="Send">↑</div>
+          <div class="icobtn" id="micBtn" title="Voice"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 19v3"/></svg></div>
+          <div class="send" id="sendBtn" title="Send"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5,12 12,5 19,12"/></svg></div>
         </div>
       </div>
     </div>
@@ -869,10 +992,13 @@ function renderPrayer(p) {
   const nowStr = new Date().toTimeString().slice(0,5);
   let nextIdx = order.findIndex(([_, t]) => t > nowStr);
   if (nextIdx === -1) nextIdx = 0;
-  const html = `<div class="prayers-row">` + order.map(([name, time], i) =>
-    `<div class="pr ${i === nextIdx ? 'active' : ''}"><div class="name">${abbr[name] || name}</div><div class="time">${time}</div></div>`
-  ).join('') + `</div>`;
-  $('#prayerList').innerHTML = html;
+  const prayerListEl = $('#prayerList');
+  if (prayerListEl) {
+    const html = `<div class="prayers-row">` + order.map(([name, time], i) =>
+      `<div class="pr ${i === nextIdx ? 'active' : ''}"><div class="name">${abbr[name] || name}</div><div class="time">${time}</div></div>`
+    ).join('') + `</div>`;
+    prayerListEl.innerHTML = html;
+  }
   $('#locLabel').textContent = p.location || 'Local';
   const [name, time] = order[nextIdx];
   const [hh, mm] = time.split(':').map(Number);
@@ -916,7 +1042,7 @@ function renderSpotify(s) {
     $('#spTitle').textContent = 'Nothing playing';
     $('#spArtist').textContent = 'Open Spotify to start';
     $('#spProg').style.width = '0%';
-    $('#spPlay').textContent = '▶';
+    $('#spPlay').dataset.state = 'paused';
     $('#spElapsed').textContent = '';
     $('#spDur').textContent = '';
     $('#spArt').style.backgroundImage = '';
@@ -931,7 +1057,7 @@ function renderSpotify(s) {
   $('#spArtist').textContent = s.artist || '—';
   $('#spArt').style.backgroundImage = s.image_url ? `url(${s.image_url})` : '';
   $('#spProg').style.width = `${s.progress_pct || 0}%`;
-  $('#spPlay').textContent = s.playing ? '⏸' : '▶';
+  $('#spPlay').dataset.state = s.playing ? 'playing' : 'paused';
   state.spotifyElapsedMs = s.progress_ms || ((s.progress_pct || 0) / 100) * (s.duration_ms || 0);
   state.spotifyDurMs = s.duration_ms || 0;
   state.spotifyPlaying = !!s.playing;
@@ -1132,6 +1258,23 @@ function fmtGameDate(dateIso) {
   } catch(e) { return ''; }
 }
 
+// Date-only variant for FINISHED games — a final from three weeks ago must
+// say WHEN it was played, not sit undated next to today's fixtures looking
+// current. ("19 Jun" / "Today" / "Yesterday")
+function fmtGameDateShort(dateIso) {
+  if (!dateIso) return '';
+  try {
+    const d = new Date(dateIso);
+    const now = new Date();
+    if (d.toDateString() === now.toDateString()) return 'Today';
+    const yest = new Date(now); yest.setDate(yest.getDate() - 1);
+    if (d.toDateString() === yest.toDateString()) return 'Yesterday';
+    const opts = {day:'numeric', month:'short'};
+    if (d.getFullYear() !== now.getFullYear()) opts.year = 'numeric';
+    return d.toLocaleDateString([], opts);
+  } catch(e) { return ''; }
+}
+
 function gameHTML(g, leagueName) {
   const status  = (g.status || '').toLowerCase();
   const isLive  = status === 'live';
@@ -1166,9 +1309,10 @@ function gameHTML(g, leagueName) {
     </div>`;
   }
 
+  const finalDate = fmtGameDateShort(g.date_iso);
   const statusBadge = isLive
     ? `<span class="live">LIVE ${g.clock ? escapeHTML(g.clock) : ''}</span>`
-    : `<span style="color:${isFinal?'var(--green)':'var(--text-3)'};">${isFinal ? 'FINAL' : escapeHTML(gameDate)}</span>`;
+    : `<span style="color:${isFinal?'var(--green)':'var(--text-3)'};">${isFinal ? 'FINAL' + (finalDate ? ' · ' + escapeHTML(finalDate) : '') : escapeHTML(gameDate)}</span>`;
 
   return `<div class="game">
     <div class="league">${escapeHTML(leagueName)} ${statusBadge}</div>
@@ -1261,55 +1405,212 @@ function cricketGameHTML(g) {
   </div>`;
 }
 
-function renderSportsSections() {
-  const d = state.sidebar;
+// ── Individual-sport card renderers (F1 / combat / tennis) ───────────────────
+function _statusBadge(g) {
+  const s = (g.status || '').toLowerCase();
+  if (s === 'live')  return `<span class="live">LIVE</span>`;
+  if (s === 'final') return `<span style="color:var(--green);">FINAL</span>`;
+  return `<span style="color:var(--text-3);">${escapeHTML(fmtGameDate(g.date_iso) || g.date_str || '')}</span>`;
+}
 
-  const sections = [
-    { key: 'sports_nba',          icon: '🏀', name: 'NBA',            sub: 'National Basketball Association' },
-    // Single consolidated Cricket section — all formats and league
-    // competitions (Test/ODI/T20I/IPL/PSL/BBL) merged into one list,
-    // rendered with cricket-specific innings/result formatting.
-    { key: 'sports_cricket',      icon: '🏏', name: 'Cricket',        sub: 'All formats · IPL · PSL'        },
-    { key: 'sports_pl',           icon: '⚽', name: 'Premier League', sub: 'English Premier League'         },
-    { key: 'sports_rm',           icon: '🔴', name: 'Real Madrid',    sub: 'La Liga + UCL'                  },
-  ];
+function fightCardHTML(g) {
+  const s = (g.status || '').toLowerCase();
+  const detail = (g.detail && (s === 'final' || s === 'live')) ? `<div class="combat-detail">${escapeHTML(g.detail)}</div>` : '';
+  const sub = g.weight ? ` · ${escapeHTML(g.weight)}` : '';
+  return `<div class="game">
+    <div class="league"><span>${escapeHTML(g.event_name || 'Fight')}${sub}</span><span>${_statusBadge(g)}</span></div>
+    <div class="combat-row"><span class="combat-f">${escapeHTML(g.fighter1 || 'TBD')}</span><span class="combat-vs">vs</span><span class="combat-f right">${escapeHTML(g.fighter2 || 'TBD')}</span></div>
+    ${detail}
+  </div>`;
+}
 
-  let html = '';
-  for (const sec of sections) {
-    let games, leagueName;
-    if (sec._games !== undefined) {
-      // Pre-built game list (e.g. T20I/IPL combined)
-      games = sec._games;
-      leagueName = sec.sub;
-    } else {
-      const data = d && d[sec.key];
-      games = (data && data.games) || [];
-      leagueName = (data && data.league) || sec.name;
+function f1CardHTML(g) {
+  const s = (g.status || '').toLowerCase();
+  let podium = '';
+  if (s === 'final' && Array.isArray(g.results) && g.results.length) {
+    const medals = ['🥇', '🥈', '🥉'];
+    podium = `<div class="f1-podium">` + g.results.map((r, i) =>
+      `<div class="f1-pos"><span>${medals[i] || ((r.pos || i + 1) + '.')}</span><span class="f1-driver">${escapeHTML(r.driver || '')}</span></div>`).join('') + `</div>`;
+  }
+  const detail = (g.detail && s !== 'final') ? `<div class="combat-detail">${escapeHTML(g.detail)}</div>` : '';
+  return `<div class="game">
+    <div class="league"><span>🏁 ${escapeHTML(g.name || 'Grand Prix')}</span><span>${_statusBadge(g)}</span></div>
+    ${g.circuit ? `<div class="f1-circuit">${escapeHTML(g.circuit)}</div>` : ''}
+    ${podium}${detail}
+  </div>`;
+}
+
+function tennisMatchHTML(g) {
+  return `<div class="game">
+    <div class="league"><span>🎾 ${escapeHTML(g.tournament || 'Tennis')}</span><span>${_statusBadge(g)}</span></div>
+    <div class="tennis-row"><span class="tennis-p">${escapeHTML(g.player1 || 'TBD')}</span><span class="tennis-s">${escapeHTML(g.score1 || '')}</span></div>
+    <div class="tennis-row"><span class="tennis-p">${escapeHTML(g.player2 || 'TBD')}</span><span class="tennis-s">${escapeHTML(g.score2 || '')}</span></div>
+  </div>`;
+}
+
+function sportCardHTML(g, leagueName, isCricket) {
+  if (g.type === 'f1')     return f1CardHTML(g);
+  if (g.type === 'fight')  return fightCardHTML(g);
+  if (g.type === 'tennis') return tennisMatchHTML(g);
+  if (isCricket)           return cricketGameHTML(g);
+  return gameHTML(g, leagueName);
+}
+
+// ── Sports tab (redesigned) ──────────────────────────────────────────────────
+const FAV_TEAMS = [
+  { short: 'Warriors',    match: ['warriors', 'golden state'],                          sport: 'NBA',      emoji: '🏀' },
+  { short: 'Real Madrid', match: ['real madrid', 'madrid'],                             sport: 'Football', emoji: '⚪' },
+  { short: 'Man Utd',     match: ['man united', 'manchester united', 'man utd', 'man u'], sport: 'Football', emoji: '🔴' },
+  { short: 'Pakistan',    match: ['pakistan'],                                          sport: 'Cricket',  emoji: '🏏' },
+];
+
+const SPORT_SECTIONS = [
+  { id: 'nba',      icon: '🏀', name: 'NBA',       sub: 'Basketball',         keys: ['sports_nba', 'sports_gsw'] },
+  { id: 'football', icon: '⚽', name: 'Football',  sub: 'PL · UCL · Friendlies', keys: ['sports_pl', 'sports_ucl', 'sports_rm', 'sports_mu', 'sports_friendly'] },
+  { id: 'cricket',  icon: '🏏', name: 'Cricket',   sub: 'All formats',        keys: ['sports_cricket'], cricket: true },
+  { id: 'tennis',   icon: '🎾', name: 'Tennis',    sub: 'ATP · WTA',          keys: ['sports_tennis'] },
+  { id: 'combat',   icon: '🥊', name: 'Combat',    sub: 'UFC · Boxing',       keys: ['sports_ufc', 'sports_boxing'] },
+  { id: 'f1',       icon: '🏁', name: 'Formula 1', sub: 'Grand Prix',         keys: ['sports_f1'] },
+];
+
+const sportCollapsed = {};  // section id → bool, persists across re-renders
+
+function _gamesForKeys(keys) {
+  const d = state.sidebar || {};
+  const seen = new Set();
+  const out = [];
+  for (const k of keys) {
+    const data = d[k];
+    if (!data || !data.games) continue;
+    const league = data.league || '';
+    for (const g of data.games) {
+      const key = (g.date_iso || '').slice(0, 10) + '|' + (g.home_team || '') + '|' + (g.away_team || '');
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ ...g, _league: league });
     }
+  }
+  return out;
+}
 
-    // Sort: live first, then upcoming by date, then final
-    const live     = games.filter(g => g.status === 'live');
-    const upcoming = games.filter(g => g.status === 'upcoming').sort((a,b) => (a.date_iso||'').localeCompare(b.date_iso||''));
-    const final    = games.filter(g => g.status === 'final');
-    const sorted   = [...live, ...upcoming, ...final].slice(0, 6);
+function _sortGames(games) {
+  const live = games.filter(g => g.status === 'live');
+  const up   = games.filter(g => g.status === 'upcoming').sort((a, b) => (a.date_iso || '').localeCompare(b.date_iso || ''));
+  const fin  = games.filter(g => g.status === 'final').sort((a, b) => (b.date_iso || '').localeCompare(a.date_iso || ''));
+  return { live, up, fin };
+}
 
-    const gamesHTML = sorted.length
-      ? sorted.map(g => (sec.key === 'sports_cricket' ? cricketGameHTML(g) : gameHTML(g, leagueName))).join('')
-      : `<div class="empty" style="padding:10px 0; font-size:12px;">No fixtures found.</div>`;
+function _allGamesTagged() {
+  const out = [];
+  for (const sec of SPORT_SECTIONS) {
+    for (const g of _gamesForKeys(sec.keys)) {
+      out.push({ g, cricket: !!sec.cricket, sport: sec.name });
+    }
+  }
+  return out;
+}
 
-    const liveCount = live.length;
-    const liveDot   = liveCount > 0 ? `<span style="display:inline-flex;align-items:center;gap:4px;color:var(--red);font-size:10px;margin-left:6px;"><span style="width:6px;height:6px;border-radius:50%;background:var(--red);box-shadow:0 0 6px var(--red);animation:blink 1.4s infinite;display:inline-block;"></span>${liveCount} live</span>` : '';
+function _bestGameForTeam(fav, all) {
+  const hit = all.filter(({ g }) => {
+    const h = (g.home_team || '').toLowerCase(), a = (g.away_team || '').toLowerCase();
+    return fav.match.some(m => h.includes(m) || a.includes(m));
+  });
+  if (!hit.length) return null;
+  const live = hit.find(x => x.g.status === 'live');
+  if (live) return live;
+  const up = hit.filter(x => x.g.status === 'upcoming').sort((p, q) => (p.g.date_iso || '').localeCompare(q.g.date_iso || ''));
+  if (up.length) return up[0];
+  const fin = hit.filter(x => x.g.status === 'final').sort((p, q) => (q.g.date_iso || '').localeCompare(p.g.date_iso || ''));
+  return fin[0] || null;
+}
 
-    html += `<div class="sports-section">
-      <div class="sports-section-hdr">
+function _myTeamCard(fav, best) {
+  if (!best) {
+    return `<div class="mt-card"><div class="mt-head"><span class="mt-emoji">${fav.emoji}</span><span class="mt-name">${fav.short}</span><span class="mt-sport">${fav.sport}</span></div><div class="mt-empty">No upcoming fixtures found</div></div>`;
+  }
+  const g = best.g;
+  const status = (g.status || '').toLowerCase();
+  const isHome = fav.match.some(m => (g.home_team || '').toLowerCase().includes(m));
+  const opp = isHome ? g.away_team : g.home_team;
+  let stateTag, meta;
+  if (status === 'live') {
+    stateTag = `<span class="mt-state live">LIVE</span>`;
+    meta = best.cricket ? (g.note || 'In play') : `${g.home_score ?? ''}–${g.away_score ?? ''}`;
+  } else if (status === 'upcoming') {
+    stateTag = `<span class="mt-state next">NEXT</span>`;
+    meta = fmtGameDate(g.date_iso) || g.date_str || '';
+  } else {
+    stateTag = `<span class="mt-state final">FINAL</span>`;
+    const score = best.cricket ? (g.note || '') : `${g.home_score ?? ''}–${g.away_score ?? ''}`;
+    const when = fmtGameDateShort(g.date_iso);
+    meta = when ? `${score} · ${when}` : score;
+  }
+  return `<div class="mt-card">
+    <div class="mt-head"><span class="mt-emoji">${fav.emoji}</span><span class="mt-name">${escapeHTML(fav.short)}</span><span class="mt-sport">${escapeHTML(fav.sport)}</span></div>
+    <div class="mt-opp">vs ${escapeHTML(opp || 'TBD')}</div>
+    <div class="mt-meta">${stateTag}<span>${escapeHTML(String(meta || ''))}</span></div>
+  </div>`;
+}
+
+function toggleSportSection(id, el) {
+  sportCollapsed[id] = !sportCollapsed[id];
+  const sec = el.closest('.sports-section');
+  if (sec) sec.classList.toggle('collapsed', sportCollapsed[id]);
+}
+
+function renderSportsSections() {
+  const all = _allGamesTagged();
+
+  // ── Live Now strip ──
+  const liveAll = all.filter(x => x.g.status === 'live');
+  let liveHTML = '';
+  if (liveAll.length) {
+    liveHTML = `<div class="section-title-label">Live Now</div><div class="live-strip">` +
+      liveAll.map(({ g, cricket, sport }) => {
+        const a = g.home_team || '', b = g.away_team || '';
+        const title = b ? `${escapeHTML(a)} vs ${escapeHTML(b)}` : escapeHTML(a);
+        let detail;
+        if (g.type) detail = g.detail || '';                       // tennis/fight/f1
+        else if (cricket) detail = '';
+        else detail = `${g.home_score ?? ''}–${g.away_score ?? ''}`.replace(/^–$/, '') || g.clock || '';
+        return `<div class="live-chip"><div class="lc-top">${escapeHTML(sport)} · Live</div>
+          <div class="lc-teams">${title}</div>
+          ${detail ? `<div class="lc-score">${escapeHTML(detail)}</div>` : ''}</div>`;
+      }).join('') + `</div>`;
+  }
+
+  // ── My Teams ──
+  const mtHTML = `<div class="section-title-label">My Teams</div><div class="myteams">` +
+    FAV_TEAMS.map(f => _myTeamCard(f, _bestGameForTeam(f, all))).join('') + `</div>`;
+
+  // ── Sport sections (collapsible) ──
+  let secHTML = `<div class="section-title-label">All Sports</div>`;
+  for (const sec of SPORT_SECTIONS) {
+    const games = _gamesForKeys(sec.keys);
+    const { live, up, fin } = _sortGames(games);
+    const ordered = [...live, ...up, ...fin].slice(0, 8);
+    const empty = ordered.length === 0;
+    if (sportCollapsed[sec.id] === undefined) sportCollapsed[sec.id] = empty; // collapse empty by default
+    const collapsed = sportCollapsed[sec.id];
+
+    const body = empty
+      ? `<div class="empty" style="padding:10px 0;font-size:12px;">No fixtures right now.</div>`
+      : ordered.map(g => sportCardHTML(g, g._league || sec.name, sec.cricket)).join('');
+
+    const liveDot = live.length ? `<span class="ss-live"><span class="ss-live-dot"></span>${live.length} live</span>` : '';
+
+    secHTML += `<div class="sports-section${collapsed ? ' collapsed' : ''}">
+      <div class="sports-section-hdr" onclick="toggleSportSection('${sec.id}', this)">
         <span class="ss-icon">${sec.icon}</span>
         <span class="ss-name">${sec.name}${liveDot}</span>
         <span class="ss-league">${sec.sub}</span>
+        <svg class="ss-chev" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5l3 3 3-3"/></svg>
       </div>
-      ${gamesHTML}
+      <div class="sports-section-body">${body}</div>
     </div>`;
   }
-  $('#sportsContainer').innerHTML = html || '<div class="empty">Loading sports data…</div>';
+
+  $('#sportsContainer').innerHTML = liveHTML + mtHTML + secHTML;
 }
 
 // ── calendar ─────────────────────────────────────────────────────────────────
@@ -1612,7 +1913,7 @@ function startChat() {
   if (state.chatActive) return;
   state.chatActive = true;
   $('#greeting').classList.add('hidden');
-  $('#orbWrap').classList.add('hidden');
+  $('#orbWrap').classList.add('compact');
   $('#thread').classList.add('active');
   $('#newChatBtn').style.display = 'grid';
 }
@@ -1624,7 +1925,7 @@ function endChat() {
   $('#thread').classList.remove('active');
   $('#thread').innerHTML = '';
   $('#greeting').classList.remove('hidden');
-  $('#orbWrap').classList.remove('hidden');
+  $('#orbWrap').classList.remove('compact');
   $('#newChatBtn').style.display = 'none';
 }
 // ── WebSocket chat connection ────────────────────────────────────────────────
@@ -1648,19 +1949,52 @@ let _wsReconnectTimer = 0; // backoff timer id
 // event into here.
 let _wsPending = null;
 
-function _connectWS() {
+// The /ws endpoint now requires a token whenever JARVIS_AUTH_PASSWORD is set.
+// Browsers can't set headers on a WebSocket handshake, so it travels as a query
+// parameter; GET /ws-token is an ordinary HTTP route and is therefore covered
+// by the Basic Auth the browser already handles. Cached for the page's life —
+// the token is derived from the password and is stable per process.
+let _wsToken = null;
+
+async function _fetchWSToken() {
+  if (_wsToken !== null) return _wsToken;
+  try {
+    const r = await fetch('/ws-token', { credentials: 'same-origin' });
+    if (!r.ok) { _wsToken = ''; return _wsToken; }
+    const j = await r.json();
+    _wsToken = j.token || '';
+  } catch (e) {
+    // No auth configured, or the endpoint is unreachable. Connect without a
+    // token; the server rejects it if one was actually required.
+    _wsToken = '';
+  }
+  return _wsToken;
+}
+
+async function _connectWS() {
   if (_ws && _ws.readyState <= 1) return;  // CONNECTING or OPEN
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const token = await _fetchWSToken();
+  const qs = token ? `?token=${encodeURIComponent(token)}` : '';
   try {
-    _ws = new WebSocket(`${proto}//${window.location.host}/ws`);
+    _ws = new WebSocket(`${proto}//${window.location.host}/ws${qs}`);
   } catch (e) {
     _wsReady = false;
     return;
   }
   _ws.addEventListener('open',  () => { _wsReady = true;  console.log('🔌 WS connected'); });
-  _ws.addEventListener('close', () => {
+  _ws.addEventListener('close', (ev) => {
     _wsReady = false;
-    console.log('🔌 WS closed');
+    console.log('🔌 WS closed', ev.code, ev.reason || '');
+    // 1008 = policy violation: the server rejected the origin or the token.
+    // Retrying on a 3s loop would hammer it forever, so stop and drop to the
+    // HTTP /chat fallback instead. Clear the cached token in case it went
+    // stale (server restarted with a different password).
+    if (ev.code === 1008) {
+      _wsToken = null;
+      console.warn('🔌 WS rejected by the server:', ev.reason || 'policy violation');
+      return;
+    }
     // Reconnect after a short delay so the next chat round has a fresh
     // socket. Capped at one retry per 3s to avoid hammering.
     clearTimeout(_wsReconnectTimer);
@@ -1750,6 +2084,7 @@ async function sendChat(text) {
   $('#statusPill').classList.add('thinking');
   $('#statusText').textContent = 'Thinking…';
   $('#orbCore').classList.add('thinking');
+  document.body.classList.add('jarvis-busy');
   const typing = appendMsg('…', 'bot', { typing: true });
 
   let finalMessage = '';
@@ -1805,6 +2140,7 @@ async function sendChat(text) {
     $('#statusPill').classList.remove('thinking');
     $('#statusText').textContent = 'Jarvis online · Ready';
     $('#orbCore').classList.remove('thinking');
+    document.body.classList.remove('jarvis-busy');
   }
 }
 
@@ -1898,7 +2234,7 @@ function bindUI() {
 
   // spotify controls
   const sp = async (path) => { try { await api(path, { method: 'POST' }); setTimeout(refreshSpotify, 400); } catch(e) {} };
-  $('#spPlay').addEventListener('click', () => { const playing = $('#spPlay').textContent === '⏸'; sp(playing ? '/spotify/pause' : '/spotify/play'); });
+  $('#spPlay').addEventListener('click', () => { const playing = $('#spPlay').dataset.state === 'playing'; sp(playing ? '/spotify/pause' : '/spotify/play'); });
   $('#spNext').addEventListener('click', () => sp('/spotify/next'));
   $('#spPrev').addEventListener('click', () => sp('/spotify/previous'));
 
@@ -1977,10 +2313,14 @@ async function refreshLiveTick() {
     if (d.sports_nba)      state.sidebar.sports_nba      = d.sports_nba;
     if (d.sports_rm)       state.sidebar.sports_rm       = d.sports_rm;
     if (d.sports_cricket)  state.sidebar.sports_cricket  = d.sports_cricket;
+    if (d.sports_tennis)   state.sidebar.sports_tennis   = d.sports_tennis;
+    if (d.sports_ufc)      state.sidebar.sports_ufc      = d.sports_ufc;
+    if (d.sports_boxing)   state.sidebar.sports_boxing   = d.sports_boxing;
+    if (d.sports_f1)       state.sidebar.sports_f1       = d.sports_f1;
     // Re-render only the widgets that this tick can affect
     if (d.markets)        renderMarkets(d.markets);
-    if (d.sports_pl || d.sports_ucl || d.sports_nba ||
-        d.sports_rm || d.sports_cricket) {
+    if (d.sports_pl || d.sports_ucl || d.sports_nba || d.sports_rm || d.sports_cricket ||
+        d.sports_tennis || d.sports_ufc || d.sports_boxing || d.sports_f1) {
       renderSportsSections();
     }
   } catch (e) {
@@ -1994,28 +2334,92 @@ boot();
 <!-- FinEx + Voice floating launchers -->
 <style>
   .fab-dock {
-    position: fixed; bottom: 20px; left: 20px; z-index: 9999;
-    display: flex; align-items: center; gap: 10px;
+    position: fixed; bottom: 18px; left: 18px; z-index: 9999;
+    display: flex; align-items: flex-end; gap: 8px;
     pointer-events: none;
   }
   .fab-dock > * { pointer-events: auto; }
-  .finex-fab, .voice-fab {
-    /* Identical box geometry so both FABs line up perfectly */
-    box-sizing: border-box;
-    height: 40px;
-    display: inline-flex; align-items: center; gap: 10px;
-    padding: 0 18px;
+
+  .launcher { position: relative; }
+  .launch-trigger, .voice-fab {
+    box-sizing: border-box; height: 38px;
+    display: inline-flex; align-items: center; gap: 9px;
+    padding: 0 14px;
     backdrop-filter: blur(18px) saturate(1.6);
-    border-radius: 50px;
-    border: 1px solid transparent;
-    font-family: inherit;
-    font-size: 13px; font-weight: 600; letter-spacing: 0.04em;
-    line-height: 1;
-    text-decoration: none;
-    transition: all 0.22s ease;
-    cursor: pointer;
-    vertical-align: middle;
+    border-radius: 50px; border: 1px solid transparent;
+    font-family: inherit; font-size: 12.5px; font-weight: 600;
+    letter-spacing: .03em; line-height: 1;
+    text-decoration: none; cursor: pointer;
+    transition: all .2s ease;
   }
+  .launch-trigger {
+    background: linear-gradient(135deg, rgba(160,140,255,.20), rgba(90,70,190,.26));
+    border-color: rgba(160,140,255,.34); color: #efeaff;
+    box-shadow: 0 4px 22px rgba(140,120,255,.16), 0 0 0 1px rgba(255,255,255,.04) inset;
+  }
+  .launch-trigger:hover, .launcher.open .launch-trigger {
+    background: linear-gradient(135deg, rgba(160,140,255,.34), rgba(110,85,220,.40));
+    border-color: rgba(170,150,255,.6); transform: translateY(-1px); color: #fff;
+  }
+  .lg-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2.5px; }
+  .lg-grid i { width: 4.5px; height: 4.5px; border-radius: 1.5px; background: currentColor; opacity: .8; }
+  .lg-count {
+    font-size: 10px; font-weight: 700; padding: 1.5px 6px; border-radius: 999px;
+    background: rgba(255,255,255,.12); color: #fff;
+  }
+
+  .launch-panel {
+    position: absolute; bottom: calc(100% + 10px); left: 0;
+    width: 268px; padding: 7px;
+    background: rgba(18,15,32,.96); backdrop-filter: blur(20px) saturate(1.4);
+    border: 1px solid rgba(160,140,255,.22); border-radius: 15px;
+    box-shadow: 0 20px 60px rgba(0,0,0,.55);
+    opacity: 0; transform: translateY(8px) scale(.97); transform-origin: bottom left;
+    pointer-events: none; transition: opacity .17s ease, transform .17s ease;
+  }
+  .launcher.open .launch-panel { opacity: 1; transform: none; pointer-events: auto; }
+  .lp-head {
+    font-size: 9.5px; letter-spacing: .13em; text-transform: uppercase;
+    color: var(--text-3); padding: 6px 9px 8px; font-weight: 700;
+  }
+  .lp-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 9px; border-radius: 10px; text-decoration: none;
+    transition: background .13s ease;
+  }
+  .lp-item:hover { background: rgba(160,140,255,.11); }
+  .lp-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .lp-txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .lp-txt b { font-size: 12.5px; font-weight: 650; color: var(--text-0); letter-spacing: .01em; }
+  .lp-txt em {
+    font-style: normal; font-size: 10.5px; color: var(--text-3);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  /* ── Surface palette ────────────────────────────────────────────────
+     One hue per surface, and each dot is the exact --accent of the page it
+     opens — so the colour you click is the colour you land in. Eight hues,
+     none closer than ~25° apart, so they stay tellable apart at 8px.
+
+       Jarvis (this window)  violet   #c084fc
+       Recall                magenta  #e879c7
+       Sentinel              red      #ff8090
+       Forge                 orange   #ff9f5a
+       Connections           gold     #ffd166
+       FinEx                 green    #34d399
+       Atlas                 cyan     #7fe7ff
+       JAMS                  blue     #3b82f6
+
+     Two collisions are why this table exists: Recall and FinEx were both
+     green, and Connections shared Jarvis's violet. A dot that doesn't
+     identify anything is just decoration. */
+  .lp-item[data-k="atlas"]    .lp-dot { background:#7fe7ff; box-shadow:0 0 7px #7fe7ff; }
+  .lp-item[data-k="recall"]   .lp-dot { background:#e879c7; box-shadow:0 0 7px #e879c7; }
+  .lp-item[data-k="finex"]    .lp-dot { background:#34d399; box-shadow:0 0 7px #34d399; }
+  .lp-item[data-k="jams"]     .lp-dot { background:#3b82f6; box-shadow:0 0 7px #3b82f6; }
+  .lp-item[data-k="forge"]    .lp-dot { background:#ff9f5a; box-shadow:0 0 7px #ff9f5a; }
+  .lp-item[data-k="sentinel"] .lp-dot { background:#ff8090; box-shadow:0 0 7px #ff8090; }
+  .lp-item[data-k="health"]   .lp-dot { background:#ffd166; box-shadow:0 0 7px #ffd166; }
+
   .finex-fab {
     background: linear-gradient(135deg, rgba(192,132,252,0.22), rgba(99,50,180,0.28));
     border-color: rgba(192,132,252,0.35);
@@ -2029,6 +2433,63 @@ boot();
     transform: translateY(-2px);
     color: #fff;
   }
+  .jams-fab {
+    background: linear-gradient(135deg, rgba(59,130,246,0.22), rgba(37,99,235,0.30));
+    border-color: rgba(59,130,246,0.38);
+    color: #eaf2ff;
+    box-shadow: 0 4px 24px rgba(59,130,246,0.20), 0 0 0 1px rgba(255,255,255,0.04) inset;
+  }
+  .jams-fab:hover {
+    background: linear-gradient(135deg, rgba(59,130,246,0.40), rgba(37,99,235,0.46));
+    border-color: rgba(59,130,246,0.62);
+    box-shadow: 0 6px 32px rgba(59,130,246,0.32), 0 0 0 1px rgba(255,255,255,0.07) inset;
+    transform: translateY(-2px);
+    color: #fff;
+  }
+  .jams-fab .fab-dot { background: #3b82f6; box-shadow: 0 0 6px #3b82f6; animation-delay: -0.6s; }
+  /* Connections launcher floats just ABOVE the FinEx tab (own fixed row). */
+  .health-fab {
+    background: linear-gradient(135deg, rgba(127,231,255,0.18), rgba(79,140,255,0.26));
+    border-color: rgba(127,231,255,0.35);
+    color: #eaf6ff;
+    box-shadow: 0 4px 24px rgba(79,140,255,0.18), 0 0 0 1px rgba(255,255,255,0.04) inset;
+  }
+  .health-fab:hover {
+    background: linear-gradient(135deg, rgba(127,231,255,0.34), rgba(79,140,255,0.44));
+    border-color: rgba(127,231,255,0.6);
+    box-shadow: 0 6px 32px rgba(79,140,255,0.32), 0 0 0 1px rgba(255,255,255,0.07) inset;
+    transform: translateY(-2px);
+    color: #fff;
+  }
+  .health-fab .fab-dot { background: #7fe7ff; box-shadow: 0 0 6px #7fe7ff; animation-delay: -1.8s; }
+  .atlas-fab {
+    background: linear-gradient(135deg, rgba(255,207,107,0.18), rgba(240,170,60,0.26));
+    border-color: rgba(255,207,107,0.35); color: #fff6e0;
+    box-shadow: 0 4px 24px rgba(240,170,60,0.18), 0 0 0 1px rgba(255,255,255,0.04) inset;
+  }
+  .atlas-fab:hover { background: linear-gradient(135deg, rgba(255,207,107,0.34), rgba(240,170,60,0.44)); border-color: rgba(255,207,107,0.6); transform: translateY(-2px); color:#fff; }
+  .atlas-fab .fab-dot { background:#ffcf6b; box-shadow:0 0 6px #ffcf6b; animation-delay:-0.3s; }
+  .recall-fab {
+    background: linear-gradient(135deg, rgba(94,231,168,0.18), rgba(40,200,140,0.26));
+    border-color: rgba(94,231,168,0.35); color: #e6fff2;
+    box-shadow: 0 4px 24px rgba(40,200,140,0.18), 0 0 0 1px rgba(255,255,255,0.04) inset;
+  }
+  .recall-fab:hover { background: linear-gradient(135deg, rgba(94,231,168,0.34), rgba(40,200,140,0.44)); border-color: rgba(94,231,168,0.6); transform: translateY(-2px); color:#fff; }
+  .recall-fab .fab-dot { background:#5ee7a8; box-shadow:0 0 6px #5ee7a8; animation-delay:-0.5s; }
+  .sentinel-fab {
+    background: linear-gradient(135deg, rgba(255,128,144,0.18), rgba(230,70,90,0.26));
+    border-color: rgba(255,128,144,0.35); color: #ffe9ec;
+    box-shadow: 0 4px 24px rgba(230,70,90,0.18), 0 0 0 1px rgba(255,255,255,0.04) inset;
+  }
+  .sentinel-fab:hover { background: linear-gradient(135deg, rgba(255,128,144,0.34), rgba(230,70,90,0.44)); border-color: rgba(255,128,144,0.6); transform: translateY(-2px); color:#fff; }
+  .sentinel-fab .fab-dot { background:#ff8090; box-shadow:0 0 6px #ff8090; animation-delay:-0.7s; }
+  .forge-fab {
+    background: linear-gradient(135deg, rgba(255,157,92,0.18), rgba(240,120,50,0.26));
+    border-color: rgba(255,157,92,0.35); color: #fff0e6;
+    box-shadow: 0 4px 24px rgba(240,120,50,0.18), 0 0 0 1px rgba(255,255,255,0.04) inset;
+  }
+  .forge-fab:hover { background: linear-gradient(135deg, rgba(255,157,92,0.34), rgba(240,120,50,0.44)); border-color: rgba(255,157,92,0.6); transform: translateY(-2px); color:#fff; }
+  .forge-fab .fab-dot { background:#ff9d5c; box-shadow:0 0 6px #ff9d5c; animation-delay:-0.9s; }
   .voice-fab {
     background: linear-gradient(135deg, rgba(94,234,212,0.22), rgba(56,189,248,0.28));
     border-color: rgba(94,234,212,0.35);
@@ -2042,7 +2503,7 @@ boot();
     transform: translateY(-2px);
     color: #fff;
   }
-  .finex-fab .fab-dot, .voice-fab .fab-dot {
+  .voice-fab .fab-dot {
     width: 7px; height: 7px; border-radius: 50%;
     animation: fabPulse 2.4s ease-in-out infinite;
     flex-shrink: 0;
@@ -2130,20 +2591,38 @@ boot();
   }
 
   .vm-orb-core {
-    width: 130px; height: 130px;
-    border-radius: 50%;
+    width: 108px; height: 108px;
+    border-radius: 42% 58% 63% 37% / 45% 38% 62% 55%;
+    overflow: hidden; isolation: isolate;
     background:
-      radial-gradient(circle at 35% 35%, rgba(255,255,255,0.85), rgba(94,234,212,0.45) 30%, rgba(56,189,248,0.35) 55%, rgba(99,50,180,0.6) 80%, rgba(20,15,40,0.9));
+      radial-gradient(circle at 33% 30%, rgba(255,255,255,0.92), transparent 40%),
+      radial-gradient(circle at 70% 72%, rgba(94,234,212,0.55), transparent 56%),
+      radial-gradient(circle at 58% 56%, rgba(56,189,248,0.42), transparent 60%),
+      radial-gradient(circle at 50% 50%, #2f8f86, #140f28 84%);
     box-shadow:
-      0 0 40px rgba(94,234,212,0.45),
-      0 0 80px rgba(56,189,248,0.25),
-      inset 0 0 30px rgba(255,255,255,0.18);
-    animation: orbBreathe 4s ease-in-out infinite;
+      0 0 44px rgba(94,234,212,0.45),
+      0 0 90px rgba(56,189,248,0.25),
+      inset 0 0 28px rgba(255,255,255,0.18),
+      inset 9px -10px 26px rgba(56,189,248,0.45);
+    animation: orbBreathe 4s ease-in-out infinite, vmBlob 16s ease-in-out infinite;
     position: relative;
   }
+  /* Living plasma swirl inside the voice orb (emerald/cyan). */
+  .vm-orb-core::before { content: ""; position: absolute; inset: -25%; border-radius: 50%; mix-blend-mode: screen;
+    background: conic-gradient(from 0deg, transparent 0%, rgba(94,234,212,0.55) 22%, transparent 45%, rgba(56,189,248,0.45) 68%, transparent 90%);
+    animation: coreSwirl 9s linear infinite; }
+  .vm-orb-core::after { content: ""; position: absolute; inset: -10%; border-radius: 50%; mix-blend-mode: screen;
+    background: conic-gradient(from 180deg, transparent 0%, rgba(45,212,191,0.45) 30%, transparent 60%, rgba(192,132,252,0.4) 85%, transparent 100%);
+    animation: coreSwirl 6s linear infinite reverse; }
   @keyframes orbBreathe {
     0%,100% { transform: scale(1);    filter: brightness(1); }
     50%     { transform: scale(1.04); filter: brightness(1.15); }
+  }
+  @keyframes vmBlob {
+    0%,100% { border-radius: 42% 58% 63% 37% / 45% 38% 62% 55%; }
+    25%     { border-radius: 60% 40% 42% 58% / 52% 56% 44% 48%; }
+    50%     { border-radius: 38% 62% 56% 44% / 62% 44% 56% 38%; }
+    75%     { border-radius: 55% 45% 38% 62% / 40% 58% 42% 60%; }
   }
 
   /* Orbiting particles (visible during listening/thinking/speaking) */
@@ -2160,26 +2639,30 @@ boot();
   .vm-orb-particle.p2 { animation: orbit2 4.4s linear infinite; background:#c084fc; box-shadow:0 0 12px #c084fc; }
   .vm-orb-particle.p3 { animation: orbit3 5.6s linear infinite; background:#38bdf8; box-shadow:0 0 12px #38bdf8; }
   @keyframes orbit1 {
-    from { transform: rotate(0deg)   translateX(95px) rotate(0deg); }
-    to   { transform: rotate(360deg) translateX(95px) rotate(-360deg); }
+    from { transform: rotate(0deg)   translateX(109px) rotate(0deg); }
+    to   { transform: rotate(360deg) translateX(109px) rotate(-360deg); }
   }
   @keyframes orbit2 {
-    from { transform: rotate(120deg) translateX(108px) rotate(-120deg); }
-    to   { transform: rotate(480deg) translateX(108px) rotate(-480deg); }
+    from { transform: rotate(120deg) translateX(96px) rotate(-120deg); }
+    to   { transform: rotate(480deg) translateX(96px) rotate(-480deg); }
   }
   @keyframes orbit3 {
-    from { transform: rotate(240deg) translateX(88px)  rotate(-240deg); }
-    to   { transform: rotate(600deg) translateX(88px)  rotate(-600deg); }
+    from { transform: rotate(240deg) translateX(80px)  rotate(-240deg); }
+    to   { transform: rotate(600deg) translateX(80px)  rotate(-600deg); }
   }
 
   /* State-driven overrides */
-  .vm-orb-wrap.state-idle      .vm-orb-particle { opacity: 0; }
+  .vm-orb-wrap.state-idle      .vm-orb-particle { opacity: 0.6; }
   .vm-orb-wrap.state-listening .vm-orb-particle { opacity: 1; }
-  .vm-orb-wrap.state-listening .vm-orb-core    { animation: orbListen 1.3s ease-in-out infinite; }
+  .vm-orb-wrap.state-listening .vm-orb-core    { animation: orbListen 1.3s ease-in-out infinite, vmBlob 6s ease-in-out infinite; }
+  .vm-orb-wrap.state-listening .vm-orb-core::before { animation-duration: 4s; }
   .vm-orb-wrap.state-thinking  .vm-orb-particle { opacity: 1; }
-  .vm-orb-wrap.state-thinking  .vm-orb-core    { animation: orbThink 2.4s ease-in-out infinite; }
+  .vm-orb-wrap.state-thinking  .vm-orb-core    { animation: orbThink 2.4s ease-in-out infinite, vmBlob 5s ease-in-out infinite; }
+  .vm-orb-wrap.state-thinking  .vm-orb-core::before { animation-duration: 3s; }
+  .vm-orb-wrap.state-thinking  .vm-orb-core::after  { animation-duration: 2s; }
   .vm-orb-wrap.state-speaking  .vm-orb-particle { opacity: 1; }
-  .vm-orb-wrap.state-speaking  .vm-orb-core    { animation: orbSpeak 0.55s ease-in-out infinite; }
+  .vm-orb-wrap.state-speaking  .vm-orb-core    { animation: orbSpeak 0.55s ease-in-out infinite, vmBlob 3.5s ease-in-out infinite; }
+  .vm-orb-wrap.state-speaking  .vm-orb-core::before { animation-duration: 2.2s; }
   .vm-orb-wrap.state-error     .vm-orb-core    { animation: orbErr 0.4s ease-in-out 3; }
 
   @keyframes orbListen {
@@ -2211,16 +2694,51 @@ boot();
   }
   .voice-modal .vm-transcript.visible { opacity: 1; }
   .voice-modal .vm-reply {
-    margin-top: 12px;
-    color: #fff;
+    margin-top: 14px;
+    color: #f1eefb;
     font-size: 15px;
-    line-height: 1.45;
-    max-height: 120px; overflow-y: auto;
-    padding: 0 6px;
+    line-height: 1.55;
+    text-align: left;
+    max-height: 168px; overflow-y: auto;
+    padding: 14px 16px;
+    border-radius: 14px;
+    background: rgba(120,90,200,0.10);
+    border: 1px solid rgba(192,132,252,0.16);
+    box-shadow: inset 0 0 24px rgba(56,189,248,0.05);
     opacity: 0;
-    transition: opacity 0.4s;
+    max-width: 92%;
+    margin-left: auto; margin-right: auto;
+    transform: translateY(6px);
+    transition: opacity 0.35s ease, transform 0.35s ease;
   }
-  .voice-modal .vm-reply.visible { opacity: 1; }
+  .voice-modal .vm-reply.visible { opacity: 1; transform: translateY(0); }
+  /* Small "JARVIS" tag above the streamed reply for context. */
+  .voice-modal .vm-reply.visible::before {
+    content: 'JARVIS';
+    display: block;
+    font-size: 10px; font-weight: 700;
+    letter-spacing: 0.22em;
+    color: #c084fc;
+    opacity: 0.7;
+    margin-bottom: 6px;
+  }
+  /* Live "typing" caret while Jarvis is still speaking the streamed reply. */
+  .voice-modal .vm-reply.streaming::after {
+    content: '';
+    display: inline-block;
+    width: 2px; height: 1.05em;
+    margin-left: 3px;
+    vertical-align: -2px;
+    background: #c084fc;
+    border-radius: 1px;
+    animation: vmCaret 0.9s steps(1) infinite;
+  }
+  @keyframes vmCaret { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
+  /* Subtle scrollbar for the reply panel */
+  .voice-modal .vm-reply::-webkit-scrollbar { width: 5px; }
+  .voice-modal .vm-reply::-webkit-scrollbar-thumb {
+    background: rgba(192,132,252,0.35); border-radius: 3px;
+  }
 
   .voice-modal .vm-actions {
     margin-top: 24px;
@@ -2293,15 +2811,80 @@ boot();
 </style>
 
 <div class="fab-dock">
-  <a href="/finex" class="finex-fab">
-    <span>Jarvis FinEx</span>
-    <span class="fab-dot"></span>
-  </a>
+  <!-- One launcher instead of nine loose pills. Four columns of FABs reached
+       across the bottom of the window and collided with the composer and its
+       Search / Deep Research / Agent chips; collapsing them means the dock
+       costs one small control at rest and still opens in a single click. -->
+  <div class="launcher" id="launcher">
+    <button class="launch-trigger" id="launchTrigger" type="button"
+            aria-haspopup="true" aria-expanded="false" aria-controls="launchPanel">
+      <span class="lg-grid" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+      <span>Apps</span>
+      <span class="lg-count" id="launchCount">7</span>
+    </button>
+
+    <div class="launch-panel" id="launchPanel" role="menu" aria-label="Jarvis apps">
+      <div class="lp-head">Jarvis surfaces</div>
+      <a href="/atlas" class="lp-item" data-k="atlas" role="menuitem">
+        <span class="lp-dot"></span>
+        <span class="lp-txt"><b>Atlas</b><em>Search every file by meaning</em></span>
+      </a>
+      <a href="/recall" class="lp-item" data-k="recall" role="menuitem">
+        <span class="lp-dot"></span>
+        <span class="lp-txt"><b>Recall</b><em>What you searched and read</em></span>
+      </a>
+      <a href="/finex" class="lp-item" data-k="finex" role="menuitem">
+        <span class="lp-dot"></span>
+        <span class="lp-txt"><b>FinEx</b><em>Financial statement Q&amp;A</em></span>
+      </a>
+      <a href="/jams" class="lp-item" data-k="jams" role="menuitem">
+        <span class="lp-dot"></span>
+        <span class="lp-txt"><b>JAMS</b><em>Job application tracker</em></span>
+      </a>
+      <a href="/forge" class="lp-item" data-k="forge" role="menuitem">
+        <span class="lp-dot"></span>
+        <span class="lp-txt"><b>Forge</b><em>Repo health and loose ends</em></span>
+      </a>
+      <a href="/sentinel" class="lp-item" data-k="sentinel" role="menuitem">
+        <span class="lp-dot"></span>
+        <span class="lp-txt"><b>Sentinel</b><em>Exposed secrets and permissions</em></span>
+      </a>
+      <a href="/health" class="lp-item" data-k="health" role="menuitem">
+        <span class="lp-dot"></span>
+        <span class="lp-txt"><b>Connections</b><em>Integrations and health</em></span>
+      </a>
+    </div>
+  </div>
+
   <button id="voiceFab" class="voice-fab" type="button" aria-label="Open Jarvis Voice">
-    <span>Jarvis Voice</span>
+    <span>Voice</span>
     <span class="fab-dot"></span>
   </button>
 </div>
+
+<script>
+/* Launcher: click to toggle, click-away or Escape to close. Deliberately not
+   hover-to-open — a panel that appears while the pointer is merely crossing
+   the corner on its way to the composer is worse than the overlap it fixed. */
+(function(){
+  const el = document.getElementById("launcher");
+  const trigger = document.getElementById("launchTrigger");
+  if (!el || !trigger) return;
+  const setOpen = on => {
+    el.classList.toggle("open", on);
+    trigger.setAttribute("aria-expanded", on ? "true" : "false");
+  };
+  trigger.addEventListener("click", e => {
+    e.stopPropagation();
+    setOpen(!el.classList.contains("open"));
+  });
+  document.addEventListener("click", e => { if (!el.contains(e.target)) setOpen(false); });
+  document.addEventListener("keydown", e => { if (e.key === "Escape") setOpen(false); });
+  const n = el.querySelectorAll(".lp-item").length;
+  const badge = document.getElementById("launchCount");
+  if (badge) badge.textContent = String(n);
+})();
+</script>
 
 <!-- Voice modal -->
 <div id="voiceModal" class="voice-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="vmTitle">
@@ -2403,7 +2986,7 @@ boot();
     setOrb('idle');
     setStatusText('idle');
     transEl.textContent = ''; transEl.classList.remove('visible');
-    replyEl.textContent = ''; replyEl.classList.remove('visible');
+    replyEl.textContent = ''; replyEl.classList.remove('visible', 'streaming');
     toggleBtn.disabled = false;
   }
   function closeModal() {
@@ -2415,7 +2998,7 @@ boot();
   // ── Polling ─────────────────────────────────────────────────────────────
   function startPolling() {
     stopPolling();
-    pollTimer = setInterval(pollStatus, 250);
+    pollTimer = setInterval(pollStatus, 120);
   }
   function stopPolling() {
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
@@ -2445,10 +3028,15 @@ boot();
         transEl.textContent = '“' + s.transcript + '”';
         transEl.classList.add('visible');
       }
+      // Live reply transcript. While "speaking", stream the text with a
+      // blinking caret and keep the newest words in view. Once idle, freeze
+      // the final text and drop the caret.
       if (s.reply) {
         replyEl.textContent = s.reply;
         replyEl.classList.add('visible');
+        replyEl.scrollTop = replyEl.scrollHeight;
       }
+      replyEl.classList.toggle('streaming', (s.state === 'speaking'));
       if (!s.active && (s.state === 'idle' || s.state === 'error')) {
         stopPolling();
         toggleBtn.disabled = false;
@@ -2460,7 +3048,7 @@ boot();
   async function start() {
     stickyError = '';                       // Clear any previous error
     transEl.textContent = ''; transEl.classList.remove('visible');
-    replyEl.textContent = ''; replyEl.classList.remove('visible');
+    replyEl.textContent = ''; replyEl.classList.remove('visible', 'streaming');
     setOrb('listening');
     setStatusText('listening');
     startPolling();
@@ -2514,5 +3102,17 @@ boot();
 })();
 </script>
 
+<script>
+(function () {
+  // Hide the voice button entirely when the server has voice disabled
+  // (JARVIS_VOICE_ENABLED=false in .env) — no dead buttons in the UI.
+  fetch('/voice/active').then(r => r.json()).then(d => {
+    if (d && d.enabled === false) {
+      const fab = document.getElementById('voiceFab');
+      if (fab) fab.style.display = 'none';
+    }
+  }).catch(() => {});
+})();
+</script>
 </body>
 </html>

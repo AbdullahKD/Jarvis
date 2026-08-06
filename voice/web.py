@@ -151,6 +151,15 @@ class VoiceSession:
         with self._lock:
             self._level = snapshot
 
+    def _on_partial_reply(self, text: str) -> None:
+        """
+        Streaming brain calls this as the LLM emits tokens, so the UI can show
+        a live transcript of what Jarvis is saying while it's still speaking.
+        Updates only the reply text; leaves the current state untouched.
+        """
+        with self._lock:
+            self._reply = text
+
     def _run(self) -> None:
         import time
         t_start = time.perf_counter()
@@ -195,7 +204,10 @@ class VoiceSession:
                 print("🧠  [voice] Phase 2/3: streaming brain → ElevenLabs...")
 
                 def _flip_to_speaking() -> None:
-                    self._set("speaking", reply="(streaming...)")
+                    # Keep whatever partial text has already streamed in; don't
+                    # clobber it with a placeholder.
+                    with self._lock:
+                        self._state = "speaking"
 
                 t0 = time.perf_counter()
                 try:
@@ -204,6 +216,7 @@ class VoiceSession:
                         tts=self._tts,
                         on_state=_flip_to_speaking,
                         cancel_event=self._cancel,
+                        on_partial=self._on_partial_reply,
                     ) or ""
                 except Exception as exc:  # noqa: BLE001
                     log.exception("streaming brain failed")

@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Jarvis · Vault</title>
+<style>
+  :root{
+    --bg-0:#0b0916; --glass:rgba(26,22,44,.82); --glass-2:rgba(30,26,52,.6); --glass-3:rgba(38,32,62,.5);
+    --stroke:rgba(160,140,255,.14); --stroke-strong:rgba(170,150,255,.30);
+    --text-0:#f3f0fc; --text-1:#cec7ea; --text-2:#918ab2; --text-3:#5b5480;
+    --accent:#b9a3ff; --accent-2:#8b7bf0; --accent-soft:rgba(160,140,255,.12);
+    --green:#5ee7a8; --red:#ff8090; --amber:#ffcf6b; --cyan:#7fe7ff;
+    --r-lg:18px; --r-md:13px; --r-sm:9px;
+    --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter",system-ui,sans-serif;
+    --font-mono:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,monospace;
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;margin:0;}
+  body{color:var(--text-0);font-family:var(--font);font-size:14px;
+    background:radial-gradient(1200px 720px at 80% -16%,rgba(139,92,246,.18),transparent 56%),
+      radial-gradient(1000px 640px at -8% 110%,rgba(217,70,239,.09),transparent 56%),
+      linear-gradient(165deg,#0e0b1e 0%,#0b0917 46%,#080510 100%);min-height:100%;}
+  .chrome{height:46px;display:flex;align-items:center;gap:10px;padding:0 22px;}
+  .chrome .title{color:var(--text-2);font-size:12px;letter-spacing:.08em;text-transform:uppercase;}
+  .chrome .badge{padding:2px 9px;border-radius:999px;background:var(--accent-soft);color:var(--accent);border:1px solid var(--stroke-strong);font-size:10px;letter-spacing:.08em;text-transform:uppercase;}
+  .chrome .right{margin-left:auto;display:flex;align-items:center;gap:12px;}
+  .chrome-back{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:999px;background:var(--glass-3);border:1px solid var(--stroke);color:var(--text-2);font-size:11px;text-decoration:none;transition:.15s;cursor:pointer;}
+  .chrome-back:hover{color:var(--text-0);border-color:var(--stroke-strong);}
+  .wrap{max-width:1080px;margin:0 auto;padding:12px 22px 60px;}
+  h1{font-size:21px;font-weight:700;margin:14px 0 4px;}
+  .sub{color:var(--text-2);font-size:12.5px;margin-bottom:18px;font-family:var(--font-mono);}
+
+  .upload{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:14px 16px;border-radius:var(--r-lg);
+    background:linear-gradient(120deg,rgba(160,140,255,.08),rgba(160,140,255,.02));border:1px solid var(--stroke-strong);margin-bottom:16px;}
+  .upload .lbl{font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);font-weight:700;margin-right:2px;}
+  input[type=file]{display:none;}
+  .btn{font:inherit;font-size:12px;font-weight:600;cursor:pointer;border:1px solid var(--stroke-strong);background:var(--accent-soft);color:var(--accent);border-radius:9px;padding:8px 14px;transition:.15s;display:inline-flex;align-items:center;gap:7px;text-decoration:none;}
+  .btn:hover{background:rgba(160,140,255,.22);border-color:var(--accent);}
+  .btn:disabled{opacity:.5;cursor:default;}
+  .btn.ghost{background:transparent;color:var(--text-2);border-color:var(--stroke);padding:6px 10px;}
+  .btn.ghost:hover{color:var(--text-0);}
+  select,input[type=text]{background:var(--glass-2);border:1px solid var(--stroke);color:var(--text-0);border-radius:9px;padding:8px 11px;font:inherit;font-size:12.5px;outline:none;}
+  select:focus,input:focus{border-color:var(--stroke-strong);}
+  .fname{font-size:12px;color:var(--text-2);font-family:var(--font-mono);}
+  .ustat{font-size:12px;color:var(--text-2);margin-left:auto;}
+
+  .toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px;}
+  .search{flex:1;min-width:180px;position:relative;}
+  .search input{width:100%;padding-left:32px;}
+  .search svg{position:absolute;left:10px;top:9px;width:15px;height:15px;stroke:var(--text-3);fill:none;stroke-width:2;}
+  .chips{display:flex;gap:6px;flex-wrap:wrap;}
+  .chip{font-family:var(--font-mono);font-size:11px;color:var(--text-2);background:var(--glass-2);border:1px solid var(--stroke);border-radius:999px;padding:5px 11px;cursor:pointer;transition:.15s;}
+  .chip:hover{color:var(--text-0);border-color:var(--stroke-strong);}
+  .chip.active{color:var(--accent);border-color:var(--stroke-strong);background:var(--accent-soft);}
+  .chip .c{opacity:.6;margin-left:5px;}
+
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:13px;}
+  .doc{background:var(--glass);border:1px solid var(--stroke);border-radius:var(--r-md);padding:14px;display:flex;flex-direction:column;gap:9px;transition:border-color .2s,transform .18s;}
+  .doc:hover{border-color:var(--stroke-strong);transform:translateY(-1px);}
+  .doc .top{display:flex;align-items:flex-start;gap:11px;}
+  .doc .ic{width:38px;height:38px;flex:none;border-radius:10px;display:grid;place-items:center;font-size:18px;background:var(--accent-soft);border:1px solid var(--stroke);}
+  .doc .nm{font-size:13.5px;font-weight:600;color:var(--text-0);line-height:1.3;word-break:break-word;}
+  .doc .meta{font-size:10.5px;color:var(--text-3);font-family:var(--font-mono);margin-top:3px;}
+  .doc .tag{flex:none;font-family:var(--font-mono);font-size:9px;letter-spacing:.06em;text-transform:uppercase;padding:3px 8px;border-radius:999px;border:1px solid var(--stroke-strong);color:var(--accent);background:var(--accent-soft);white-space:nowrap;}
+  .doc .ver{font-family:var(--font-mono);font-size:9px;color:var(--text-3);}
+  .doc .excerpt{font-size:11.5px;color:var(--text-2);line-height:1.5;max-height:52px;overflow:hidden;
+    -webkit-mask-image:linear-gradient(180deg,#000 60%,transparent);mask-image:linear-gradient(180deg,#000 60%,transparent);}
+  .doc .actions{display:flex;align-items:center;gap:8px;margin-top:auto;}
+  .doc .actions select{font-size:11px;padding:5px 8px;flex:1;}
+  .empty{grid-column:1/-1;color:var(--text-3);font-size:13px;text-align:center;padding:40px 10px;line-height:1.6;}
+  .toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:var(--glass);border:1px solid var(--stroke-strong);border-radius:12px;padding:10px 16px;font-size:12.5px;color:var(--text-0);box-shadow:0 12px 30px -12px rgba(0,0,0,.7);opacity:0;pointer-events:none;transition:opacity .2s;z-index:50;}
+  .toast.show{opacity:1;}
+</style>
+</head>
+<body>
+<div class="chrome">
+  <span class="title">Jarvis</span><span class="badge">Vault</span>
+  <div class="right">
+    <span id="clock" class="fname"></span>
+    <a href="/" class="chrome-back">← Back to Jarvis</a>
+  </div>
+</div>
+
+<div class="wrap">
+  <h1>Document Vault</h1>
+  <div class="sub" id="sub">Your CVs, cover letters, certificates and IDs — versioned and searchable.</div>
+
+  <div class="upload">
+    <span class="lbl">Add</span>
+    <button class="btn" onclick="document.getElementById('fin').click()">Choose file</button>
+    <input type="file" id="fin" accept=".pdf,.docx,.doc,.txt,.md,.png,.jpg,.jpeg" onchange="onPick()">
+    <span class="fname" id="fname">No file chosen</span>
+    <select id="cat">
+      <option>CV</option><option>Cover Letter</option><option>Certificate</option>
+      <option>Transcript</option><option>Visa / ID</option><option>Portfolio</option>
+      <option>Reference</option><option selected>Other</option>
+    </select>
+    <input type="text" id="label" placeholder="Label (e.g. Careem v2)" maxlength="80" style="width:190px">
+    <button class="btn" id="upBtn" onclick="upload()" disabled>Upload</button>
+    <span class="ustat" id="ustat"></span>
+  </div>
+
+  <div class="toolbar">
+    <div class="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+      <input type="text" id="q" placeholder="Search filenames and contents…" oninput="debouncedLoad()"></div>
+    <div class="chips" id="chips"></div>
+  </div>
+
+  <div class="grid" id="grid"><div class="empty">Loading…</div></div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const $=s=>document.querySelector(s);
+function esc(s){const d=document.createElement('div');d.textContent=(s==null?'':String(s));return d.innerHTML;}
+function tick(){const e=$('#clock');if(e)e.textContent=new Date().toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});}
+tick();setInterval(tick,1000);
+function toast(m,ms=3200){const t=$('#toast');t.textContent=m;t.classList.add('show');clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('show'),ms);}
+let state={category:'',cats:[],counts:{},total:0};
+
+function icon(suffix){suffix=(suffix||'').toLowerCase();
+  if(suffix==='.pdf')return'📕'; if(suffix==='.docx'||suffix==='.doc')return'📘';
+  if(suffix==='.md'||suffix==='.txt')return'📝'; if(['.png','.jpg','.jpeg'].includes(suffix))return'🖼️'; return'📄';}
+function fmtSize(b){if(b==null)return'';if(b<1024)return b+' B';if(b<1048576)return (b/1024).toFixed(0)+' KB';return (b/1048576).toFixed(1)+' MB';}
+function fmtDate(iso){if(!iso)return'';const d=new Date(iso);if(isNaN(d))return'';return d.toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'});}
+
+function onPick(){const f=$('#fin').files[0];$('#fname').textContent=f?f.name:'No file chosen';$('#upBtn').disabled=!f;
+  // auto-guess category
+  if(f){const n=f.name.toLowerCase();const g=n.includes('cover')?'Cover Letter':n.includes('cv')||n.includes('resume')?'CV':n.includes('transcript')?'Transcript':n.includes('cert')?'Certificate':n.includes('passport')||n.includes('visa')||n.includes('id')?'Visa / ID':n.includes('reference')?'Reference':null;
+    if(g){[...$('#cat').options].forEach(o=>{if(o.value===g)$('#cat').value=g;});}}}
+
+async function upload(){
+  const f=$('#fin').files[0]; if(!f)return;
+  const fd=new FormData(); fd.append('file',f); fd.append('category',$('#cat').value); fd.append('label',$('#label').value);
+  $('#upBtn').disabled=true; $('#ustat').textContent='Uploading…';
+  try{const r=await fetch('/vault/upload',{method:'POST',body:fd}); const d=await r.json();
+    if(d.ok){$('#ustat').textContent='✓ Added'+(d.version>1?` (v${d.version})`:'');$('#fin').value='';$('#fname').textContent='No file chosen';$('#label').value='';load();}
+    else $('#ustat').textContent='⚠ '+(d.error||'failed');
+  }catch(e){$('#ustat').textContent='⚠ '+e.message;} finally{$('#upBtn').disabled=false;setTimeout(()=>$('#ustat').textContent='',2500);}
+}
+
+function renderChips(){
+  const chips=[{k:'',label:'All',n:state.total}].concat(state.cats.map(c=>({k:c,label:c,n:state.counts[c]||0})));
+  $('#chips').innerHTML=chips.map(c=>`<div class="chip ${state.category===c.k?'active':''}" onclick="setCat('${esc(c.k)}')">${esc(c.label)}${c.n?`<span class="c">${c.n}</span>`:''}</div>`).join('');
+}
+function setCat(k){state.category=k;load();}
+
+async function updateDoc(id,category){
+  try{await fetch('/vault/update/'+id,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({category})});toast('Moved to '+category);load();}catch(e){toast('Update failed');}
+}
+
+function render(d){
+  state.cats=d.categories||[];state.counts=d.counts||{};state.total=d.total||0;
+  $('#sub').textContent=`${state.total} document${state.total!==1?'s':''} stored${state.category?` · filtered by ${state.category}`:''}.`;
+  renderChips();
+  const items=d.items||[];
+  const grid=$('#grid');
+  if(!items.length){grid.innerHTML=`<div class="empty">${state.total?'No documents match.':'No documents yet.<br>Add your CVs, cover letters, certificates and IDs above.'}</div>`;return;}
+  grid.innerHTML=items.map(it=>`
+    <div class="doc">
+      <div class="top">
+        <div class="ic">${icon(it.suffix)}</div>
+        <div style="flex:1;min-width:0">
+          <div class="nm">${esc(it.label||it.filename)}</div>
+          <div class="meta">${esc(it.filename)}${it.version>1?` · <span class="ver">v${it.version}</span>`:''}</div>
+        </div>
+        <span class="tag">${esc(it.category)}</span>
+      </div>
+      ${it.excerpt?`<div class="excerpt">${esc(it.excerpt)}</div>`:''}
+      <div class="meta">${fmtSize(it.size)} · ${fmtDate(it.uploaded_at)}</div>
+      <div class="actions">
+        <a class="btn ghost" href="/vault/file/${esc(it.id)}" target="_blank" rel="noopener">⇩ Download</a>
+        <select onchange="updateDoc('${esc(it.id)}',this.value)" title="Change category">
+          ${(state.cats).map(c=>`<option ${c===it.category?'selected':''}>${esc(c)}</option>`).join('')}
+        </select>
+      </div>
+    </div>`).join('');
+}
+
+let _t=null;
+function debouncedLoad(){clearTimeout(_t);_t=setTimeout(load,280);}
+async function load(){
+  const q=encodeURIComponent($('#q').value||'');const cat=encodeURIComponent(state.category||'');
+  try{const r=await fetch(`/vault/list?q=${q}&category=${cat}`,{headers:{'cache-control':'no-cache'}});
+    if(!r.ok)throw new Error('HTTP '+r.status);render(await r.json());
+  }catch(e){$('#grid').innerHTML=`<div class="empty">Couldn't load the vault: ${esc(e.message)}. Is JARVIS running?</div>`;}
+}
+load();
+</script>
+</body>
+</html>
