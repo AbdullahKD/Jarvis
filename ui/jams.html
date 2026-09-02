@@ -794,15 +794,29 @@ const PAY_HOSTS=['jobleads.com','flexjobs.com','theladders.com','ladders.com','s
 function isPaidApply(j){try{const h=new URL(j.url||'').hostname.replace(/^www\./,'').toLowerCase();if(PAY_HOSTS.some(d=>h===d||h.endsWith('.'+d)))return true;}catch(e){}
   const v=String(j.via||'').toLowerCase().replace(/^www\./,'');return !!v&&PAY_HOSTS.some(d=>v===d||v.endsWith('.'+d));}
 let curTab="Good fit", curRole="All", curJob=null, spon="Yes", engineSel="local";
-const BUCKETS=["All","Good fit","UK","Germany","Europe","Middle East","Remote","Other","Sponsors"];
+const BUCKETS=["All","Good fit","Internships","UK","Germany","Europe","Middle East","Remote","Other","Sponsors"];
+// Single source of truth for tab filtering — this predicate was previously duplicated in three places
+// (visible(), cntFor() and the role-count base), which is how tabs and their counts drifted apart.
+function matchesTab(j,tab){
+  if(tab==="All")return true;
+  if(tab==="Sponsors")return isSponsor(j);
+  if(tab==="Good fit")return isGoodFit(j);
+  if(tab==="Internships")return isEarlyCareers(j);
+  return (j.location_bucket||"Other")===tab;
+}
 // Sponsors view = explicit visa sponsors PLUS the Gulf (employers there sponsor expats by default)
 const isSponsor=j=>j.sponsorship_signal==="sponsorship_available"||(j.location_bucket||"")==="Middle East";
 // "Good fit" = right field (AI/ML, Software, Automation) + entry-level + decent score + workable visa (UK, or not a confirmed non-sponsor)
 function isGoodFit(j){
   const role=roleOf(j.title);
-  const fieldOK=role==="AI / ML"||role==="Software"||role==="Automation";
+  // Early-careers titles ("Summer Intern", "Industrial Placement") carry no tech word, so roleOf()
+  // buckets them as "Other" and the field gate used to hide them. Discovery has already confirmed
+  // the JD is on-stack for these, so let type stand in for role — and hold them to a lower score bar,
+  // since internship posts are short and score fewer keyword hits than a full job spec.
+  const early=isEarlyCareers(j);
+  const fieldOK=early||role==="AI / ML"||role==="Software"||role==="Automation";
   const sponOK=(j.location_bucket==="UK")||j.sponsorship_signal!=="no_sponsorship";
-  return fieldOK && lvlOf(j)!=="Senior" && num(j.match_score)>=55 && sponOK;
+  return fieldOK && lvlOf(j)!=="Senior" && num(j.match_score)>=(early?45:55) && sponOK;
 }
 const ROLECATS=["All","AI / ML","Software","Data","Automation","Other"];
 function roleOf(t){t=(t||"").toLowerCase();
@@ -840,6 +854,25 @@ function levelOf(j){
 const LVLCOL={Entry:["#4ade80","rgba(74,222,128,.12)"],Mid:["#fbbf24","rgba(251,191,36,.12)"],Senior:["#f87171","rgba(248,113,113,.12)"]};
 // prefer the level computed server-side by discovery (full JD + salary); fall back to client heuristic
 function lvlOf(j){const v=String(j.level||"");if(/^entry$/i.test(v))return"Entry";if(/^mid$/i.test(v))return"Mid";if(/^senior$/i.test(v))return"Senior";return levelOf(j);}
+// Employment type — distinct from seniority. An internship and a permanent graduate role were both
+// just level:"Entry" before, so internships were invisible on the board. Mirrors discovery's jobType();
+// prefer the server-computed job_type (it sees the full JD) and fall back to this client heuristic.
+function typeOfLocal(j){
+  const t=(j.title||"").toLowerCase(), d=(j.description||"").toLowerCase(), both=t+" "+d;
+  if(/\b(apprentice|apprenticeship|degree apprenticeship)\b/.test(t))return"Apprenticeship";
+  if(/\b(placement year|industrial placement|year in industry|work placement|12 month placement|sandwich placement)\b/.test(both))return"Placement";
+  if(/\b(intern|interns|internship|internships|summer analyst|summer scheme|vacation scheme|praktikum|praktikant|werkstudent)\b/.test(t))return"Internship";
+  if(/\b(graduate scheme|graduate programme|graduate program|grad scheme|graduate analyst|graduate engineer|graduate developer|graduate role|graduate|trainee|traineeship|early careers?|campus hire|junior)\b/.test(t))return"Graduate";
+  return"Full-time";
+}
+const TYPES=["Internship","Placement","Apprenticeship","Graduate","Full-time"];
+function typeOf(j){const v=String(j.job_type||"");return TYPES.indexOf(v)>=0?v:typeOfLocal(j);}
+const isEarlyCareers=j=>["Internship","Placement","Apprenticeship"].indexOf(typeOf(j))>=0;
+const TYPECOL={Internship:["#38bdf8","rgba(56,189,248,.12)"],Placement:["#a78bfa","rgba(167,139,250,.12)"],Apprenticeship:["#fb923c","rgba(251,146,60,.12)"],Graduate:["#4ade80","rgba(74,222,128,.12)"]};
+function typeChip(j){const T=typeOf(j),c=TYPECOL[T];return c?`<span class="chip" style="color:${c[0]};background:${c[1]};border-color:transparent">${T}</span>`:'';}
+// Eligibility caveats from discovery (apprenticeship funding residency rules, student-only internships).
+// Shown as a warning, never used to hide a job — the user decides.
+function eligChip(j){const n=String(j.eligibility_note||"");return n?`<span class="chip" title="${esc(n)}" style="color:var(--amber);background:rgba(251,191,36,.12);border-color:transparent">⚠ Check eligibility</span>`:'';}
 function levelChip(j){const L=lvlOf(j),c=LVLCOL[L]||LVLCOL.Mid;return `<span class="chip" style="color:${c[0]};background:${c[1]};border-color:transparent">${L}</span>`;}
 function salChip(j){return j.salary_display?`<span class="chip" style="color:var(--accent3);border-color:transparent;background:rgba(56,189,248,.08)">${esc(j.salary_display)}</span>`:'';}
 function cleanJD(d){return String(d||"").replace(/<[^>]+>/g," ").replace(/&nbsp;/g," ").replace(/&amp;/g,"&").replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/&#39;/g,"'").replace(/&quot;/g,'"').replace(/[ \t]{2,}/g," ").replace(/\n{3,}/g,"\n\n").trim();}
@@ -857,7 +890,8 @@ function openJob(i){
       <div class="dl-cell"><div class="k">Match</div><div class="v" style="color:${tc}">${s}/100</div></div>
       <div class="dl-cell"><div class="k">Posted</div><div class="v">${ago(j.date_posted)}</div></div>
     </div>
-    <div class="dl-block"><div class="dl-kw">${levelChip(j)}${salChip(j)}${sponChip(j.sponsorship_signal,j.sponsor_evidence)}${deChip(j)}<span class="chip src">${esc(j.source)||"—"}</span></div></div>
+    <div class="dl-block"><div class="dl-kw">${typeChip(j)}${levelChip(j)}${salChip(j)}${eligChip(j)}${sponChip(j.sponsorship_signal,j.sponsor_evidence)}${deChip(j)}<span class="chip src">${esc(j.source)||"—"}</span></div></div>
+    ${j.eligibility_note?`<div class="dl-block"><div class="dl-reason" style="border-color:var(--amber);color:var(--amber)">⚠ ${esc(j.eligibility_note)}</div></div>`:''}
     ${j.sponsor_evidence?`<div class="dl-block"><div class="k">Sponsorship signal — based on</div><div class="dl-reason" style="font-size:12px">${esc(j.sponsor_evidence)}</div></div>`:''}
     <div class="dl-block"><div class="k">Job description</div>
       <div class="dl-reason" style="max-height:44vh;overflow:auto;white-space:pre-wrap;line-height:1.6">${j.description?esc(cleanJD(j.description)):"No description was captured for this posting. Use “Open posting” to read it on the source site."}</div>
@@ -886,9 +920,7 @@ function visible(){
   const qel=document.getElementById("q");const ql=(qel?qel.value:"").toLowerCase();
   const AB=appliedBlockers(), DB=dismissedBlockers();
   let a=JOBS.filter(j=>["dismissed","applied"].indexOf(j.status||"new")<0 && !matchesBlock(AB,j) && !matchesBlock(DB,j) && !isPaidApply(j));
-  if(curTab==="Sponsors")a=a.filter(isSponsor);
-  else if(curTab==="Good fit")a=a.filter(isGoodFit);
-  else if(curTab!=="All")a=a.filter(j=>(j.location_bucket||"Other")===curTab);
+  a=a.filter(j=>matchesTab(j,curTab));
   if(curRole!=="All")a=a.filter(j=>roleOf(j.title)===curRole);
   if(ql)a=a.filter(j=>((j.title||"")+" "+(j.company||"")).toLowerCase().includes(ql));
   const by=document.getElementById("sortBy").value;
@@ -898,19 +930,19 @@ function visible(){
 function renderStats(){
   const AB=appliedBlockers(), DB=dismissedBlockers();
   const avail=JOBS.filter(j=>["dismissed","applied"].indexOf(j.status||"new")<0 && !matchesBlock(AB,j) && !matchesBlock(DB,j) && !isPaidApply(j));
-  const gf=avail.filter(isGoodFit).length, sp=avail.filter(isSponsor).length;
+  const gf=avail.filter(isGoodFit).length, sp=avail.filter(isSponsor).length, ic=avail.filter(isEarlyCareers).length;
   const pipeN=PIPE.filter(r=>String(r.status||"").toLowerCase()!=="dismissed").length;
   const avg=JOBS.length?Math.round(JOBS.reduce((s,j)=>s+num(j.match_score),0)/JOBS.length):0;
   document.getElementById("stats").innerHTML=[
-    ["Good fit",gf,"var(--lime)"],["Sponsors",sp,"var(--accent3)"],["Live jobs",avail.length,"var(--txt)"],["In pipeline",pipeN,"var(--accent)"],["Avg match",avg,"var(--amber)"]
+    ["Good fit",gf,"var(--lime)"],["Internships",ic,"var(--accent3)"],["Sponsors",sp,"var(--accent3)"],["Live jobs",avail.length,"var(--txt)"],["In pipeline",pipeN,"var(--accent)"],["Avg match",avg,"var(--amber)"]
   ].map(([k,v,c])=>`<div class="stat"><span class="sdot" style="background:${c}"></span><div><div class="k">${k}</div><div class="v">${v}</div></div></div>`).join("");
 }
 function renderFilters(){
   const AB=appliedBlockers(), DB=dismissedBlockers();
   const avail=JOBS.filter(j=>["dismissed","applied"].indexOf(j.status||"new")<0 && !matchesBlock(AB,j) && !matchesBlock(DB,j) && !isPaidApply(j));
-  const cntFor=b=> b==="All"?avail.length : b==="Sponsors"?avail.filter(isSponsor).length : b==="Good fit"?avail.filter(isGoodFit).length : avail.filter(j=>(j.location_bucket||"Other")===b).length;
+  const cntFor=b=>avail.filter(j=>matchesTab(j,b)).length;
   const loc=BUCKETS.map(b=>`<div class="tab ${b===curTab?'active':''}" onclick="pick('${b}')">${b}<span class="c">${cntFor(b)}</span></div>`).join("");
-  const base=avail.filter(j=>(curTab==="All"||(curTab==="Sponsors"?isSponsor(j):curTab==="Good fit"?isGoodFit(j):(j.location_bucket||"Other")===curTab)));
+  const base=avail.filter(j=>matchesTab(j,curTab));
   const rol=ROLECATS.map(r=>{
     const n=r==="All"?base.length:base.filter(j=>roleOf(j.title)===r).length;
     return `<div class="tab ${r===curRole?'active':''}" onclick="pickRole('${r}')">${r}<span class="c">${n}</span></div>`;
@@ -934,7 +966,7 @@ function renderGrid(){
         <div class="score"><b style="color:${tc}">${s}</b><span>match</span></div>
       </div>
       <div class="sbar"><i style="width:${s}%;background:${tc}"></i></div>
-      <div class="meta">${levelChip(j)}${salChip(j)}${fresh<=3?'<span class="chip new">new</span>':''}${sponChip(j.sponsorship_signal,j.sponsor_evidence)}${deChip(j)}${vs==="seen"?'<span class="chip viewed">viewed</span>':''}<span class="chip src">${esc(j.source)||"—"}</span></div>
+      <div class="meta">${typeChip(j)}${levelChip(j)}${salChip(j)}${eligChip(j)}${fresh<=3?'<span class="chip new">new</span>':''}${sponChip(j.sponsorship_signal,j.sponsor_evidence)}${deChip(j)}${vs==="seen"?'<span class="chip viewed">viewed</span>':''}<span class="chip src">${esc(j.source)||"—"}</span></div>
       <div class="loc">◦ ${esc(j.location)||esc(j.location_bucket)} &nbsp;·&nbsp; ${ago(j.date_posted)}</div>
       ${vs==="ask"?`<div class="nudge">You opened this posting — did you apply?
         <button class="nbtn yes" onclick="event.stopPropagation();markApplied(${i})">✓ Yes</button>
@@ -1005,7 +1037,7 @@ function openPipe(idx){
       <div class="dl-cell"><div class="k">Fit score</div><div class="v" style="color:${tc}">${fit!==""?fit+"/100":"—"}</div></div>
       <div class="dl-cell"><div class="k">Generated</div><div class="v">${esc(r.applied_date)||"—"}</div></div>
     </div>
-    ${tailoredNo?`<div class="dl-block"><div class="dl-reason" style="border-color:var(--red);background:var(--redbg);color:var(--red)">⚠ <b>Not tailored.</b> The local model returned no/invalid JSON, so your master CV was used unchanged — summary, keywords and cover letter were not adapted to this role. Re-generate with Ollama + llama3.2:3b running, or choose <b>Premium · Claude</b> for reliable tailoring.</div></div>`:''}
+    ${tailoredNo?`<div class="dl-block"><div class="dl-reason" style="border-color:var(--red);background:var(--redbg);color:var(--red)">⚠ <b>Not tailored.</b> Your master CV was used unchanged — summary, keywords and cover letter were not adapted to this role.${r.tailor_error?`<div style="margin-top:6px;opacity:.85;font-size:11px">Reason: ${esc(r.tailor_error)}</div>`:''}<div style="margin-top:6px;opacity:.85;font-size:11px">Check <code>ollama ps</code> shows <b>qwen3:8b</b>, then re-generate — or choose <b>Premium · Claude</b>.</div></div></div>`:''}
     ${r._working?`<div class="dl-block"><div class="k">Progress</div><div class="dl-reason"><span class="spin"></span> &nbsp;${esc(r._stageText||"Working…")}</div></div>`:''}
     ${r._error?`<div class="dl-block"><div class="k">Error</div><div class="dl-reason" style="color:var(--red)">${esc(r._error)}</div></div>`:''}
     ${reason?`<div class="dl-block"><div class="k">Why this fit</div><div class="dl-reason">${esc(reason)}</div></div>`:''}
@@ -1111,15 +1143,15 @@ document.getElementById("go").onclick=()=>{
   PIPE.push(entry);                 // pipeline updates immediately
   renderPipe(); renderStats();
   const s=document.getElementById("status");
-  s.textContent=eng==="claude"?"⏳ Generating with Claude (premium) — about 10–20 seconds.":"⏳ Generating locally with llama3.2:3b — about 1–3 minutes on your Mac. You can close this and watch the pipeline card.";
+  s.textContent=eng==="claude"?"⏳ Generating with Claude (premium) — about 10–20 seconds.":"⏳ Generating locally with qwen3:8b — about 40–60 seconds on your Mac. You can close this and watch the pipeline card.";
   entry._stage=0; renderProg(entry);
   // staged progress, timed to the engine's typical duration (advances up to the last step, then waits for the real result)
-  const total=eng==="claude"?16000:115000, per=total/(STAGES.length-1), t0=Date.now();
+  const total=eng==="claude"?16000:50000, per=total/(STAGES.length-1), t0=Date.now();
   entry._timer=setInterval(()=>{
     const el=Math.floor((Date.now()-t0)/1000), mm=Math.floor(el/60), ss=String(el%60).padStart(2,"0");
     const k=Math.min(STAGES.length-1, Math.floor((Date.now()-t0)/per));
     if(k!==entry._stage){entry._stage=k; entry._stageText=STAGES[k]; renderProg(entry); renderPipe();}
-    s.textContent=(eng==="claude"?"⏳ Generating with Claude":"⏳ Generating locally (llama3.2:3b)")+" — "+mm+":"+ss+" elapsed"+(eng==="claude"?"":"  ·  usually 1–2 min on your Mac");
+    s.textContent=(eng==="claude"?"⏳ Generating with Claude":"⏳ Generating locally (qwen3:8b)")+" — "+mm+":"+ss+" elapsed"+(eng==="claude"?"":"  ·  usually 40–60s on your Mac");
   },1000);
   fetch(APPLY_URL,{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({title:job.title,company:job.company,location:job.location||job.location_bucket,

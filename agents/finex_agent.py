@@ -234,15 +234,25 @@ class FinExAgent:
                     pass  # prior year insert failing is non-fatal
 
             validation = meta.get("validation", {})
+            # `nulls` is the half of the result that used to be invisible: the
+            # fields the extractor declined to fill, each with the reason. A
+            # caller that only counts fields_extracted cannot tell a line the
+            # accounts never printed from one the parser failed on, and that is
+            # precisely the distinction a person reading the dashboard needs.
+            nulls = meta.get("nulls", {})
             return {
                 "success": True,
                 "company": company,
                 "period": period_label,
+                "extractor": meta.get("extractor", "v3"),
                 "fields_extracted": len(current),
                 "prior_year_extracted": prior_inserted,
+                "fields_refused": nulls,
                 "validation": {
                     "checks_passed": len(validation.get("passed", [])),
                     "checks_failed": len(validation.get("failed", [])),
+                    "checks_advisory": len(validation.get("advisory", [])),
+                    "checks_tautological": len(validation.get("tautological", [])),
                     "warnings": validation.get("warnings", []),
                 },
             }

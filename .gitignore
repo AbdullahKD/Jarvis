@@ -11,6 +11,14 @@ venv/
 data/
 logs/
 
+# Third-party annual-report PDFs used as FinEx test fixtures.
+# These are copyrighted documents belonging to JLR, Tesco, Unilever, Vodafone,
+# Shell and HSBC — they must NOT be redistributed from a public repo. They were
+# purged from git history on 2026-09-02. Keep them locally so the FinEx
+# extraction tests can run; the tests skip cleanly when they are absent.
+FinEx Data/
+_finex_stage/
+
 # Zip files
 *.zip
 

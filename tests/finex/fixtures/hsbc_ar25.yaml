@@ -1,0 +1,25 @@
+company: HSBC Holdings plc
+pdf: 260225-annual-report-and-accounts-2025.pdf
+currency: USD
+scale: 1000000
+fiscal_year: 2025
+prior_year: 2024
+statements:
+  pnl: 264
+  bs: 266
+  cf: 270
+values:
+  operating_profit:   {current: 27996,   prior: 29397,   page: 264, label: "Operating profit"}
+  profit_before_tax:  {current: 29907,   prior: 32309,   page: 264, label: "Profit before tax"}
+  tax_expense:        {current: 6776,    prior: 7310,    page: 264, label: "Tax expense"}
+  net_profit:         {current: 23131,   prior: 24999,   page: 264, label: "Profit for the year"}
+  operating_expenses: {current: 36428,   prior: 33043,   page: 264, label: "Total operating expenses"}
+  total_assets:       {current: 3233034, prior: 3017048, page: 266, label: "Total assets"}
+  total_liabilities:  {current: 3027368, prior: 2824775, page: 266, label: "Total liabilities"}
+  total_equity:       {current: 205666,  prior: 192273,  page: 266, label: "Total equity"}
+  operating_cashflow: {current: 29766,   prior: 65305,   page: 270, label: "Net cash from operating activities"}
+null_expected:
+  # A bank's income statement opens with net interest income. There is no
+  # revenue line, and "- insurance service revenue" is a component of the
+  # insurance service result, not a group top line.
+  revenue: "no revenue line on a bank income statement"

@@ -1,0 +1,19 @@
+company: Unilever PLC
+pdf: unilever-annual-report-and-accounts-2025.pdf
+currency: EUR
+scale: 1000000
+fiscal_year: 2025
+prior_year: 2024
+statements:
+  pnl: 131
+  bs: 134
+  cf: 135
+values:
+  revenue:            {current: 50503, prior: 52479, page: 131, label: "Turnover"}
+  operating_profit:   {current: 9037,  prior: 8829,  page: 131, label: "Operating profit"}
+  profit_before_tax:  {current: 8693,  prior: 8371,  page: 131, label: "Profit before taxation from continuing operations"}
+  net_profit:         {current: 10011, prior: 6369,  page: 131, label: "Total net profit"}
+  total_assets:       {current: 70471, prior: 79750, page: 134, label: "Total assets"}
+  total_liabilities:  {current: 52884, prior: 57195, page: 134, label: "Total liabilities"}
+  total_equity:       {current: 17587, prior: 22555, page: 134, label: "Total equity"}
+  operating_cashflow: {current: 8350,  prior: 9519,  page: 135, label: "Total cash flows from operating activities"}

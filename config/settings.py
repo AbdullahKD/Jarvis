@@ -163,6 +163,10 @@ FAVOURITE_FOOTBALL_LEAGUE = os.getenv("FAVOURITE_FOOTBALL_LEAGUE", "premier_leag
 FAVOURITE_BASKETBALL_LEAGUE = os.getenv("FAVOURITE_BASKETBALL_LEAGUE", "nba")
 
 # ── Weather ────────────────────────────────────────────────────────────────
+# Defaults are deliberately a generic city centre (London), NOT a home address.
+# Set DEFAULT_LATITUDE / DEFAULT_LONGITUDE / DEFAULT_LOCATION_NAME in your local
+# .env to point this at your actual location — .env is gitignored, so personal
+# coordinates stay off the public repo.
 DEFAULT_LATITUDE = float(os.getenv("DEFAULT_LATITUDE", "51.5074"))
 DEFAULT_LONGITUDE = float(os.getenv("DEFAULT_LONGITUDE", "-0.1278"))
-DEFAULT_LOCATION_NAME = os.getenv("DEFAULT_LOCATION_NAME", "High Wycombe")
+DEFAULT_LOCATION_NAME = os.getenv("DEFAULT_LOCATION_NAME", "London")

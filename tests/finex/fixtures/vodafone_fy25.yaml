@@ -1,0 +1,31 @@
+# Ground truth — hand-read from the printed consolidated statements.
+# Every value carries the page it was read from and the line item exactly as
+# printed, so a reviewer can check any figure without re-deriving it.
+company: Vodafone Group Plc
+pdf: vodafone-fy25-results-announcement.pdf
+currency: EUR
+scale: 1000000          # figures below are as printed, in € million
+fiscal_year: 2025       # year ended 31 March 2025
+prior_year: 2024
+statements:
+  pnl: 20
+  bs: 22
+  cf: 24
+values:
+  revenue:            {current: 37448,  prior: 36717,  page: 20, label: "Revenue"}
+  cost_of_goods_sold: {current: 24929,  prior: 24459,  page: 20, label: "Cost of sales"}
+  gross_profit:       {current: 12519,  prior: 12258,  page: 20, label: "Gross profit"}
+  operating_profit:   {current: -411,   prior: 3665,   page: 20, label: "Operating (loss)/profit"}
+  profit_before_tax:  {current: -1478,  prior: 1620,   page: 20, label: "(Loss)/profit before taxation"}
+  tax_expense:        {current: 2246,   prior: 50,     page: 20, label: "Income tax expense"}
+  # Statutory bottom line, including discontinued operations. The
+  # continuing-only figure of (3,724) sits directly above it and is NOT what
+  # the accounts report as profit for the financial year.
+  net_profit:         {current: -3746,  prior: 1505,   page: 20, label: "(Loss)/profit for the financial year"}
+  total_assets:       {current: 128521, prior: 144350, page: 22, label: "Total assets"}
+  total_equity:       {current: 53916,  prior: 60998,  page: 22, label: "Total equity"}
+  operating_cashflow: {current: 15373,  prior: 16557,  page: 24, label: "Inflow from operating activities"}
+derived_ok:
+  # Not printed: the balance sheet ends at "Total equity and liabilities".
+  # Total assets less total equity gives the same figure.
+  total_liabilities:  {current: 74605,  prior: 83352,  note: "128,521 - 53,916"}

@@ -69,8 +69,16 @@ MONETARY_COLS = {
     "total_liabilities", "current_liabilities", "non_current_liabilities",
     "total_equity", "share_capital", "long_term_debt", "gross_turnover",
     "operating_cashflow", "investing_cashflow", "financing_cashflow",
-    "dividend_per_share"
 }
+
+# Per-share figures are NOT bulk monetary amounts and must never be scaled.
+# dividend_per_share used to sit in MONETARY_COLS above, so a £1.41 dividend
+# was rendered "£1.41k" — and because every long-form level (L3-L6 and DETAIL)
+# reads its context from here while L1 formats through LLM_SQL._fmt_value,
+# which has always treated per-share fields correctly, the same company could
+# report two different dividends depending on which level answered.
+# LLM_SQL._NO_SCALE_FIELDS is the matching set; keep the two in step.
+PER_SHARE_COLS = {"eps", "dividend_per_share"}
 
 _SKIP_COLS = {"id"}
 
@@ -176,7 +184,11 @@ def get_financial_context(company: str = "Bestway Cement", years: list = None) -
             if val is None:
                 continue
             if isinstance(val, float):
-                if col in MONETARY_COLS:
+                if col in PER_SHARE_COLS:
+                    # Explicitly labelled: unlabelled, the model has no way to
+                    # tell a per-share figure from a bulk amount.
+                    lines.append(f"  {col}: {sym}{val:,.2f} per share")
+                elif col in MONETARY_COLS:
                     if abs(val) >= 1_000_000_000:
                         human = f"({sym}{val/1_000_000_000:,.2f}bn)"
                     elif abs(val) >= 1_000_000:

@@ -12,7 +12,6 @@ All 8 improvements implemented:
 """
 
 import re
-import requests
 from typing import Optional
 from finex.db_query import run_query, get_financial_context, get_all_years, format_result
 from finex.chroma_store import pdf_store
@@ -56,27 +55,49 @@ def invalidate_cache(company: str):
 
 import os as _os_llm
 
-_OLLAMA_URL   = _os_llm.environ.get("OLLAMA_URL", "http://localhost:11434/api/chat")
-_FINEX_MODEL  = _os_llm.environ.get("FINEX_MODEL", "llama3.2:latest")
+# The endpoint, the model and the HTTP session all live in finex._llm_helper
+# now; the copies that used to sit here were unreferenced and still named
+# llama3.2 long after the deployed model changed.
 _OLLAMA_TIMEO = float(_os_llm.environ.get("FINEX_OLLAMA_TIMEOUT_S", "90"))
 
-# Persistent connection-keeping session — avoids TCP handshake on every call.
-_session = requests.Session()
+
+# Per-level output budgets. A single flat 512 was both too tight and too loose:
+# L3 emits a five-section format plus a closing line and L5/L6 are multi-
+# paragraph, so both were being truncated mid-sentence, while an L1 lookup that
+# should be one sentence had licence to ramble for 512 tokens. num_predict is a
+# ceiling rather than a target — the model still stops at EOS — so raising it
+# for the long formats costs nothing on answers that don't need it.
+TOKENS_SQL     = 200   # a SELECT statement and nothing else
+TOKENS_LOOKUP  = 256   # L1: one sentence
+TOKENS_COMPARE = 700   # L2: two-period comparison
+TOKENS_ANALYSIS = 900  # L3/L4/DETAIL: formula workings, analytical prose
+TOKENS_NARRATIVE = 1000  # L5/L6: investor and strategic write-ups
+TOKENS_TEXT    = 700   # report-text retrieval answers
+
+# Context size is owned by finex._llm_helper.resolve_num_ctx() — one value
+# for extraction and Q&A alike, so switching between them never re-loads the
+# model. See that module for why. Override with FINEX_NUM_CTX.
 
 
-def ask_llm(prompt: str, system: str = "", num_ctx: int = 4096) -> str:
+def ask_llm(prompt: str, system: str = "", num_ctx: int = None,
+            max_tokens: int = TOKENS_ANALYSIS) -> str:
     """
     Send a prompt to the local Ollama server.
     Returns the assistant content or an "[LLM error: ...]" string on failure.
+
+    Thinking suppression, model selection and keep_alive live in
+    finex._llm_helper.chat_sync — see that module's header for why.
     """
     from finex._llm_helper import chat_sync
+    # num_ctx=None lets the helper apply the shared value. A caller passing a
+    # smaller window to "save time" triggers a reload costing far more.
     messages = []
     if system:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
     return chat_sync(
         messages,
-        max_tokens=512,
+        max_tokens=max_tokens,
         temperature=0.1,
         num_ctx=num_ctx,
         timeout=int(_OLLAMA_TIMEO),
@@ -91,7 +112,7 @@ def warm_model() -> bool:
         # 1-token Ollama warm-up
         chat_sync(
             [{"role": "user", "content": "warm"}],
-            max_tokens=1, temperature=0.0, num_ctx=256, timeout=5,
+            max_tokens=1, temperature=0.0, timeout=15,
         )
         return True
     except Exception:
@@ -518,7 +539,7 @@ def generate_sql(question: str, company: str = "Bestway Cement") -> str:
 {FULL_SCHEMA}
 
 RULES:
-- Return ONLY executable SQL, no explanation, no markdown, no backticks
+- Return ONLY executable SQL — no explanation, no markdown fences, no backticks, no <think> tags
 - Company is '{company}' unless stated otherwise
 - Latest available year is {latest_year}
 - For comparisons, SELECT both years in one query
@@ -528,7 +549,7 @@ RULES:
 Question: {question}
 
 SQL:"""
-    raw = ask_llm(prompt)
+    raw = ask_llm(prompt, max_tokens=TOKENS_SQL)
     return clean_sql(raw)
 
 
@@ -547,13 +568,15 @@ _SYSTEM_ANALYST_BASE = """You are a financial analyst. Answer directly and conci
 STRICT FORMATTING RULES:
 - Never introduce yourself or mention your role
 - Never start with phrases like "As a financial analyst" or "I conclude that"
-- Never use * or - as bullet points. Use numbered lists (1. 2. 3.) only when listing multiple items
+- Never use * or - as a bullet marker: a second * on the same line turns the text between them into italics. Use numbered lists (1. 2. 3.) when listing multiple items
+- **Double asterisks** are supported and render as a highlighted label — use them for section headings where a structured answer is asked for
 - Only use data explicitly provided to you. NEVER fabricate or estimate figures not in the data
 - If a field is not available in the data provided, say clearly "this data is not available"
-- Keep answers to 3-5 lines unless user asks for more detail
+- Default to 3-5 lines. If the prompt specifies a length or an output format, that instruction always wins
 - Lead directly with the answer, no preamble
 - SCALE: data values are pre-converted to human-readable scale (bn/m/k). Report them EXACTLY as given — e.g. if data says "£29.36bn" say "£29.36bn", not "29,362 million"
-- EPS and dividend per share are per-share values"""
+- EPS and dividend per share are per-share values
+- Output the final answer only. Do not narrate your reasoning, show working you were not asked for, or wrap the reply in <think> tags — any planning stays internal"""
 
 def _system_prompt(currency: str = "Unknown", unit_label: str = "") -> str:
     """Build a currency-aware system prompt."""
@@ -574,6 +597,38 @@ def _system_prompt(currency: str = "Unknown", unit_label: str = "") -> str:
 
 # Keep a default for backward compat
 SYSTEM_ANALYST = _system_prompt()
+
+
+# ── Shared output shape for long-form answers ─────────────────────────────────
+#
+# The FinEx UI renders replies through renderMd() in ui/finex.html, which
+# supports exactly: **bold** (styled in the accent colour), *italics*, `code`,
+# and newlines. No <ul>/<ol>, no sized headings, no tables. So the only
+# structure worth asking the model for is a bold label on its own line with
+# short lines under it — anything richer renders as literal punctuation.
+#
+# The previous DETAIL prompt asked for "numbered points for clarity", which
+# produced a flat 1-5 list where each item ran the claim, the arithmetic and
+# the interpretation together in one long sentence. Splitting those onto their
+# own lines is what actually makes the answer scannable.
+_LEAD_LINE = """
+Open with ONE line that answers the question directly — the verdict or conclusion,
+not a preamble. Then a blank line, then the supporting detail below.
+"""
+
+_STRUCTURED_SECTIONS = """
+FORMAT — follow this exactly:
+Write 4-6 short sections. Each section is three lines:
+
+**Short label**
+The figures, with any arithmetic shown inline.
+What it means for this company, in one sentence.
+
+- The label goes on its own line, wrapped in double asterisks, 2-4 words.
+- Leave one blank line between sections.
+- Do not number the sections.
+- Never put the figure and the interpretation in the same sentence.
+- Keep every line under about 20 words."""
 
 
 # ── Level handlers ─────────────────────────────────────────────────────────────
@@ -633,7 +688,7 @@ Answer in exactly 1 sentence using only the figures shown above.
 State the value exactly as shown (e.g. "{sym.strip()}29.36bn") and specify the period.
 If the exact figure is not listed above, say it is not available — do not guess."""
 
-    return ask_llm(prompt, system=sys_prompt, num_ctx=2048)
+    return ask_llm(prompt, system=sys_prompt, max_tokens=TOKENS_LOOKUP)
 
 
 def handle_l2(question: str, company: str, history: str = "") -> str:
@@ -701,7 +756,8 @@ STRICT RULES:
 
 End your response with exactly this line: "Need more detail? Just ask." """
 
-    return ask_llm(prompt, system=sys_prompt)
+    return ask_llm(prompt, system=sys_prompt,
+                   max_tokens=TOKENS_COMPARE)
 
 
 def handle_l3(question: str, company: str, history: str = "") -> str:
@@ -758,7 +814,8 @@ Interpretation: [1 sentence in context of this company]
 
 End your response with exactly this line: "Need more detail? Just ask." """
 
-    return ask_llm(prompt, system=sys_prompt)
+    return ask_llm(prompt, system=sys_prompt,
+                   max_tokens=TOKENS_ANALYSIS)
 
 
 def handle_l4(question: str, company: str, history: str = "") -> str:
@@ -770,11 +827,13 @@ def handle_l4(question: str, company: str, history: str = "") -> str:
 {f"Previous conversation:{chr(10)}{history}{chr(10)}" if history else ""}
 Question: {question}
 
-Answer in 3-4 lines. Lead with the conclusion, support with 1-2 specific figures.
-Only reference data explicitly shown above. No numbered lists unless listing multiple causes.
-
-End your response with exactly this line: "Need more detail? Just ask." """
-    return ask_llm(prompt, system=_system_prompt(currency, unit_label))
+Explain the reasoning, not just the result. Each section should identify a
+driver behind the numbers and say what caused it, using the figures above.
+Only reference data explicitly shown above. If a cause cannot be established
+from the data, say so rather than speculating.
+{_LEAD_LINE}{_STRUCTURED_SECTIONS}"""
+    return ask_llm(prompt, system=_system_prompt(currency, unit_label),
+                   max_tokens=TOKENS_ANALYSIS)
 
 
 def handle_l5(question: str, company: str, history: str = "") -> str:
@@ -786,11 +845,13 @@ def handle_l5(question: str, company: str, history: str = "") -> str:
 {f"Previous conversation:{chr(10)}{history}{chr(10)}" if history else ""}
 Question: {question}
 
-Answer in 4-5 lines. Lead with a clear verdict supported by the most relevant metrics.
+Give an investor's read. Cover both the case for and the case against —
+an answer that only lists strengths is not an assessment. Weigh profitability,
+leverage, liquidity and any trend across periods.
 Only use data explicitly shown above.
-
-End your response with exactly this line: "Need more detail? Just ask." """
-    return ask_llm(prompt, system=_system_prompt(currency, unit_label))
+{_LEAD_LINE}{_STRUCTURED_SECTIONS}"""
+    return ask_llm(prompt, system=_system_prompt(currency, unit_label),
+                   max_tokens=TOKENS_NARRATIVE)
 
 
 def handle_text(question: str, company: str, history: str = "") -> str:
@@ -813,7 +874,8 @@ Answer using only information from the report text above.
 Be concise (3-5 lines). If the answer is not in the text, say so clearly.
 
 End your response with exactly this line: "Need more detail? Just ask." """
-    return ask_llm(prompt, system=_system_prompt(currency, unit_label))
+    return ask_llm(prompt, system=_system_prompt(currency, unit_label),
+                   max_tokens=TOKENS_TEXT)
 
 
 def _last_user_question(history: str) -> str:
@@ -847,9 +909,15 @@ Previous conversation:
 {history}
 
 The user wants more detail on the previous answer.
-Provide a thorough expansion using specific numbers from the data above.
-Use numbered points for clarity. Only reference data shown above. Do not invent figures."""
-    return ask_llm(prompt, system=_system_prompt(currency, unit_label))
+Expand on it using specific figures from the data above. Cover the drivers
+behind the numbers, not just the numbers again — a reader who saw the previous
+answer should learn something new from each section.
+
+Only reference data shown above. Do not invent figures. If something needed to
+explain a movement is not in the data, say so rather than inferring it.
+{_STRUCTURED_SECTIONS}"""
+    return ask_llm(prompt, system=_system_prompt(currency, unit_label),
+                   max_tokens=TOKENS_ANALYSIS)
 
 
 def handle_l6(question: str, company: str, history: str = "") -> str:
@@ -866,12 +934,13 @@ Report context:
 {f"Previous conversation:{chr(10)}{history}{chr(10)}" if history else ""}
 Question: {question}
 
-Answer directly — no introduction, no self-reference.
-Lead with the strategic conclusion. Support with 1-2 specific figures from the data.
-Use numbered points only if listing multiple recommendations. Maximum 6 lines.
-
-End your response with exactly this line: "Need more detail? Just ask." """
-    return ask_llm(prompt, system=_system_prompt(currency, unit_label))
+Answer strategically — no introduction, no self-reference. Each section should
+carry a strategic implication or a recommendation, grounded in a figure from the
+data or a specific point from the report context above.
+Only reference data shown above. Do not invent figures or plans.
+{_LEAD_LINE}{_STRUCTURED_SECTIONS}"""
+    return ask_llm(prompt, system=_system_prompt(currency, unit_label),
+                   max_tokens=TOKENS_NARRATIVE)
 
 
 def handle_off_topic() -> str:

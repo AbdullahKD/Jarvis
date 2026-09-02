@@ -1,0 +1,80 @@
+
+── HSBC Holdings plc  [PASS]  260225-annual-report-and-accounts-2025.pdf  (139.1s)
+   ✓ operating_profit         current expected     27,996,000,000  got     27,996,000,000
+   ✓ profit_before_tax        current expected     29,907,000,000  got     29,907,000,000
+   ✓ tax_expense              current expected      6,776,000,000  got      6,776,000,000
+   ✓ net_profit               current expected     23,131,000,000  got     23,131,000,000
+   ✓ operating_expenses       current expected     36,428,000,000  got     36,428,000,000
+   ✓ total_assets             current expected  3,233,034,000,000  got  3,233,034,000,000
+   ✓ total_liabilities        current expected  3,027,368,000,000  got  3,027,368,000,000
+   ✓ total_equity             current expected    205,666,000,000  got    205,666,000,000
+   ✓ operating_cashflow       current expected     29,766,000,000  got     29,766,000,000
+   ∅ revenue                  current expected                  —  got                  —   row_not_classified (statement located on page 264, no row matched)
+
+── JLR Automotive plc  [PASS]  JLR Annual Report 2025_VF_21052025.pdf  (43.4s)
+   ✓ revenue                  current expected     28,961,000,000  got     28,961,000,000
+   ✓ cost_of_goods_sold       current expected     16,865,000,000  got     16,865,000,000
+   ✓ profit_before_tax        current expected      2,474,000,000  got      2,474,000,000
+   ✓ net_profit               current expected      1,800,000,000  got      1,800,000,000
+   ✓ non_current_assets       current expected     15,383,000,000  got     15,383,000,000
+   ✓ current_assets           current expected     10,713,000,000  got     10,713,000,000
+   ✓ total_assets             current expected     26,096,000,000  got     26,096,000,000
+   ✓ current_liabilities      current expected     11,236,000,000  got     11,236,000,000
+   ✓ non_current_liabilities  current expected      5,916,000,000  got      5,916,000,000
+   ✓ total_liabilities        current expected     17,152,000,000  got     17,152,000,000
+   ✓ operating_cashflow       current expected      4,598,000,000  got      4,598,000,000
+   ≈ total_equity             current expected      8,944,000,000  got      8,944,000,000
+   ∅ operating_profit         current expected                  —  got                  —   row_not_classified (statement located on page 107, no row matched)
+
+── Shell plc  [PASS]  consolidated-financial-statements-ar25.pdf  (18.8s)
+   ✓ revenue                  current expected    266,886,000,000  got    266,886,000,000
+   ✓ profit_before_tax        current expected     29,756,000,000  got     29,756,000,000
+   ✓ tax_expense              current expected     11,637,000,000  got     11,637,000,000
+   ✓ net_profit               current expected     18,119,000,000  got     18,119,000,000
+   ✓ eps                      current expected                  3  got                  3
+   ✓ total_assets             current expected    370,350,000,000  got    370,350,000,000
+   ✓ total_liabilities        current expected    195,031,000,000  got    195,031,000,000
+   ✓ total_equity             current expected    175,319,000,000  got    175,319,000,000
+   ✓ operating_cashflow       current expected     42,863,000,000  got     42,863,000,000
+   ∅ operating_profit         current expected                  —  got                  —   row_not_classified (statement located on page 16, no row matched)
+
+── Tesco PLC  [PASS]  tesco_ar25_interactive.pdf  (61.9s)
+   ✓ revenue                  current expected     69,916,000,000  got     69,916,000,000
+   ✓ cost_of_goods_sold       current expected     64,205,000,000  got     64,205,000,000
+   ✓ gross_profit             current expected      5,051,000,000  got      5,051,000,000
+   ✓ operating_profit         current expected      2,711,000,000  got      2,711,000,000
+   ✓ profit_before_tax        current expected      2,215,000,000  got      2,215,000,000
+   ✓ tax_expense              current expected        611,000,000  got        611,000,000
+   ✓ net_profit               current expected      1,630,000,000  got      1,630,000,000
+   ✓ total_equity             current expected     11,662,000,000  got     11,662,000,000
+   ✓ operating_cashflow       current expected      2,922,000,000  got      2,922,000,000
+   ∅ total_assets             current expected                  —  got                  —   row_not_classified (statement located on page 139, no row matched)
+   ∅ total_liabilities        current expected                  —  got                  —   row_not_classified (statement located on page 139, no row matched)
+
+── Unilever PLC  [PASS]  unilever-annual-report-and-accounts-2025.pdf  (82.1s)
+   ✓ revenue                  current expected     50,503,000,000  got     50,503,000,000
+   ✓ operating_profit         current expected      9,037,000,000  got      9,037,000,000
+   ✓ profit_before_tax        current expected      8,693,000,000  got      8,693,000,000
+   ✓ net_profit               current expected     10,011,000,000  got     10,011,000,000
+   ✓ total_assets             current expected     70,471,000,000  got     70,471,000,000
+   ✓ total_liabilities        current expected     52,884,000,000  got     52,884,000,000
+   ✓ total_equity             current expected     17,587,000,000  got     17,587,000,000
+   ✓ operating_cashflow       current expected      8,350,000,000  got      8,350,000,000
+
+── Vodafone Group Plc  [PASS]  vodafone-fy25-results-announcement.pdf  (12.0s)
+   ✓ revenue                  current expected     37,448,000,000  got     37,448,000,000
+   ✓ cost_of_goods_sold       current expected     24,929,000,000  got     24,929,000,000
+   ✓ gross_profit             current expected     12,519,000,000  got     12,519,000,000
+   ✓ operating_profit         current expected       -411,000,000  got       -411,000,000
+   ✓ profit_before_tax        current expected     -1,478,000,000  got     -1,478,000,000
+   ✓ tax_expense              current expected      2,246,000,000  got      2,246,000,000
+   ✓ net_profit               current expected     -3,746,000,000  got     -3,746,000,000
+   ✓ total_assets             current expected    128,521,000,000  got    128,521,000,000
+   ✓ total_equity             current expected     53,916,000,000  got     53,916,000,000
+   ✓ operating_cashflow       current expected     15,373,000,000  got     15,373,000,000
+   ≈ total_liabilities        current expected     74,605,000,000  got     74,605,000,000
+
+──────────────────────────────────────────────────────────────────────────────
+documents  6/6 clean
+fields     121/121 correct  (112 read, 4 derived, 5 correctly refused)
+           0 wrong, 0 missing, 0 refusal failures
