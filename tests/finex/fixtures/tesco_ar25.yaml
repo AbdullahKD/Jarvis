@@ -1,0 +1,28 @@
+company: Tesco PLC
+pdf: tesco_ar25_interactive.pdf
+currency: GBP
+scale: 1000000
+fiscal_year: 2025      # 52 weeks ended 22 February 2025
+prior_year: 2024
+statements:
+  pnl: 137
+  bs: 139
+  cf: 142
+values:
+  # The income statement prints three columns per year — before adjusting
+  # items, adjusting items, total. Every figure below is the Total column.
+  revenue:            {current: 69916, prior: 68187, page: 137, label: "Revenue"}
+  cost_of_goods_sold: {current: 64205, prior: 62836, page: 137, label: "Cost of sales"}
+  gross_profit:       {current: 5051,  prior: 4849,  page: 137, label: "Gross profit/(loss)"}
+  operating_profit:   {current: 2711,  prior: 2821,  page: 137, label: "Operating profit/(loss)"}
+  profit_before_tax:  {current: 2215,  prior: 2289,  page: 137, label: "Profit/(loss) before tax from continuing operations"}
+  tax_expense:        {current: 611,   prior: 525,   page: 137, label: "Taxation"}
+  net_profit:         {current: 1630,  prior: 1192,  page: 137, label: "Profit/(loss) for the year"}
+  total_equity:       {current: 11662, prior: 11665, page: 139, label: "Total equity"}
+  operating_cashflow: {current: 2922,  prior: 3839,  page: 142, label: "Net cash generated from/(used in) operating activities"}
+null_expected:
+  # Tesco's balance sheet is presented net, in two side-by-side panels ending
+  # in "Net assets" and "Total equity". Neither total assets nor total
+  # liabilities appears anywhere on it.
+  total_assets: "not printed; balance sheet is presented as net assets"
+  total_liabilities: "not printed; balance sheet is presented as net assets"

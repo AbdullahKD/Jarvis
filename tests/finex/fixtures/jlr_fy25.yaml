@@ -1,0 +1,29 @@
+company: JLR Automotive plc
+pdf: JLR Annual Report 2025_VF_21052025.pdf
+currency: GBP
+scale: 1000000
+fiscal_year: 2025      # year ended 31 March 2025
+prior_year: 2024
+statements:
+  pnl: 107
+  bs: 108
+  cf: 110
+values:
+  revenue:                 {current: 28961, prior: 28995, page: 107, label: "Revenue"}
+  cost_of_goods_sold:      {current: 16865, prior: 16964, page: 107, label: "Material and other cost of sales*"}
+  profit_before_tax:       {current: 2474,  prior: 2165,  page: 107, label: "Profit before tax"}
+  net_profit:              {current: 1800,  prior: 2578,  page: 107, label: "Profit/(loss) for the year"}
+  non_current_assets:      {current: 15383, prior: 14073, page: 108, label: "Total non-current assets"}
+  current_assets:          {current: 10713, prior: 10397, page: 108, label: "Total current assets"}
+  total_assets:            {current: 26096, prior: 24470, page: 108, label: "Total assets"}
+  current_liabilities:     {current: 11236, prior: 11116, page: 108, label: "Total current liabilities"}
+  non_current_liabilities: {current: 5916,  prior: 6075,  page: 108, label: "Total non-current liabilities"}
+  total_liabilities:       {current: 17152, prior: 17191, page: 108, label: "Total liabilities"}
+  operating_cashflow:      {current: 4598,  prior: 4963,  page: 110, label: "Net cash generated from operating activities"}
+derived_ok:
+  # Printed as "Equity attributable to shareholders", which is not a subtotal
+  # label the extractor accepts for total_equity; assets less liabilities gives
+  # the same figure.
+  total_equity:            {current: 8944,  prior: 7279,  note: "26,096 - 17,152"}
+null_expected:
+  operating_profit: "JLR reports EBIT as an APM, not an operating profit line"

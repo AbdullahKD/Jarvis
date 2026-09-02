@@ -1,0 +1,3 @@
+# Extraction results memoised by tests/finex/harness.py, keyed by PDF mtime and
+# extractor version. Regenerated on demand; never a source of truth.
+.cache/

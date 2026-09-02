@@ -1,0 +1,24 @@
+company: Shell plc
+pdf: consolidated-financial-statements-ar25.pdf
+currency: USD
+scale: 1000000
+fiscal_year: 2025
+prior_year: 2024
+statements:
+  pnl: 16
+  bs: 17
+  cf: 19
+values:
+  revenue:            {current: 266886, prior: 284312, page: 16, label: "Revenue"}
+  profit_before_tax:  {current: 29756,  prior: 29922,  page: 16, label: "Income before taxation"}
+  tax_expense:        {current: 11637,  prior: 13401,  page: 16, label: "Taxation charge"}
+  net_profit:         {current: 18119,  prior: 16521,  page: 16, label: "Income for the period"}
+  eps:                {current: 3.03,   prior: 2.55,   page: 16, label: "Basic earnings per share ($)", no_scale: true}
+  total_assets:       {current: 370350, prior: 387609, page: 17, label: "Total assets"}
+  total_liabilities:  {current: 195031, prior: 207441, page: 17, label: "Total liabilities"}
+  total_equity:       {current: 175319, prior: 180168, page: 17, label: "Total equity"}
+  operating_cashflow: {current: 42863,  prior: 54687,  page: 19, label: "Cash flow from operating activities"}
+null_expected:
+  # Shell's statement of income runs Total revenue and other income -> Total
+  # expenditure -> Income before taxation. There is no operating profit line.
+  operating_profit: "not reported on the consolidated statement of income"
